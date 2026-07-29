@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Holdings &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Holdings</h1>
+<p class="subtitle">
+  As recorded at the last run. Position cap {{ max_position_pct }}%, sector cap
+  {{ max_sector_pct }}%.
+</p>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{ holdings | length }} position{{ 's' if holdings | length != 1 }}</h2>
+    <span class="note">Beta and idiosyncratic volatility come from the factor model</span>
+  </div>
+  {% if holdings %}
+  <table>
+    <thead>
+      <tr>
+        <th>Stock</th>
+        <th class="num">Qty</th>
+        <th class="num">Avg cost</th>
+        <th class="num">Price</th>
+        <th class="num">Value</th>
+        <th class="num">Weight</th>
+        <th class="num">Return</th>
+        <th class="num">P&amp;L</th>
+        <th class="num">Held</th>
+        <th class="num">Score</th>
+        <th class="num">Beta</th>
+        <th class="num">Idio vol</th>
+        <th class="num">Risk share</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in holdings %}
+      <tr>
+        <td>
+          <div class="sym">{{ h.symbol }}</div>
+          <div class="sub-line">{{ h.sector }}</div>
+        </td>
+        <td class="num">{{ h.quantity }}</td>
+        <td class="num">{{ h.avg_cost | number }}</td>
+        <td class="num">{{ h.last_price | number }}</td>
+        <td class="num">{{ h.market_value | money }}</td>
+        <td class="num {{ 'down' if h.weight_pct and h.weight_pct > max_position_pct }}">
+          {{ h.weight_pct | pct(2) }}
+        </td>
+        <td class="num {{ h.return_pct | sign }}">{{ h.return_pct | pct(1, true) }}</td>
+        <td class="num {{ h.unrealised_pnl | sign }}">{{ h.unrealised_pnl | money }}</td>
+        <td class="num">{{ h.holding_days if h.holding_days is not none else '-' }}</td>
+        <td class="num">{{ h.composite_score | number(2) }}</td>
+        <td class="num">{{ h.beta | number(2) }}</td>
+        <td class="num">{{ h.idiosyncratic_vol | pct(1) }}</td>
+        <td class="num">{{ h.risk_contribution_pct | pct(1) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">
+      No holdings recorded. Once the fund runs and trades are executed, positions
+      appear here.
+    </p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Sector exposure</h2>
+    <span class="note">Cap is {{ max_sector_pct }}% per sector</span>
+  </div>
+  {{ sector_chart | safe }}
+</div>
+
+{% if holdings %}
+<div class="panel">
+  <h2>Why the fund owns these</h2>
+  <table>
+    <thead><tr><th>Stock</th><th>Thesis at entry</th></tr></thead>
+    <tbody>
+      {% for h in holdings %}
+      <tr>
+        <td><span class="sym">{{ h.symbol }}</span></td>
+        <td>{{ h.thesis or 'No thesis recorded.' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

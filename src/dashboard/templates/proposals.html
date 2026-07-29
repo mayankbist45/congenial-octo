@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Proposals &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Proposals</h1>
+<p class="subtitle">
+  Nothing is sent to the broker until you approve it here. Approved trades are
+  placed on the next execution pass.
+</p>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Awaiting your decision</h2>
+    {% if proposals %}
+    <div class="actions">
+      <form method="post" action="/proposals/approve-all">
+        <button type="submit" class="primary small">Approve all {{ proposals | length }}</button>
+      </form>
+      <form method="post" action="/proposals/reject-all">
+        <button type="submit" class="danger small">Reject all</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if proposals %}
+    {% for p in proposals %}
+      {% include "_proposal.html" %}
+    {% endfor %}
+  {% else %}
+    <p class="empty">
+      Nothing awaiting a decision. The fund proposes trades only when a trigger
+      fires, so quiet days are normal and desirable.
+    </p>
+  {% endif %}
+</div>
+
+{% if approved %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Approved, not yet placed</h2>
+    <span class="note">These go to the broker on the next execution pass</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Stock</th><th>Action</th><th class="num">Quantity</th>
+        <th class="num">Value</th><th>Approved</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in approved %}
+      <tr>
+        <td><span class="sym">{{ p.symbol }}</span>
+            <div class="sub-line">{{ p.company_name }}</div></td>
+        <td><span class="tag {{ 'sell' if p.is_sell else 'buy' }}">{{ p.action }}</span></td>
+        <td class="num">{{ p.quantity }}</td>
+        <td class="num">{{ p.estimated_value | money }}</td>
+        <td class="sub-line">{{ p.decided_at or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Decision history</h2>
+    <span class="note">Including proposals the risk engine blocked</span>
+  </div>
+  {% if history %}
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th><th>Stock</th><th>Action</th><th class="num">Quantity</th>
+        <th>Outcome</th><th>Reason given</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in history %}
+      <tr>
+        <td class="sub-line">{{ p.run_date }}</td>
+        <td><span class="sym">{{ p.symbol }}</span></td>
+        <td><span class="tag {{ 'sell' if p.is_sell else 'buy' }}">{{ p.action }}</span></td>
+        <td class="num">{{ p.quantity }}</td>
+        <td>
+          {{ p.status }}
+          {% if p.decided_by %}<div class="sub-line">by {{ p.decided_by }}</div>{% endif %}
+        </td>
+        <td class="sub-line">{{ p.rejection_reason or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No decisions recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+.env
+.venv/
+.tools/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.DS_Store
+
+data/fund.db
+data/fund.log
+data/cache/
+data/briefings/

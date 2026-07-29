@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}News &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>News digest</h1>
+{% if digest %}
+  <p class="subtitle">
+    {{ digest.run_date }} &middot; {{ digest.article_count }} articles reviewed,
+    {{ digest.high_impact_count }} high impact &middot;
+    {{ 'summarised by the language model' if digest.generated_by_llm else 'keyword digest (no model available)' }}
+  </p>
+
+  {% if digest.flagged_symbols %}
+  <div class="panel" style="border-left:3px solid #b45309">
+    <h2>Flagged for possible thesis change</h2>
+    <p style="margin:0">
+      {% for symbol in digest.flagged_symbols %}<span class="tag">{{ symbol }}</span>{% endfor %}
+    </p>
+    <p class="muted" style="font-size:13px;margin:10px 0 0">
+      A flag means the news suggests something may have changed in the business,
+      not that a trade is required.
+    </p>
+  </div>
+  {% endif %}
+
+  <div class="two-col">
+    <div class="panel">
+      <h2>Macro</h2>
+      <p style="margin:0">{{ digest.macro_summary or 'Nothing notable.' }}</p>
+    </div>
+    <div class="panel">
+      <h2>Market</h2>
+      <p style="margin:0">{{ digest.market_summary or 'Nothing notable.' }}</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>On current holdings</h2>
+    {% if digest.holdings_notes %}
+    <table>
+      <thead><tr><th>Stock</th><th>What was reported</th></tr></thead>
+      <tbody>
+        {% for symbol, note in digest.holdings_notes.items() %}
+        <tr>
+          <td><span class="sym">{{ symbol }}</span></td>
+          <td>{{ note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="empty">No news on the fund's holdings today.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>On watchlist names</h2>
+    {% if digest.watchlist_notes %}
+    <table>
+      <thead><tr><th>Stock</th><th>What was reported</th></tr></thead>
+      <tbody>
+        {% for symbol, note in digest.watchlist_notes.items() %}
+        <tr>
+          <td><span class="sym">{{ symbol }}</span></td>
+          <td>{{ note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="empty">Nothing on the watchlist today.</p>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="panel">
+    <p class="empty">No digest recorded yet. It is produced during the daily run.</p>
+  </div>
+{% endif %}
+{% endblock %}

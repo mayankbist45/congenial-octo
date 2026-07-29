@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Overview &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Overview</h1>
+{% if overview.run %}
+  <p class="subtitle">
+    Last run {{ overview.run.run_date }}
+    {%- if overview.run.is_deep_review %} (quarterly deep review){% endif %}
+    &middot; {{ overview.run.status }}
+    &middot; {{ 'decision layer active' if overview.run.llm_used else 'rules only' }}
+  </p>
+{% else %}
+  <p class="subtitle">No runs recorded yet.</p>
+{% endif %}
+
+{% if not overview.has_data %}
+  <div class="panel">
+    <p class="empty">
+      The fund has not run yet. Start it with <code>python run_daily.py</code>,
+      then reload this page to review what it proposes.
+    </p>
+  </div>
+{% else %}
+
+<div class="stats">
+  <div class="stat">
+    <div class="label">Fund value</div>
+    <div class="value">{{ overview.total_value | money }}</div>
+    {% if overview.daily_change_pct is not none %}
+      <div class="sub {{ overview.daily_change_pct | sign }}">
+        {{ overview.daily_change_pct | pct(2, true) }} on the day
+      </div>
+    {% endif %}
+  </div>
+  <div class="stat">
+    <div class="label">Total return</div>
+    <div class="value {{ performance.total_return_pct | sign }}">
+      {{ performance.total_return_pct | pct(2, true) }}
+    </div>
+    {% if performance.excess_return_pct is not none %}
+      <div class="sub {{ performance.excess_return_pct | sign }}">
+        {{ performance.excess_return_pct | pct(2, true) }} vs {{ benchmark_label }}
+      </div>
+    {% endif %}
+  </div>
+  <div class="stat">
+    <div class="label">Positions</div>
+    <div class="value">{{ overview.position_count }}</div>
+    <div class="sub">{{ overview.invested_value | money }} invested</div>
+  </div>
+  <div class="stat">
+    <div class="label">Cash</div>
+    <div class="value">{{ overview.cash | money }}</div>
+    <div class="sub">{{ overview.cash_pct | pct(1) }} of the fund</div>
+  </div>
+  <div class="stat">
+    <div class="label">Turnover used</div>
+    <div class="value">{{ overview.run.turnover_used_pct | pct(1) if overview.run else '-' }}</div>
+    <div class="sub">of the annual budget</div>
+  </div>
+</div>
+
+{% if proposals %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{ proposals | length }} proposal{{ 's' if proposals | length != 1 }} awaiting your decision</h2>
+    <span class="note"><a href="/proposals">Review all</a></span>
+  </div>
+  {% for p in proposals[:3] %}
+    {% include "_proposal.html" %}
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">
+  <h2>No trades proposed</h2>
+  <p class="muted" style="margin:0">
+    Nothing is awaiting approval. On most days this is the expected outcome:
+    the fund monitors daily and trades only when a rule fires or a thesis changes.
+  </p>
+</div>
+{% endif %}
+
+{% if overview.run and overview.run.memo %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Manager's memo</h2>
+    <span class="note">{{ overview.run.run_date }}</span>
+  </div>
+  <div class="memo">{{ overview.run.memo }}</div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Performance vs {{ benchmark_label }}</h2>
+    <span class="legend">
+      <span><span class="swatch" style="background:#2563eb"></span>Fund</span>
+      <span><span class="swatch" style="background:#94a3b8"></span>{{ benchmark_label }}</span>
+    </span>
+  </div>
+  {{ chart | safe }}
+  <p class="muted" style="font-size:13px;margin:10px 0 0">
+    Both series rebased to 100 at the fund's first recorded day.
+  </p>
+</div>
+
+<div class="two-col">
+  <div class="panel">
+    <h2>Largest holdings</h2>
+    {% if overview.top_holdings %}
+    <table>
+      <thead>
+        <tr><th>Stock</th><th class="num">Weight</th><th class="num">Return</th></tr>
+      </thead>
+      <tbody>
+        {% for h in overview.top_holdings %}
+        <tr>
+          <td>
+            <div class="sym">{{ h.symbol }}</div>
+            <div class="sub-line">{{ h.sector }}</div>
+          </td>
+          <td class="num">{{ h.weight_pct | pct(2) }}</td>
+          <td class="num {{ h.return_pct | sign }}">{{ h.return_pct | pct(1, true) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="empty">The fund holds no positions yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Today's news</h2>
+    {% if digest %}
+      {% if digest.macro_summary %}
+        <h3>Macro</h3>
+        <p style="margin:0 0 14px">{{ digest.macro_summary }}</p>
+      {% endif %}
+      {% if digest.market_summary %}
+        <h3>Market</h3>
+        <p style="margin:0 0 14px">{{ digest.market_summary }}</p>
+      {% endif %}
+      {% if digest.flagged_symbols %}
+        <h3>Flagged for review</h3>
+        <p style="margin:0 0 14px">
+          {% for symbol in digest.flagged_symbols %}<span class="tag">{{ symbol }}</span>{% endfor %}
+        </p>
+      {% endif %}
+      <p class="muted" style="font-size:13px;margin:0">
+        {{ digest.article_count }} articles reviewed, {{ digest.high_impact_count }} high impact.
+        <a href="/news">Full digest</a>
+      </p>
+    {% else %}
+      <p class="empty">No news digest recorded yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}

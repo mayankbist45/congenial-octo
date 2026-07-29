@@ -1,0 +1,296 @@
+"""Screener.in fundamentals scraper.
+
+Screener.in is the practical source for Indian fundamentals: it publishes ROE,
+ROCE, promoter holding and multi-year growth for every listed company, which
+Yahoo Finance does not reliably carry for NSE names.
+
+Consolidated statements are preferred, with standalone as a fallback for
+companies that report only standalone numbers.
+"""
+
+from __future__ import annotations
+
+import time
+from datetime import datetime
+from typing import Dict, List, Optional
+
+import requests
+from bs4 import BeautifulSoup
+
+from src.fundamentals.parsing import (
+    clean_crore,
+    clean_number,
+    clean_percent,
+    growth_pct,
+    last_non_null,
+    normalise_label,
+    safe_divide,
+)
+from src.logging_setup import get_logger
+from src.models import FundamentalSnapshot
+
+logger = get_logger(__name__)
+
+BASE_URL = "https://www.screener.in/company"
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+class ScreenerClient:
+    """Fetches and parses one company page at a time."""
+
+    def __init__(self, request_delay: float = 0.5, timeout: int = 30):
+        self._delay = request_delay
+        self._timeout = timeout
+        self._session = requests.Session()
+        self._session.headers.update(HEADERS)
+        self._last_request_at = 0.0
+
+    def _throttle(self) -> None:
+        elapsed = time.time() - self._last_request_at
+        if elapsed < self._delay:
+            time.sleep(self._delay - elapsed)
+        self._last_request_at = time.time()
+
+    def _fetch_html(self, symbol: str) -> Optional[str]:
+        # Consolidated statements first: they reflect the whole group, which is
+        # what matters for holding companies. Standalone is the fallback for
+        # companies with no subsidiaries.
+        for suffix in ("/consolidated/", "/"):
+            url = f"{BASE_URL}/{symbol.upper()}{suffix}"
+
+            for attempt in range(1, 4):
+                self._throttle()
+                try:
+                    response = self._session.get(url, timeout=self._timeout)
+                except requests.RequestException as exc:
+                    logger.debug("Screener request failed for %s: %s", symbol, exc)
+                    break
+
+                if response.status_code == 404:
+                    break
+                if response.status_code == 429:
+                    # Back off on the same URL rather than burning the fallback
+                    # request, which would also be rate limited.
+                    backoff = 3.0 * attempt
+                    logger.debug(
+                        "Screener rate limited on %s; waiting %.0fs", symbol, backoff
+                    )
+                    time.sleep(backoff)
+                    self._adapt_delay()
+                    continue
+                if response.ok and "top-ratios" in response.text:
+                    return response.text
+                break
+
+        logger.debug("No Screener page found for %s", symbol)
+        return None
+
+    def _adapt_delay(self) -> None:
+        """Slow down permanently after a rate limit, up to a ceiling."""
+        if self._delay < 3.0:
+            self._delay = min(self._delay * 1.5 + 0.2, 3.0)
+            logger.info("Increased Screener request delay to %.2fs", self._delay)
+
+    # ------------------------------------------------------------------
+    # Section parsers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_top_ratios(soup: BeautifulSoup) -> Dict[str, Optional[float]]:
+        """The headline ratio strip at the top of the page."""
+        out: Dict[str, Optional[float]] = {}
+        container = soup.select_one("#top-ratios")
+        if container is None:
+            return out
+
+        for item in container.select("li"):
+            name_node = item.select_one(".name")
+            value_node = item.select_one(".value")
+            if name_node is None or value_node is None:
+                continue
+            label = normalise_label(name_node.get_text())
+            text = " ".join(value_node.get_text().split())
+
+            if label == "market cap":
+                out["market_cap"] = clean_crore(text)
+            elif label == "current price":
+                out["current_price"] = clean_number(text)
+            elif label in ("stock p/e", "p/e"):
+                out["pe_ratio"] = clean_number(text)
+            elif label == "book value":
+                out["book_value"] = clean_number(text)
+            elif label == "dividend yield":
+                out["dividend_yield"] = clean_percent(text)
+            elif label == "roce":
+                out["roce_pct"] = clean_percent(text)
+            elif label == "roe":
+                out["roe_pct"] = clean_percent(text)
+        return out
+
+    @staticmethod
+    def _parse_table(soup: BeautifulSoup, section_id: str) -> Dict[str, List[Optional[float]]]:
+        """Parse a financial statement table into label -> yearly values."""
+        out: Dict[str, List[Optional[float]]] = {}
+        section = soup.select_one(f"#{section_id}")
+        if section is None:
+            return out
+
+        for row in section.select("tbody tr"):
+            cells = row.select("td")
+            if len(cells) < 2:
+                continue
+            label = normalise_label(cells[0].get_text())
+            if not label:
+                continue
+            values = [clean_number(cell.get_text()) for cell in cells[1:]]
+            # Shareholding tables repeat labels for quarterly and yearly
+            # blocks; the first occurrence is the quarterly series we want.
+            if label not in out:
+                out[label] = values
+        return out
+
+    @staticmethod
+    def _parse_growth_ranges(soup: BeautifulSoup) -> Dict[str, Dict[str, Optional[float]]]:
+        """Parse the four compounded-growth tables (sales, profit, price, ROE)."""
+        out: Dict[str, Dict[str, Optional[float]]] = {}
+        for table in soup.select("table.ranges-table"):
+            header = table.select_one("th")
+            if header is None:
+                continue
+            key = normalise_label(header.get_text())
+            periods: Dict[str, Optional[float]] = {}
+            for row in table.select("tr"):
+                cells = row.select("td")
+                if len(cells) < 2:
+                    continue
+                period = normalise_label(cells[0].get_text()).rstrip(":")
+                periods[period] = clean_percent(cells[1].get_text())
+            if periods:
+                out[key] = periods
+        return out
+
+    # ------------------------------------------------------------------
+    # Assembly
+    # ------------------------------------------------------------------
+    def fetch(self, symbol: str) -> Optional[FundamentalSnapshot]:
+        html = self._fetch_html(symbol)
+        if html is None:
+            return None
+
+        soup = BeautifulSoup(html, "lxml")
+        top = self._parse_top_ratios(soup)
+        profit_loss = self._parse_table(soup, "profit-loss")
+        balance_sheet = self._parse_table(soup, "balance-sheet")
+        cash_flow = self._parse_table(soup, "cash-flow")
+        ratios = self._parse_table(soup, "ratios")
+        shareholding = self._parse_table(soup, "shareholding")
+        growth = self._parse_growth_ranges(soup)
+
+        snapshot = FundamentalSnapshot(
+            symbol=symbol.upper(),
+            as_of=datetime.utcnow(),
+            source="screener.in",
+            market_cap=top.get("market_cap"),
+            pe_ratio=top.get("pe_ratio"),
+            dividend_yield=top.get("dividend_yield"),
+            roe_pct=top.get("roe_pct"),
+            roce_pct=top.get("roce_pct"),
+        )
+
+        # --- Valuation ---
+        book_value = top.get("book_value")
+        price = top.get("current_price")
+        snapshot.price_to_book = safe_divide(price, book_value)
+
+        # --- Profitability from the P&L ---
+        # The last column is usually TTM, which is the freshest read.
+        sales = profit_loss.get("sales") or profit_loss.get("revenue") or []
+        operating_profit = profit_loss.get("operating profit") or []
+        net_profit = profit_loss.get("net profit") or []
+        eps_series = profit_loss.get("eps in rs") or []
+        interest = profit_loss.get("interest") or []
+        opm = profit_loss.get("opm %") or []
+
+        latest_sales = last_non_null(sales)
+        latest_net_profit = last_non_null(net_profit)
+        latest_operating_profit = last_non_null(operating_profit)
+
+        snapshot.eps = last_non_null(eps_series)
+        snapshot.operating_margin_pct = last_non_null(opm)
+        if snapshot.operating_margin_pct is None:
+            margin = safe_divide(latest_operating_profit, latest_sales)
+            snapshot.operating_margin_pct = margin * 100.0 if margin else None
+
+        profit_margin = safe_divide(latest_net_profit, latest_sales)
+        snapshot.profit_margin_pct = profit_margin * 100.0 if profit_margin else None
+
+        latest_interest = last_non_null(interest)
+        snapshot.interest_coverage = safe_divide(
+            latest_operating_profit, latest_interest
+        )
+
+        # --- Leverage from the balance sheet ---
+        borrowings = last_non_null(balance_sheet.get("borrowings") or [])
+        reserves = last_non_null(balance_sheet.get("reserves") or [])
+        equity_capital = last_non_null(balance_sheet.get("equity capital") or [])
+        if borrowings is not None and reserves is not None:
+            net_worth = reserves + (equity_capital or 0.0)
+            snapshot.debt_to_equity = safe_divide(borrowings, net_worth)
+
+        # --- Cash quality ---
+        free_cash_flow = last_non_null(cash_flow.get("free cash flow") or [])
+        snapshot.free_cash_flow = (
+            free_cash_flow * 1e7 if free_cash_flow is not None else None
+        )
+        cash_conversion = last_non_null(cash_flow.get("cfo/op") or [])
+        if cash_conversion is None:
+            operating_cash = last_non_null(
+                cash_flow.get("cash from operating activity") or []
+            )
+            cash_conversion = safe_divide(operating_cash, latest_operating_profit)
+        snapshot.cash_conversion = cash_conversion
+
+        if snapshot.roce_pct is None:
+            snapshot.roce_pct = last_non_null(ratios.get("roce %") or [])
+
+        # --- Growth: prefer TTM/1-year compounded figures over raw YoY ---
+        sales_growth = growth.get("compounded sales growth") or {}
+        profit_growth = growth.get("compounded profit growth") or {}
+        snapshot.revenue_growth_pct = (
+            sales_growth.get("ttm")
+            if sales_growth.get("ttm") is not None
+            else sales_growth.get("3 years")
+        )
+        snapshot.earnings_growth_pct = (
+            profit_growth.get("ttm")
+            if profit_growth.get("ttm") is not None
+            else profit_growth.get("3 years")
+        )
+
+        if snapshot.revenue_growth_pct is None and len(sales) >= 2:
+            snapshot.revenue_growth_pct = growth_pct(sales[-1], sales[-2])
+        if snapshot.earnings_growth_pct is None and len(net_profit) >= 2:
+            snapshot.earnings_growth_pct = growth_pct(net_profit[-1], net_profit[-2])
+
+        # PEG only means something with positive growth and a positive P/E.
+        if (
+            snapshot.pe_ratio
+            and snapshot.earnings_growth_pct
+            and snapshot.earnings_growth_pct > 0
+        ):
+            snapshot.peg_ratio = snapshot.pe_ratio / snapshot.earnings_growth_pct
+
+        # --- Ownership: promoter holding and its trend ---
+        promoters = shareholding.get("promoters") or []
+        snapshot.promoter_holding_pct = last_non_null(promoters)
+
+        return snapshot
+
+    def close(self) -> None:
+        self._session.close()

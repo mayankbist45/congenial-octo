@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Journal &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Journal</h1>
+<p class="subtitle">
+  Every run and every order, with the reasoning recorded at the time.
+</p>
+
+<div class="panel">
+  <h2>Daily runs</h2>
+  {% if runs %}
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th><th>Mode</th><th>Status</th>
+        <th class="num">Fund value</th><th class="num">Turnover</th>
+        <th>Decision layer</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>{{ run.run_date }}</td>
+        <td>{{ 'Deep review' if run.is_deep_review else 'Monitoring' }}</td>
+        <td>{{ run.status }}</td>
+        <td class="num">{{ run.portfolio_value | money }}</td>
+        <td class="num">{{ run.turnover_used_pct | pct(1) }}</td>
+        <td class="sub-line">{{ 'active' if run.llm_used else 'rules only' }}</td>
+        <td><a href="/journal/{{ run.id }}">Detail</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No runs recorded yet.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Orders</h2>
+  {% if trades %}
+  <table>
+    <thead>
+      <tr>
+        <th>When</th><th>Stock</th><th>Action</th>
+        <th class="num">Qty</th><th class="num">Price</th><th class="num">Value</th>
+        <th>Status</th><th class="num">Realised P&amp;L</th><th>Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for trade in trades %}
+      <tr>
+        <td class="sub-line">{{ trade.executed_at }}</td>
+        <td><span class="sym">{{ trade.symbol }}</span></td>
+        <td><span class="tag {{ 'sell' if trade.is_sell else 'buy' }}">{{ trade.action }}</span></td>
+        <td class="num">{{ trade.quantity }}</td>
+        <td class="num">{{ trade.price | number }}</td>
+        <td class="num">{{ trade.value | money }}</td>
+        <td>
+          {{ trade.status }}
+          {% if trade.dry_run %}<div class="sub-line">simulated</div>{% endif %}
+        </td>
+        <td class="num {{ trade.realised_pnl | sign }}">
+          {{ trade.realised_pnl | money if trade.realised_pnl is not none else '-' }}
+        </td>
+        <td class="sub-line">{{ trade.error or trade.broker_order_id or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No orders recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ run.run_date }} &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Run of {{ run.run_date }}</h1>
+<p class="subtitle">
+  {{ 'Quarterly deep review' if run.is_deep_review else 'Daily monitoring' }}
+  &middot; {{ run.status }}
+  &middot; started {{ run.started_at }}
+  {%- if run.finished_at %}, finished {{ run.finished_at }}{% endif %}
+  &middot; {{ 'decision layer active' if run.llm_used else 'rules only' }}
+  &middot; <a href="/journal">Back to journal</a>
+</p>
+
+{% if run.memo %}
+<div class="panel">
+  <h2>Manager's memo</h2>
+  <div class="memo">{{ run.memo }}</div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Proposals from this run</h2>
+  {% if run.proposals %}
+    {% for p in run.proposals %}
+      {% include "_proposal.html" %}
+    {% endfor %}
+  {% else %}
+    <p class="empty">This run proposed no trades.</p>
+  {% endif %}
+</div>
+
+{% if briefing %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Briefing given to the decision layer</h2>
+    <span class="note">Exactly what the manager saw before deciding</span>
+  </div>
+  <pre class="briefing">{{ briefing }}</pre>
+</div>
+{% endif %}
+{% endblock %}

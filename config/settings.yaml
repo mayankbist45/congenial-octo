@@ -1,0 +1,179 @@
+# AI Mutual Fund Manager configuration.
+# Every number here is a policy decision. Treat this file as the fund's
+# Investment Policy Statement: change it deliberately, not mid-cycle.
+
+fund:
+  name: "AI Managed Equity Fund"
+  benchmark_symbol: "^CRSLDX"   # Nifty 500 TRI proxy on Yahoo Finance
+  benchmark_label: "Nifty 500"
+  base_currency: "INR"
+  # Cash kept aside so a forced sell is never needed to fund a buy.
+  min_cash_buffer_pct: 5.0
+  target_positions: 25          # Typical concentrated active equity fund
+  max_positions: 30
+  min_positions: 12
+
+universe:
+  file: "data/nifty500.csv"
+  # Liquidity floor: skip names we cannot exit within a few days.
+  min_avg_daily_turnover_inr: 50000000    # Rs 5 crore/day
+  max_position_pct_of_adv: 5.0            # One order stays under 5% of ADV
+
+risk:
+  # --- Position and sector caps (hard limits, never overridden by the LLM) ---
+  max_position_pct: 8.0
+  max_sector_pct: 25.0
+  # Drift bands: only trim when a holding drifts this far past its target
+  # weight. This is what keeps turnover low instead of rebalancing daily.
+  drift_band_pct: 2.0
+
+  # --- Sell triggers (the six professional sell disciplines) ---
+  stop_loss_pct: -15.0          # Down-from-cost hard stop
+  profit_review_pct: 30.0       # Up-from-cost: triggers review, not auto-sell
+  trailing_stop_pct: -20.0      # From peak since entry
+  valuation_stretch_pe_multiple: 1.5   # Sell review if P/E > 1.5x entry P/E
+  # A candidate must beat the weakest holding's composite score by this
+  # margin before capital is rotated (opportunity-cost discipline).
+  opportunity_cost_score_gap: 0.75
+
+  # --- Turnover budget: the core low-frequency guardrail ---
+  # 75%/year implies an average holding period of ~16 months, in line with
+  # typical active equity funds (Morningstar average is ~63%).
+  annual_turnover_budget_pct: 75.0
+
+  # --- Portfolio risk limits (factor-model based) ---
+  max_portfolio_beta: 1.25
+  min_portfolio_beta: 0.75
+  max_single_position_risk_contribution_pct: 20.0
+  max_tracking_error_pct: 12.0
+  # Share of ACTIVE (benchmark-relative) risk that must come from stock
+  # selection rather than factor and sector tilts. This is the Barra-style
+  # "contribution to tracking error" split: a stock picker should be paid for
+  # the names chosen, not for an accidental sector bet.
+  min_idiosyncratic_risk_share_pct: 40.0
+
+cadence:
+  # Deep full-portfolio review only once a quarter; daily runs are monitoring.
+  deep_review_months: [1, 4, 7, 10]
+  deep_review_day: 1
+  # Days a new position is exempt from the opportunity-cost sell trigger,
+  # so a thesis gets time to play out.
+  new_position_grace_days: 60
+
+quant:
+  # Composite score weights. Must sum to 1.0.
+  # Rationale: quality and value drive long-horizon returns; momentum and
+  # trend are used mostly for timing and to avoid value traps.
+  factor_weights:
+    quality: 0.30
+    value: 0.25
+    growth: 0.20
+    momentum: 0.15
+    trend: 0.10
+  # Winsorize z-scores to blunt the effect of data errors and outliers.
+  zscore_clip: 3.0
+  # Minimum composite score for a name to be buy-eligible at all.
+  min_buy_score: 0.5
+  # Hard fundamental gates. A name failing any of these is never bought,
+  # regardless of how attractive its score looks.
+  gates:
+    max_debt_to_equity: 2.0
+    min_roe_pct: 10.0
+    max_pe: 80.0
+    min_revenue_growth_pct: 0.0
+
+market_data:
+  history_days: 500             # Enough for 200-DMA plus a year of context
+  benchmark_history_days: 750
+  cache_ttl_hours: 12
+
+fundamentals:
+  cache_ttl_hours: 168          # Fundamentals move quarterly; weekly refresh
+  # Screener.in rate limits aggressively below ~1s between requests. The client
+  # backs off further on its own if it still gets throttled.
+  request_delay_seconds: 1.0
+
+news:
+  lookback_hours: 36
+  max_articles_per_feed: 60
+  max_articles_in_digest: 40
+  feeds:
+    - name: "Moneycontrol Markets"
+      url: "https://www.moneycontrol.com/rss/marketreports.xml"
+    - name: "Moneycontrol Business"
+      url: "https://www.moneycontrol.com/rss/business.xml"
+    - name: "Economic Times Markets"
+      url: "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"
+    - name: "Economic Times Economy"
+      url: "https://economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms"
+    - name: "LiveMint Markets"
+      url: "https://www.livemint.com/rss/markets"
+    - name: "LiveMint Companies"
+      url: "https://www.livemint.com/rss/companies"
+    - name: "Economic Times Stocks"
+      url: "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
+    # Earnings coverage feeds the fundamental-deterioration sell trigger.
+    - name: "Moneycontrol Results"
+      url: "https://www.moneycontrol.com/rss/results.xml"
+    - name: "Moneycontrol Buzzing Stocks"
+      url: "https://www.moneycontrol.com/rss/buzzingstocks.xml"
+    - name: "Hindu BusinessLine Markets"
+      url: "https://www.thehindubusinessline.com/markets/feeder/default.rss"
+    - name: "NDTV Profit"
+      url: "https://feeds.feedburner.com/ndtvprofit-latest"
+  # Headline keywords that mark an article as materially market-moving.
+  high_impact_keywords:
+    - rbi
+    - repo rate
+    - inflation
+    - cpi
+    - gdp
+    - fed
+    - fomc
+    - budget
+    - sebi
+    - tariff
+    - crude
+    - downgrade
+    - upgrade
+    - earnings
+    - results
+    - guidance
+    - fraud
+    - resign
+    - default
+    - insolvency
+    - raid
+    - probe
+    - stake sale
+    - block deal
+    - merger
+    - acquisition
+
+llm:
+  provider: "openai"            # OpenAI-compatible endpoint
+  model: "gpt-4o"
+  digest_model: "gpt-4o-mini"   # Cheaper model for bulk news summarization
+  temperature: 0.2
+  max_output_tokens: 4000
+  timeout_seconds: 180
+
+execution:
+  product_type: "DELIVERY"      # CNC only. This fund does not trade intraday.
+  order_type: "LIMIT"
+  # Limit price offset from last traded price, to avoid chasing the market.
+  limit_price_buffer_pct: 0.3
+  exchange: "NSE"
+  # Refuse to trade if the market order book looks abnormal.
+  max_slippage_pct: 1.0
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8000
+
+database:
+  path: "data/fund.db"
+
+logging:
+  level: "INFO"
+  file: "data/fund.log"

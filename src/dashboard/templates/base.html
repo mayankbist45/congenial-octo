@@ -1,0 +1,326 @@
+{#
+  Shared layout. Styles are inlined rather than served as a static file: this is a
+  single-operator local tool, and one self-contained response is simpler to run
+  and to reason about than a static mount.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ fund_name }}{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #111827;
+      --ink-soft: #6b7280;
+      --line: #e5e7eb;
+      --accent: #2563eb;
+      --up: #047857;
+      --down: #b91c1c;
+      --warn: #b45309;
+      --warn-bg: #fffbeb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+            Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      padding: 0 24px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      min-height: 60px;
+      flex-wrap: wrap;
+    }
+    .brand { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; }
+    nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+    nav a {
+      padding: 7px 12px;
+      border-radius: 7px;
+      color: var(--ink-soft);
+      font-size: 14px;
+      font-weight: 500;
+    }
+    nav a:hover { background: var(--bg); text-decoration: none; }
+    nav a.active { background: #eff6ff; color: var(--accent); }
+    .badge {
+      display: inline-block;
+      min-width: 18px;
+      padding: 0 5px;
+      margin-left: 5px;
+      border-radius: 9px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .mode {
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .mode.dry { background: #fef3c7; color: var(--warn); }
+    .mode.live { background: #fee2e2; color: var(--down); }
+
+    main { max-width: 1180px; margin: 0 auto; padding: 28px 24px 64px; }
+    h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.02em; }
+    h2 { font-size: 16px; margin: 0 0 14px; letter-spacing: -0.01em; }
+    h3 { font-size: 14px; margin: 0 0 8px; }
+    .subtitle { color: var(--ink-soft); font-size: 14px; margin: 0 0 24px; }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .panel-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .panel-head h2 { margin: 0; }
+    .panel-head .note { color: var(--ink-soft); font-size: 13px; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+    .stat { background: var(--panel); padding: 16px 18px; }
+    .stat .label {
+      color: var(--ink-soft);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+    .stat .value { font-size: 19px; font-weight: 620; letter-spacing: -0.02em; }
+    .stat .sub { color: var(--ink-soft); font-size: 12px; margin-top: 3px; }
+
+    .up { color: var(--up); }
+    .down { color: var(--down); }
+    .flat { color: var(--ink-soft); }
+    .muted { color: var(--ink-soft); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th {
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--ink-soft);
+      font-weight: 600;
+      padding: 0 10px 8px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    td { padding: 10px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .sym { font-weight: 600; }
+    .sub-line { color: var(--ink-soft); font-size: 12px; }
+
+    .tag {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 5px;
+      background: #f3f4f6;
+      color: #374151;
+      font-size: 11px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .tag.buy { background: #dcfce7; color: var(--up); }
+    .tag.sell { background: #fee2e2; color: var(--down); }
+    .tag.rule { background: #ede9fe; color: #5b21b6; }
+
+    .proposal {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .proposal.mandatory { border-left: 3px solid #5b21b6; }
+    .proposal-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .proposal-head .title { font-size: 15px; font-weight: 620; }
+    .proposal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+      margin: 12px 0;
+      padding: 12px 0;
+      border-top: 1px solid #f3f4f6;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .proposal-grid .label {
+      color: var(--ink-soft);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .proposal-grid .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .rationale { margin: 0 0 10px; }
+    .thesis {
+      background: var(--bg);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    .warnings {
+      background: var(--warn-bg);
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #78350f;
+    }
+    .warnings ul { margin: 4px 0 0; padding-left: 18px; }
+
+    .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    button, .btn {
+      font: inherit;
+      font-size: 14px;
+      font-weight: 550;
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+    }
+    button:hover { background: var(--bg); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.primary:hover { background: #1d4ed8; }
+    button.danger { color: var(--down); border-color: #fecaca; }
+    button.danger:hover { background: #fef2f2; }
+    button.small { padding: 5px 11px; font-size: 13px; }
+    input[type=text] {
+      font: inherit;
+      font-size: 14px;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-width: 200px;
+    }
+    form.inline { display: inline-flex; gap: 8px; align-items: center; }
+
+    .memo {
+      white-space: pre-wrap;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+    pre.briefing {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 18px;
+      border-radius: 10px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .empty {
+      color: var(--ink-soft);
+      font-size: 14px;
+      text-align: center;
+      padding: 28px 16px;
+      margin: 0;
+    }
+
+    .chart { width: 100%; height: auto; }
+    .chart .grid { stroke: #f1f3f5; stroke-width: 1; }
+    .chart .baseline { stroke: #cbd5e1; stroke-width: 1; stroke-dasharray: 2 3; }
+    .chart .axis { fill: #9ca3af; font-size: 11px; }
+    .legend { display: flex; gap: 18px; font-size: 13px; color: var(--ink-soft); }
+    .legend .swatch {
+      display: inline-block;
+      width: 14px;
+      height: 3px;
+      border-radius: 2px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    .bars { display: flex; flex-direction: column; gap: 7px; }
+    .bar-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+    .bar-label { width: 190px; flex-shrink: 0; color: var(--ink-soft); }
+    .bar-track { flex: 1; background: #f3f4f6; border-radius: 4px; height: 16px; }
+    .bar-fill { display: block; height: 100%; border-radius: 4px; }
+    .bar-fill.pos { background: #93c5fd; }
+    .bar-fill.neg { background: #fca5a5; }
+    .bar-value {
+      width: 72px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
+    }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <span class="brand">{{ fund_name }}</span>
+      {% if is_dry_run %}
+        <span class="mode dry" title="Orders are simulated, not sent to the broker">Dry run</span>
+      {% else %}
+        <span class="mode live" title="Approved orders are sent to the broker">Live</span>
+      {% endif %}
+      <nav>
+        <a href="/" class="{{ 'active' if page == 'overview' }}">Overview</a>
+        <a href="/proposals" class="{{ 'active' if page == 'proposals' }}">
+          Proposals{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}
+        </a>
+        <a href="/holdings" class="{{ 'active' if page == 'holdings' }}">Holdings</a>
+        <a href="/news" class="{{ 'active' if page == 'news' }}">News</a>
+        <a href="/performance" class="{{ 'active' if page == 'performance' }}">Performance</a>
+        <a href="/journal" class="{{ 'active' if page == 'journal' }}">Journal</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}Performance &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Performance</h1>
+<p class="subtitle">
+  {% if performance.start_date %}
+    {{ performance.start_date }} to {{ performance.end_date }}
+    &middot; {{ performance.days }} days &middot; {{ performance.observations }} observations
+  {% else %}
+    No history recorded yet.
+  {% endif %}
+</p>
+
+<div class="stats">
+  <div class="stat">
+    <div class="label">Total return</div>
+    <div class="value {{ performance.total_return_pct | sign }}">
+      {{ performance.total_return_pct | pct(2, true) }}
+    </div>
+    {% if performance.annualised_return_pct is not none %}
+      <div class="sub">{{ performance.annualised_return_pct | pct(1, true) }} annualised</div>
+    {% endif %}
+  </div>
+  <div class="stat">
+    <div class="label">{{ benchmark_label }}</div>
+    <div class="value {{ performance.benchmark_return_pct | sign }}">
+      {{ performance.benchmark_return_pct | pct(2, true) }}
+    </div>
+  </div>
+  <div class="stat">
+    <div class="label">Excess return</div>
+    <div class="value {{ performance.excess_return_pct | sign }}">
+      {{ performance.excess_return_pct | pct(2, true) }}
+    </div>
+    <div class="sub">
+      {% if performance.is_beating_benchmark is none %}
+        needs benchmark history
+      {% elif performance.is_beating_benchmark %}
+        ahead of the index
+      {% else %}
+        behind the index
+      {% endif %}
+    </div>
+  </div>
+  <div class="stat">
+    <div class="label">Volatility</div>
+    <div class="value">{{ performance.volatility_pct | pct(1) }}</div>
+    <div class="sub">annualised</div>
+  </div>
+  <div class="stat">
+    <div class="label">Sharpe</div>
+    <div class="value">{{ performance.sharpe_ratio | number(2) }}</div>
+    <div class="sub">Sortino {{ performance.sortino_ratio | number(2) }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Max drawdown</div>
+    <div class="value down">{{ performance.max_drawdown_pct | pct(1) }}</div>
+    <div class="sub">
+      {% if performance.max_drawdown_date %}on {{ performance.max_drawdown_date }}{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Fund vs {{ benchmark_label }}</h2>
+    <span class="legend">
+      <span><span class="swatch" style="background:#2563eb"></span>Fund</span>
+      <span><span class="swatch" style="background:#94a3b8"></span>{{ benchmark_label }}</span>
+    </span>
+  </div>
+  {{ chart | safe }}
+</div>
+
+{% if performance.notes %}
+<div class="panel">
+  <h2>Caveats</h2>
+  <ul style="margin:0;padding-left:20px">
+    {% for note in performance.notes %}<li class="muted">{{ note }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="two-col">
+  <div class="panel">
+    <h2>Return statistics</h2>
+    <table>
+      <tbody>
+        <tr><td>Information ratio</td><td class="num">{{ performance.information_ratio | number(2) }}</td></tr>
+        <tr><td>Win rate</td><td class="num">{{ performance.win_rate_pct | pct(1) }}</td></tr>
+        <tr><td>Best day</td><td class="num up">{{ performance.best_day_pct | pct(2, true) }}</td></tr>
+        <tr><td>Worst day</td><td class="num down">{{ performance.worst_day_pct | pct(2, true) }}</td></tr>
+        <tr><td>Current drawdown</td><td class="num">{{ performance.current_drawdown_pct | pct(2) }}</td></tr>
+        <tr><td>Realised P&amp;L</td><td class="num {{ performance.realised_pnl | sign }}">{{ performance.realised_pnl | money }}</td></tr>
+        <tr><td>Unrealised P&amp;L</td><td class="num {{ performance.unrealised_pnl | sign }}">{{ performance.unrealised_pnl | money }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Risk profile</h2>
+    {% if risk %}
+    <table>
+      <tbody>
+        <tr><td>Portfolio beta</td><td class="num">{{ risk.portfolio_beta | number(2) }}</td></tr>
+        <tr><td>Portfolio volatility</td><td class="num">{{ risk.portfolio_vol | pct(1) }}</td></tr>
+        <tr><td>Tracking error</td><td class="num">{{ risk.tracking_error_pct | pct(1) }}</td></tr>
+        <tr>
+          <td>&nbsp;&nbsp;from stock selection</td>
+          <td class="num">{{ risk.active_selection_share_pct | pct(1) }}</td>
+        </tr>
+        <tr>
+          <td>&nbsp;&nbsp;from factor and sector tilts</td>
+          <td class="num">{{ risk.active_factor_share_pct | pct(1) }}</td>
+        </tr>
+        <tr><td>Active share</td><td class="num">{{ risk.active_share_pct | pct(1) }}</td></tr>
+        <tr><td>Top 5 concentration</td><td class="num">{{ risk.concentration_top5_pct | pct(1) }}</td></tr>
+        <tr><td>Effective positions</td><td class="num">{{ risk.effective_positions | number(1) }}</td></tr>
+        <tr><td>Average correlation</td><td class="num">{{ risk.avg_pairwise_correlation | number(2) }}</td></tr>
+      </tbody>
+    </table>
+    {% if risk.warnings %}
+      <div class="warnings" style="margin-top:14px">
+        <strong>Risk limits breached:</strong>
+        <ul>{% for warning in risk.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+      </div>
+    {% endif %}
+    {% else %}
+      <p class="empty">No risk profile recorded yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Contribution to return</h2>
+    <span class="note">Each position's P&amp;L as a share of fund value</span>
+  </div>
+  {{ attribution_chart | safe }}
+</div>
+
+{% if attribution %}
+<div class="panel">
+  <h2>Attribution detail</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Stock</th><th>Sector</th><th class="num">Weight</th>
+        <th class="num">Return</th><th class="num">P&amp;L</th>
+        <th class="num">Contribution</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in attribution %}
+      <tr>
+        <td><span class="sym">{{ row.symbol }}</span></td>
+        <td class="sub-line">{{ row.sector }}</td>
+        <td class="num">{{ row.weight_pct | pct(2) }}</td>
+        <td class="num {{ row.return_pct | sign }}">{{ row.return_pct | pct(1, true) }}</td>
+        <td class="num {{ row.pnl | sign }}">{{ row.pnl | money }}</td>
+        <td class="num {{ row.contribution_pct | sign }}">{{ row.contribution_pct | pct(3, true) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
