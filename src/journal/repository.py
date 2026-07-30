@@ -9,7 +9,6 @@ the time.
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -49,8 +48,8 @@ class JournalRepository:
         portfolio_value: float,
         cash: float,
     ) -> int:
-        with session(self._config.db_path) as conn:
-            cursor = conn.execute(
+        with session(self._config) as conn:
+            return conn.insert_returning_id(
                 """
                 INSERT INTO runs (run_date, started_at, is_deep_review,
                                   portfolio_value, cash, status)
@@ -64,7 +63,6 @@ class JournalRepository:
                     cash,
                 ),
             )
-            return int(cursor.lastrowid)
 
     def finish_run(
         self,
@@ -74,7 +72,7 @@ class JournalRepository:
         turnover_used_pct: float,
         status: str = "complete",
     ) -> None:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             conn.execute(
                 """
                 UPDATE runs
@@ -93,14 +91,14 @@ class JournalRepository:
             )
 
     def latest_run(self) -> Optional[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             row = conn.execute(
                 "SELECT * FROM runs ORDER BY id DESC LIMIT 1"
             ).fetchone()
             return dict(row) if row else None
 
     def recent_runs(self, limit: int = 30) -> List[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 "SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
@@ -114,9 +112,9 @@ class JournalRepository:
     ) -> List[int]:
         ids: List[int] = []
         now = datetime.now().isoformat(timespec="seconds")
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             for proposal in proposals:
-                cursor = conn.execute(
+                proposal_id = conn.insert_returning_id(
                     """
                     INSERT INTO proposals (
                         run_id, created_at, symbol, company_name, sector, action,
@@ -145,7 +143,7 @@ class JournalRepository:
                         proposal.source,
                     ),
                 )
-                ids.append(int(cursor.lastrowid))
+                ids.append(proposal_id)
         if ids:
             logger.info("Journalled %d proposal(s) for run %d", len(ids), run_id)
         return ids
@@ -159,7 +157,7 @@ class JournalRepository:
         show where the decision layer keeps pushing against its limits.
         """
         now = datetime.now().isoformat(timespec="seconds")
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             for proposal, reason in rejected:
                 conn.execute(
                     """
@@ -194,7 +192,7 @@ class JournalRepository:
             logger.info("Journalled %d risk-rejected proposal(s)", len(rejected))
 
     def pending_proposals(self) -> List[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 """
                 SELECT p.*, r.run_date
@@ -207,7 +205,7 @@ class JournalRepository:
 
     def approved_proposals(self) -> List[Dict[str, Any]]:
         """Proposals the human approved that have not yet been sent to the broker."""
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 """
                 SELECT p.*, r.run_date
@@ -219,14 +217,14 @@ class JournalRepository:
             return [dict(r) for r in rows]
 
     def get_proposal(self, proposal_id: int) -> Optional[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             row = conn.execute(
                 "SELECT * FROM proposals WHERE id = ?", (proposal_id,)
             ).fetchone()
             return dict(row) if row else None
 
     def proposals_for_run(self, run_id: int) -> List[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 "SELECT * FROM proposals WHERE run_id = ? ORDER BY id", (run_id,)
             ).fetchall()
@@ -239,7 +237,7 @@ class JournalRepository:
         decided_by: str = "user",
         rejection_reason: Optional[str] = None,
     ) -> bool:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             cursor = conn.execute(
                 """
                 UPDATE proposals
@@ -274,8 +272,8 @@ class JournalRepository:
         realised_pnl: Optional[float] = None,
         executed_at: Optional[datetime] = None,
     ) -> int:
-        with session(self._config.db_path) as conn:
-            cursor = conn.execute(
+        with session(self._config) as conn:
+            return conn.insert_returning_id(
                 """
                 INSERT INTO trades (
                     proposal_id, executed_at, symbol, action, quantity, price,
@@ -297,17 +295,16 @@ class JournalRepository:
                     realised_pnl,
                 ),
             )
-            return int(cursor.lastrowid)
 
     def trades(self, limit: int = 200) -> List[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
             return [dict(r) for r in rows]
 
     def trades_for_symbol(self, symbol: str) -> List[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM trades
@@ -323,7 +320,7 @@ class JournalRepository:
     # ------------------------------------------------------------------
     def reconstruct_positions(self) -> List[Dict[str, Any]]:
         """Rebuild holdings and average cost from the fill history."""
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 """
                 SELECT symbol, action, quantity, price, executed_at
@@ -374,7 +371,7 @@ class JournalRepository:
 
     def net_cash_deployed(self) -> float:
         """Net rupees moved into positions (buys minus sell proceeds)."""
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             row = conn.execute(
                 """
                 SELECT
@@ -389,7 +386,7 @@ class JournalRepository:
         return float(row["bought"]) - float(row["sold"])
 
     def total_realised_pnl(self) -> float:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             row = conn.execute(
                 """
                 SELECT COALESCE(SUM(realised_pnl), 0) AS total FROM trades
@@ -402,7 +399,7 @@ class JournalRepository:
         self, start: date, end: date
     ) -> Tuple[float, float]:
         """Purchase and sale value in a window, for turnover measurement."""
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             row = conn.execute(
                 """
                 SELECT
@@ -412,14 +409,14 @@ class JournalRepository:
                                     THEN value ELSE 0 END), 0) AS sales
                   FROM trades
                  WHERE status IN ('filled','submitted','dry_run')
-                   AND date(executed_at) BETWEEN ? AND ?
+                   AND substr(executed_at, 1, 10) BETWEEN ? AND ?
                 """,
                 (start.isoformat(), end.isoformat()),
             ).fetchone()
         return float(row["purchases"]), float(row["sales"])
 
     def average_net_assets_between(self, start: date, end: date) -> float:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             row = conn.execute(
                 """
                 SELECT AVG(total_value) AS average FROM nav_history
@@ -449,7 +446,7 @@ class JournalRepository:
         broker data, so they are captured when the position is opened.
         """
         now = datetime.now().isoformat(timespec="seconds")
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             conn.execute(
                 """
                 INSERT INTO position_meta (
@@ -461,8 +458,8 @@ class JournalRepository:
                     entry_price  = COALESCE(excluded.entry_price, position_meta.entry_price),
                     entry_pe     = COALESCE(excluded.entry_pe, position_meta.entry_pe),
                     -- The peak only ever ratchets upward.
-                    peak_price   = MAX(COALESCE(excluded.peak_price, 0),
-                                       COALESCE(position_meta.peak_price, 0)),
+                    peak_price   = GREATEST(COALESCE(excluded.peak_price, 0),
+                                            COALESCE(position_meta.peak_price, 0)),
                     thesis       = COALESCE(excluded.thesis, position_meta.thesis),
                     target_price = COALESCE(excluded.target_price, position_meta.target_price),
                     updated_at   = excluded.updated_at
@@ -480,12 +477,12 @@ class JournalRepository:
             )
 
     def position_meta(self) -> Dict[str, Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute("SELECT * FROM position_meta").fetchall()
         return {row["symbol"]: dict(row) for row in rows}
 
     def clear_position_meta(self, symbol: str) -> None:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             conn.execute("DELETE FROM position_meta WHERE symbol = ?", (symbol.upper(),))
 
     # ------------------------------------------------------------------
@@ -500,7 +497,7 @@ class JournalRepository:
         benchmark_return_pct: Optional[float] = None,
     ) -> None:
         unrealised = sum(p.unrealised_pnl for p in portfolio.positions)
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             conn.execute(
                 """
                 INSERT INTO nav_history (
@@ -534,7 +531,7 @@ class JournalRepository:
             )
 
     def nav_history(self) -> List[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 "SELECT * FROM nav_history ORDER BY run_date"
             ).fetchall()
@@ -558,7 +555,7 @@ class JournalRepository:
         weights = portfolio.weights()
         per_position = risk_profile.per_position if risk_profile else {}
 
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             existing = {
                 row["symbol"]: dict(row)
                 for row in conn.execute(
@@ -617,7 +614,7 @@ class JournalRepository:
                 )
 
     def latest_position_snapshot(self) -> List[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM position_snapshots
@@ -632,7 +629,7 @@ class JournalRepository:
     ) -> None:
         payload = asdict(profile)
         payload["as_of"] = _iso(profile.as_of)
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             conn.execute(
                 """
                 INSERT INTO risk_history (
@@ -664,14 +661,14 @@ class JournalRepository:
             )
 
     def latest_risk_profile(self) -> Optional[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             row = conn.execute(
                 "SELECT * FROM risk_history ORDER BY run_date DESC LIMIT 1"
             ).fetchone()
             return dict(row) if row else None
 
     def record_digest(self, digest: NewsDigest) -> None:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             conn.execute(
                 """
                 INSERT INTO news_digests (
@@ -703,7 +700,7 @@ class JournalRepository:
             )
 
     def latest_digest(self) -> Optional[Dict[str, Any]]:
-        with session(self._config.db_path) as conn:
+        with session(self._config) as conn:
             row = conn.execute(
                 "SELECT * FROM news_digests ORDER BY run_date DESC LIMIT 1"
             ).fetchone()

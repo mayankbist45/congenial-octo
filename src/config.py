@@ -37,6 +37,8 @@ class Secrets:
     openai_base_url: Optional[str] = None
     dry_run: bool = True
     initial_capital: float = 1_000_000.0
+    # Kept with the secrets because a production DSN carries a password.
+    database_url: Optional[str] = None
 
     @property
     def has_broker_credentials(self) -> bool:
@@ -128,7 +130,24 @@ class Config:
 
     @property
     def db_path(self) -> Path:
+        """Where the SQLite journal lives, when SQLite is the backend."""
         return self.path("database.path", "data/fund.db")
+
+    @property
+    def db_url(self) -> str:
+        """DSN for the journal.
+
+        ``DATABASE_URL`` in the environment wins, so a deployment can point at a
+        different server without editing tracked config. Otherwise
+        ``database.url`` decides, and if that is blank the fund falls back to the
+        SQLite file, which is what keeps a zero-install first run working.
+        """
+        if self.secrets.database_url:
+            return self.secrets.database_url
+        configured = self.get("database.url")
+        if configured and str(configured).strip():
+            return str(configured).strip()
+        return f"sqlite://{self.db_path}"
 
     @property
     def cache_dir(self) -> Path:
@@ -195,6 +214,7 @@ def load_secrets() -> Secrets:
         openai_base_url=base_url,
         dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),
         initial_capital=initial_capital,
+        database_url=(os.getenv("DATABASE_URL") or "").strip() or None,
     )
 
 

@@ -101,14 +101,6 @@ class FakeBroker(BrokerClient):
 
 
 @pytest.fixture
-def temp_config(config, tmp_path) -> Config:
-    raw = copy.deepcopy(config.raw)
-    raw.setdefault("database", {})["path"] = str(tmp_path / "fund.db")
-    raw["universe"]["file"] = str(config.path("universe.file"))
-    return Config(raw=raw, secrets=config.secrets, root=tmp_path)
-
-
-@pytest.fixture
 def repo(temp_config) -> JournalRepository:
     return JournalRepository(temp_config)
 
@@ -473,19 +465,64 @@ def test_a_broken_news_feed_does_not_stop_the_run(manager, monkeypatch) -> None:
         manager.analyse()
 
 
-def test_the_news_stage_swallows_its_own_failures(manager, monkeypatch) -> None:
-    """_build_digest is the stage that must absorb feed errors, and does."""
-    from src.orchestrator import FundManager
-
+def _break_broad_feeds(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.news.ingest.NewsIngestor.fetch",
         lambda self, **_: (_ for _ in ()).throw(RuntimeError("feed down")),
     )
+
+
+def _break_holdings_feed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.news.holdings_news.HoldingsNewsFetcher.fetch_for",
+        lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("google down")),
+    )
+
+
+def test_the_news_stage_swallows_its_own_failures(manager, monkeypatch) -> None:
+    """_build_digest absorbs feed errors instead of failing the run.
+
+    Both sources are stubbed out: leaving the targeted search live would make
+    this depend on a real Google News response.
+    """
+    from src.orchestrator import FundManager
+
+    _break_broad_feeds(monkeypatch)
+    _break_holdings_feed(monkeypatch)
+
     digest = FundManager._build_digest(
         manager, manager._portfolios.build(manager.broker), [], date.today()
     )
 
     assert digest is None
+
+
+def test_a_partial_news_failure_still_yields_a_digest(manager, monkeypatch) -> None:
+    """Losing the broad feeds must not discard news about what the fund owns."""
+    from src.orchestrator import FundManager
+    from src.models import NewsArticle
+
+    _break_broad_feeds(monkeypatch)
+    monkeypatch.setattr(
+        "src.news.holdings_news.HoldingsNewsFetcher.fetch_for",
+        lambda self, symbols, **k: {
+            "TCS": [
+                NewsArticle(
+                    title="TCS Q1 profit rises 12%",
+                    url="https://example.com/tcs",
+                    source="Test",
+                    symbols=["TCS"],
+                )
+            ]
+        },
+    )
+
+    digest = FundManager._build_digest(
+        manager, manager._portfolios.build(manager.broker), [], date.today()
+    )
+
+    assert digest is not None
+    assert "TCS" in digest.holdings_notes
 
 
 def test_risk_analytics_failure_is_survivable(temp_config, monkeypatch) -> None:
@@ -569,3 +606,104 @@ def test_undecided_proposals_expire_rather_than_execute(manager, repo) -> None:
     assert repo.approved_proposals() == []
     proposal = repo.proposals_for_run(run_id)[0]
     assert proposal["status"] == "expired"
+
+
+# ----------------------------------------------------------------------
+# Unattended (auto) approval
+# ----------------------------------------------------------------------
+def queue_proposal(repo: JournalRepository, symbol: str = "WIPRO") -> int:
+    run_id = repo.start_run(date.today(), False, 1_000_000.0, 500_000.0)
+    repo.save_proposals(
+        run_id,
+        [
+            TradeProposal(
+                symbol=symbol,
+                action=Action.BUY,
+                quantity=10,
+                rationale="test",
+                reference_price=100.0,
+            )
+        ],
+    )
+    return run_id
+
+
+def auto_manager(temp_config, dry_run: bool = True, auto: bool = True):
+    """A manager with auto mode and paper trading set explicitly."""
+    from dataclasses import replace
+
+    from src.orchestrator import FundManager
+
+    raw = copy.deepcopy(temp_config.raw)
+    raw.setdefault("execution", {})["auto_approve"] = auto
+    config = Config(
+        raw=raw,
+        secrets=replace(temp_config.secrets, dry_run=dry_run),
+        root=temp_config.root,
+    )
+    return FundManager(config=config, broker=FakeBroker()), JournalRepository(config)
+
+
+def test_auto_mode_approves_the_pending_queue(temp_config) -> None:
+    manager, repo = auto_manager(temp_config)
+    run_id = queue_proposal(repo)
+
+    assert manager.auto_approve() == 1
+
+    assert repo.pending_proposals() == []
+    proposal = repo.proposals_for_run(run_id)[0]
+    assert proposal["status"] == "approved"
+
+
+def test_auto_approval_is_recorded_as_the_machine_not_a_person(temp_config) -> None:
+    """A later review must be able to tell what nobody actually looked at."""
+    manager, repo = auto_manager(temp_config)
+    run_id = queue_proposal(repo)
+
+    manager.auto_approve()
+
+    proposal = repo.proposals_for_run(run_id)[0]
+    assert proposal["decided_by"] == "auto"
+    assert proposal["decided_at"]
+
+
+def test_auto_approval_is_refused_outside_paper_trading(temp_config) -> None:
+    """The guard lives in the orchestrator so no caller can route around it."""
+    from src.orchestrator import AutoApprovalRefused
+
+    manager, repo = auto_manager(temp_config, dry_run=False)
+    run_id = queue_proposal(repo)
+
+    with pytest.raises(AutoApprovalRefused):
+        manager.auto_approve()
+
+    # The proposal must survive untouched, ready for a human to decide.
+    proposal = repo.proposals_for_run(run_id)[0]
+    assert proposal["status"] == "pending"
+    assert len(repo.pending_proposals()) == 1
+
+
+def test_auto_approved_proposals_reach_the_broker(temp_config) -> None:
+    manager, repo = auto_manager(temp_config)
+    queue_proposal(repo)
+    manager.auto_approve()
+
+    summary = manager.execute_approved(
+        technicals={"WIPRO": make_technical("WIPRO", last_price=100.0)}
+    )
+
+    assert summary.placed
+    assert manager.broker.orders[0].symbol == "WIPRO"
+
+
+def test_auto_mode_reads_the_config_switch(temp_config) -> None:
+    enabled, _ = auto_manager(temp_config, auto=True)
+    disabled, _ = auto_manager(temp_config, auto=False)
+
+    assert enabled.auto_approval_enabled is True
+    assert disabled.auto_approval_enabled is False
+
+
+def test_auto_approve_on_an_empty_queue_is_harmless(temp_config) -> None:
+    manager, _ = auto_manager(temp_config)
+    assert manager.auto_approve() == 0

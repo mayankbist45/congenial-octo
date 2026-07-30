@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import copy
+import os
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Dict, List, Optional
 
 import pytest
 
-from src.config import get_config
+from src.config import Config, get_config
+from src.journal.db import truncate_all
 from src.models import (
     FactorScores,
     FundamentalSnapshot,
@@ -16,10 +20,42 @@ from src.models import (
     TechnicalSnapshot,
 )
 
+# Point this at a scratch PostgreSQL database to run the whole suite against the
+# backend the fund actually uses, for example:
+#   createdb mutualfund_test
+#   FUND_TEST_DB_URL=postgresql:///mutualfund_test python -m pytest
+TEST_DB_URL_ENV = "FUND_TEST_DB_URL"
+
 
 @pytest.fixture(scope="session")
 def config():
     return get_config()
+
+
+@pytest.fixture
+def temp_config(config, tmp_path) -> Config:
+    """A config pointed at a throwaway journal and data directory.
+
+    Defaults to a SQLite file under ``tmp_path`` so the suite needs no server.
+    The real ``DATABASE_URL`` is deliberately stripped from the secrets: without
+    that, every test here would run against the live journal and truncate it.
+    """
+    raw = copy.deepcopy(config.raw)
+    database = raw.setdefault("database", {})
+    database["path"] = str(tmp_path / "fund.db")
+
+    url = (os.getenv(TEST_DB_URL_ENV) or "").strip() or None
+    database["url"] = url
+    secrets = replace(config.secrets, database_url=url)
+
+    temp = Config(raw=raw, secrets=secrets, root=tmp_path)
+    # The universe file lives under the real root, so keep an absolute path to it.
+    raw["universe"]["file"] = str(config.path("universe.file"))
+
+    if url:
+        # A server-backed database is shared between tests, unlike a tmp file.
+        truncate_all(temp)
+    return temp
 
 
 def make_position(

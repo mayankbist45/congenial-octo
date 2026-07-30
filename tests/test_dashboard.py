@@ -8,14 +8,12 @@ install.
 
 from __future__ import annotations
 
-import copy
 from datetime import date, timedelta
 from typing import Any, Dict
 
 import pytest
 from fastapi.testclient import TestClient
 
-from src.config import Config
 from src.dashboard.app import create_app
 from src.dashboard.service import DashboardService
 from src.journal.repository import JournalRepository
@@ -30,16 +28,6 @@ from tests.conftest import make_diversified_portfolio, make_scores
 
 PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/journal"]
 API = ["/api/overview", "/api/holdings", "/api/proposals", "/api/performance", "/api/risk"]
-
-
-@pytest.fixture
-def temp_config(config, tmp_path) -> Config:
-    """A config pointed at a throwaway database and data directory."""
-    raw = copy.deepcopy(config.raw)
-    raw.setdefault("database", {})["path"] = str(tmp_path / "fund.db")
-    # The universe file lives under the real root, so keep an absolute path to it.
-    raw["universe"]["file"] = str(config.path("universe.file"))
-    return Config(raw=raw, secrets=config.secrets, root=tmp_path)
 
 
 @pytest.fixture

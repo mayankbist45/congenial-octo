@@ -53,6 +53,10 @@ from src.universe import load_universe
 logger = get_logger(__name__)
 
 
+class AutoApprovalRefused(RuntimeError):
+    """Raised when unattended approval is asked for outside paper trading."""
+
+
 @dataclass
 class RunResult:
     """Everything one analysis pass produced."""
@@ -433,6 +437,40 @@ class FundManager:
     # ------------------------------------------------------------------
     def pending_count(self) -> int:
         return len(self._repo.pending_proposals())
+
+    @property
+    def auto_approval_enabled(self) -> bool:
+        return bool(self._config.get("execution.auto_approve", False))
+
+    def auto_approve(self) -> int:
+        """Approve every pending proposal without a human, for unattended runs.
+
+        Paper trading only. The guard is enforced here rather than at the command
+        line so that no caller can reach live order placement without a person
+        having looked at the trade. Approvals are journalled as ``auto`` so a
+        later review can tell them apart from anything a human agreed to.
+        """
+        if not self._config.secrets.dry_run:
+            raise AutoApprovalRefused(
+                "auto-approval is limited to paper trading, and DRY_RUN is false"
+            )
+
+        pending = self._repo.pending_proposals()
+        if not pending:
+            logger.info("Nothing awaiting approval")
+            return 0
+
+        for proposal in pending:
+            self._repo.set_proposal_status(
+                proposal["id"], "approved", decided_by="auto"
+            )
+
+        logger.warning(
+            "AUTO MODE: approved %d proposal(s) with no human review "
+            "(simulated orders only)",
+            len(pending),
+        )
+        return len(pending)
 
     def wait_for_approval(
         self, timeout_minutes: int = 120, poll_seconds: int = 15

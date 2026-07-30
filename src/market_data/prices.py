@@ -64,6 +64,16 @@ class PriceService:
             logger.warning("Could not read price cache: %s", exc)
         return {}
 
+    def cached_history(self) -> Dict[str, pd.DataFrame]:
+        """Whatever history is already on disk, without triggering a download.
+
+        For offline analysis that wants the whole universe but has no reason to
+        hit the network or to care how stale the cache is.
+        """
+        if self._frames:
+            return dict(self._frames)
+        return self._load_cache()
+
     def _save_cache(self) -> None:
         try:
             with open(self._cache_path, "wb") as handle:

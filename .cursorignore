@@ -1,0 +1,9 @@
+# Secrets — never index or send these to an AI coding agent.
+.env
+.env.*
+!.env.example
+
+# Runtime logs can accidentally echo credentials from stack traces.
+data/fund.log
+data/scheduled.log
+data/launchd.log

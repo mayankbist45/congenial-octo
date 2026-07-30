@@ -151,14 +151,21 @@ news:
     - acquisition
 
 llm:
+  model: "llama-3.3-70b-versatile"       # default for decisions
+  digest_model: "llama-3.1-8b-instant" 
   provider: "openai"            # OpenAI-compatible endpoint
-  model: "gpt-4o"
-  digest_model: "gpt-4o-mini"   # Cheaper model for bulk news summarization
+  # model: "gpt-4o"
+  # digest_model: "gpt-4o-mini"   # Cheaper model for bulk news summarization
   temperature: 0.2
   max_output_tokens: 4000
   timeout_seconds: 180
 
 execution:
+  # Unattended mode: approve the fund's own proposals and place them without a
+  # human. Restricted to paper trading in code — with DRY_RUN=false the fund
+  # refuses to self-approve and waits for you in the dashboard instead. Set this
+  # to false to require approval even on paper.
+  auto_approve: true
   product_type: "DELIVERY"      # CNC only. This fund does not trade intraday.
   order_type: "LIMIT"
   # Limit price offset from last traded price, to avoid chasing the market.
@@ -172,6 +179,12 @@ dashboard:
   port: 8000
 
 database:
+  # The journal is the fund's durable record, so it runs on a real server.
+  # Overridden by DATABASE_URL in .env when that is set, which is where a DSN
+  # carrying a password belongs.
+  url: "postgresql:///mutualfund"
+  # Used only when url above is left blank: a zero-install SQLite fallback,
+  # which is also what the test suite runs on.
   path: "data/fund.db"
 
 logging:

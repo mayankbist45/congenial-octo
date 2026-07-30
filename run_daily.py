@@ -7,17 +7,20 @@ Typical day, in three commands:
     python run_daily.py dashboard     # review and approve at localhost:8000
     python run_daily.py execute       # place what you approved
 
-Or as one unattended sequence, which waits for your approvals in between:
+Or as one sequence that pauses for your approvals in between:
 
     python run_daily.py cycle --wait 90
+
+With execution.auto_approve on, that same command runs start to finish with
+nobody watching: the fund approves its own proposals and places them. That is
+restricted to paper trading — set DRY_RUN=false and the fund refuses to
+self-approve, reverting to waiting for you. Use --require-approval to insist on a
+human for a single run, or --auto-approve to opt in for one.
 
 After the close, record the day's NAV so performance is measured on closing
 prices rather than the pre-market marks:
 
     python run_daily.py close
-
-Nothing here places an order that a human has not approved in the dashboard, and
-with DRY_RUN=true in .env even approved orders are only simulated.
 """
 
 from __future__ import annotations
@@ -87,6 +90,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="force the simulated broker even if Angel One credentials exist",
     )
+    approval = parser.add_mutually_exclusive_group()
+    approval.add_argument(
+        "--auto-approve",
+        dest="auto_approve",
+        action="store_true",
+        default=None,
+        help="approve the fund's own proposals and trade unattended "
+        "(paper trading only; refused when DRY_RUN=false)",
+    )
+    approval.add_argument(
+        "--require-approval",
+        dest="auto_approve",
+        action="store_false",
+        help="wait for your decision in the dashboard, overriding auto mode",
+    )
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -139,6 +157,31 @@ def _report_status() -> None:
         print("  mode            LIVE (approved orders reach the broker)")
 
 
+def _auto_mode(manager, args) -> bool:
+    """Whether this run decides its own proposals; the flag beats the config."""
+    if args.auto_approve is None:
+        return manager.auto_approval_enabled
+    return bool(args.auto_approve)
+
+
+def _clear_pending(manager, args) -> None:
+    """Get the pending queue decided, by the fund itself or by a human."""
+    from src.orchestrator import AutoApprovalRefused
+
+    if _auto_mode(manager, args):
+        try:
+            manager.auto_approve()
+            return
+        except AutoApprovalRefused as exc:
+            print(
+                f"\nAuto mode is on but {exc}.\n"
+                f"Falling back to waiting for your approval in the dashboard.",
+                file=sys.stderr,
+            )
+
+    manager.wait_for_approval(timeout_minutes=args.wait)
+
+
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -173,7 +216,13 @@ def main(argv: Optional[list] = None) -> int:
                 refresh_fundamentals=args.refresh_fundamentals,
                 max_candidates=args.max_candidates,
             )
-            if result.proposal_count:
+            if result.proposal_count and _auto_mode(manager, args):
+                print(
+                    f"\n{result.proposal_count} proposal(s) pending. Auto mode is "
+                    f"on, so they are approved and placed by:\n"
+                    f"  python run_daily.py execute"
+                )
+            elif result.proposal_count:
                 host = config.get("dashboard.host", "127.0.0.1")
                 port = config.get("dashboard.port", 8000)
                 print(
@@ -187,6 +236,8 @@ def main(argv: Optional[list] = None) -> int:
             return 0
 
         if args.command == "execute":
+            if _auto_mode(manager, args) and manager.pending_count():
+                _clear_pending(manager, args)
             summary = manager.execute_approved()
             print(f"\n{summary.describe()}")
             return 0 if not summary.failed else 1
@@ -202,7 +253,7 @@ def main(argv: Optional[list] = None) -> int:
                 print("\nNo trades proposed today; nothing to approve or execute.")
                 return 0
 
-            manager.wait_for_approval(timeout_minutes=args.wait)
+            _clear_pending(manager, args)
             summary = manager.execute_approved(
                 technicals=result.technicals, fundamentals=result.fundamentals
             )

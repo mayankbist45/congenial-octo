@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import get_config
-from src.journal.db import init_db
+from src.journal.db import init_db, is_postgres
 from src.universe import load_universe
 
 OK = "[ ok ]"
@@ -46,8 +46,13 @@ def main() -> int:
         failures += 1
 
     try:
-        path = init_db(config)
-        print(f"{OK} database ready at {path.relative_to(config.root)}")
+        print(f"{OK} journal ready: {init_db(config)}")
+        if not is_postgres(config.db_url):
+            print(
+                f"{WARN} using the SQLite fallback - fine for a trial, but set "
+                f"database.url to PostgreSQL before running the fund for real"
+            )
+            warnings += 1
     except Exception as exc:
         print(f"{FAIL} database: {exc}")
         failures += 1
