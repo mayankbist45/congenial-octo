@@ -96,7 +96,8 @@ fundamentals:
 news:
   lookback_hours: 36
   max_articles_per_feed: 60
-  max_articles_in_digest: 40
+  # Kept small so the digest fits Groq free-tier TPM on llama-3.1-8b-instant.
+  max_articles_in_digest: 12
   feeds:
     - name: "Moneycontrol Markets"
       url: "https://www.moneycontrol.com/rss/marketreports.xml"
@@ -157,7 +158,7 @@ llm:
   # model: "gpt-4o"
   # digest_model: "gpt-4o-mini"   # Cheaper model for bulk news summarization
   temperature: 0.2
-  max_output_tokens: 4000
+  max_output_tokens: 2000
   timeout_seconds: 180
 
 execution:

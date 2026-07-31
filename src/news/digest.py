@@ -157,8 +157,22 @@ class DigestBuilder:
                 return digest
             except LLMUnavailable as exc:
                 logger.warning("LLM digest failed (%s); using keyword digest", exc)
+                self._fill_from_keywords(
+                    digest,
+                    macro_articles,
+                    company_articles,
+                    relevant,
+                    reason=f"LLM digest failed ({exc})",
+                )
+                return digest
 
-        self._fill_from_keywords(digest, macro_articles, company_articles, relevant)
+        self._fill_from_keywords(
+            digest,
+            macro_articles,
+            company_articles,
+            relevant,
+            reason="no LLM configured",
+        )
         return digest
 
     def _fill_from_llm(
@@ -170,23 +184,53 @@ class DigestBuilder:
         watchlist: List[str],
         as_of: date,
     ) -> None:
-        max_articles = int(self._config.get("news.max_articles_in_digest", 40) or 40)
+        # Groq's free 8B tier is ~6k TPM. A full 40-headline dump overshoots that,
+        # so start small and only widen if the call succeeds. On a 413 / TPM error,
+        # shrink once more rather than falling straight to keywords.
+        configured = int(self._config.get("news.max_articles_in_digest", 16) or 16)
+        attempt_sizes = []
+        for size in (min(configured, 16), 10, 6):
+            if size not in attempt_sizes:
+                attempt_sizes.append(size)
 
-        prompt = USER_TEMPLATE.format(
-            today=as_of.strftime("%A, %d %B %Y"),
-            holdings=", ".join(holdings) if holdings else "(none - portfolio is empty)",
-            watchlist=", ".join(watchlist[:40]) if watchlist else "(none)",
-            macro_articles=_format_article_lines(macro_articles, max_articles),
-            company_articles=_format_article_lines(
-                company_articles, max_articles, include_symbols=True
-            ),
-        )
-
-        payload = self._llm.complete_json(
-            SYSTEM_PROMPT, prompt, model=self._llm.digest_model
-        )
-        if not isinstance(payload, dict):
-            raise LLMUnavailable("Digest response was not a JSON object")
+        last_error: Optional[Exception] = None
+        for max_articles in attempt_sizes:
+            prompt = USER_TEMPLATE.format(
+                today=as_of.strftime("%A, %d %B %Y"),
+                holdings=", ".join(holdings)
+                if holdings
+                else "(none - portfolio is empty)",
+                watchlist=", ".join(watchlist[:40]) if watchlist else "(none)",
+                macro_articles=_format_article_lines(macro_articles, max_articles),
+                company_articles=_format_article_lines(
+                    company_articles, max_articles, include_symbols=True
+                ),
+            )
+            try:
+                payload = self._llm.complete_json(
+                    SYSTEM_PROMPT,
+                    prompt,
+                    model=self._llm.digest_model,
+                    max_tokens=min(
+                        1200,
+                        int(self._config.get("llm.max_output_tokens", 2000) or 2000),
+                    ),
+                )
+            except LLMUnavailable as exc:
+                last_error = exc
+                message = str(exc).lower()
+                if "request too large" in message or "rate_limit" in message:
+                    logger.warning(
+                        "Digest model rejected %d-headline prompt; retrying smaller",
+                        max_articles,
+                    )
+                    continue
+                raise
+            if not isinstance(payload, dict):
+                raise LLMUnavailable("Digest response was not a JSON object")
+            break
+        else:
+            raise LLMUnavailable(str(last_error or "digest prompt too large for model"))
 
         digest.macro_summary = str(payload.get("macro_summary") or "").strip()
         digest.market_summary = str(payload.get("market_summary") or "").strip()
@@ -220,14 +264,15 @@ class DigestBuilder:
         macro_articles: List[NewsArticle],
         company_articles: List[NewsArticle],
         relevant: set,
+        reason: str = "no LLM configured",
     ) -> None:
         """Deterministic fallback digest."""
         macro_headlines = [a.title for a in macro_articles if a.is_high_impact][:8]
+        prefix = f"Keyword digest ({reason})."
         digest.macro_summary = (
-            "Keyword digest (no LLM configured). High-impact macro headlines: "
-            + "; ".join(macro_headlines)
+            f"{prefix} High-impact macro headlines: " + "; ".join(macro_headlines)
             if macro_headlines
-            else "Keyword digest (no LLM configured). No high-impact macro headlines."
+            else f"{prefix} No high-impact macro headlines."
         )
         digest.market_summary = (
             f"{len(digest.articles)} articles ingested, "
