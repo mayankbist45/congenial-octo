@@ -8,6 +8,7 @@ __pycache__/
 .DS_Store
 
 data/fund.db
-data/fund.log
+data/*.log
 data/cache/
 data/briefings/
+data/backups/

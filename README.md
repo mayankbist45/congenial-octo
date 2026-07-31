@@ -137,6 +137,22 @@ unattended operation reads as one continuous story:
 tail -f data/scheduled.log
 ```
 
+### Running it in the cloud instead
+
+To take the laptop off the critical path, the same two jobs can run on a small
+Linux VM with cron instead of launchd:
+
+```bash
+./scripts/deploy_gcp.sh deploy     # create the VM, push the fund, provision it
+./scripts/deploy_gcp.sh status     # what it did up there
+./scripts/deploy_gcp.sh dashboard  # tunnel the UI back to localhost:8000
+```
+
+That builds the cloud copy in the same shape as the local one — one machine,
+PostgreSQL on localhost, the repo on a persistent disk — so it is portable to any
+Debian or Ubuntu host via `scripts/bootstrap_vm.sh`. Costs, backups, security and
+the migration path are in [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md).
+
 ### How much starting capital
 
 Indian equities trade in whole shares, so an underfunded portfolio silently
