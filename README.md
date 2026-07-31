@@ -150,8 +150,10 @@ Linux VM with cron instead of launchd:
 
 That builds the cloud copy in the same shape as the local one — one machine,
 PostgreSQL on localhost, the repo on a persistent disk — so it is portable to any
-Debian or Ubuntu host via `scripts/bootstrap_vm.sh`. Costs, backups, security and
-the migration path are in [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md).
+Debian or Ubuntu host via `scripts/bootstrap_vm.sh`.
+
+- [docs/GCP_ARCHITECTURE.md](docs/GCP_ARCHITECTURE.md) — how it is laid out: paths, Postgres, persistence, schedule
+- [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md) — deploy steps, cost, security, exit plan
 
 ### How much starting capital
 

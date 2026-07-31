@@ -3,6 +3,9 @@
 A proof of concept that takes the laptop off the critical path: the fund runs
 weekdays at 08:15 and 18:00 IST whether or not this MacBook is awake.
 
+For a full picture of paths, Postgres tables, persistence layers, and how the
+pieces connect, see [GCP_ARCHITECTURE.md](GCP_ARCHITECTURE.md).
+
 The architecture is deliberately the same as local — **one VM, PostgreSQL on
 localhost, the repo on a persistent disk, cron where launchd was**. Nothing is
 built on a Google-only service, so moving to Hetzner, Oracle or a spare Linux
