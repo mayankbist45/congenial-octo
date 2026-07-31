@@ -144,6 +144,35 @@ $PROJECT_DIR/data/*.log {
 }
 ROTATE
 
+# --- Dashboard service ------------------------------------------------------
+# The review UI runs as a managed service rather than something started by hand
+# over SSH: a backgrounded python process would keep the SSH session open and
+# die with the next reboot. It binds 127.0.0.1 only (dashboard.host in
+# settings.yaml), so the sole way to reach it is the SSH tunnel that
+# deploy_gcp.sh dashboard opens - no firewall rule, nothing on the public IP.
+cat >/etc/systemd/system/mutualfund-dashboard.service <<UNIT
+[Unit]
+Description=AI Mutual Fund Manager dashboard (localhost only)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=$APP_USER
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$PROJECT_DIR/.venv/bin/python run_daily.py dashboard
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:$PROJECT_DIR/data/dashboard.log
+StandardError=append:$PROJECT_DIR/data/dashboard.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now mutualfund-dashboard >/dev/null 2>&1 &&
+    echo "  dashboard service up on 127.0.0.1:8000 (reach it via the SSH tunnel)" ||
+    echo "  note: dashboard service failed; check journalctl -u mutualfund-dashboard"
+
 # --- Cloud Logging ----------------------------------------------------------
 # The fund runs unattended, so the record of why a trade fired must outlive the
 # machine. Google's Ops Agent tails the app's log files and ships them to Cloud

@@ -183,15 +183,28 @@ snapshots() {
 
 dashboard() {
     instance_exists || die "$INSTANCE does not exist yet"
-    echo "Starting the dashboard on $INSTANCE if it is not already up"
-    # The bracket keeps pgrep from matching the shell that gcloud ssh spawns to
-    # run this very command, which otherwise looks like a dashboard already up.
-    ssh_vm "cd '$REMOTE_DIR' && pgrep -f 'run_daily[.]py dashboard' >/dev/null ||
-            (nohup .venv/bin/python run_daily.py dashboard \
-                >> data/dashboard.log 2>&1 & echo started)" ||
-        die "could not start the dashboard"
+    echo "Ensuring the dashboard service is up on $INSTANCE"
+    # The dashboard is a systemd service (see bootstrap_vm.sh), so starting it
+    # returns at once instead of holding the SSH session open the way a
+    # backgrounded python process would. It binds 127.0.0.1 only; the tunnel
+    # below is the sole way in. Readiness is a TCP check on the port rather than
+    # pgrep, which cannot accidentally match this very command line.
+    ssh_vm "sudo systemctl start mutualfund-dashboard 2>/dev/null || true
+            for _ in \$(seq 1 15); do
+                (exec 3<>/dev/tcp/127.0.0.1/8000) 2>/dev/null && break
+                sleep 1
+            done
+            if (exec 3<>/dev/tcp/127.0.0.1/8000) 2>/dev/null; then
+                echo '  dashboard listening on 127.0.0.1:8000'
+            else
+                echo '  dashboard did not come up; recent log:' >&2
+                sudo journalctl -u mutualfund-dashboard -n 20 --no-pager 2>/dev/null
+                tail -20 '$REMOTE_DIR/data/dashboard.log' 2>/dev/null
+                exit 1
+            fi" || die "could not start the dashboard"
     echo
-    echo "Tunnelling http://127.0.0.1:8000 -> the VM. Ctrl-C closes it."
+    echo "Tunnelling http://127.0.0.1:8000 -> the VM. Open that in your browser."
+    echo "Ctrl-C closes the tunnel; the dashboard keeps running on the VM."
     gc compute ssh "$INSTANCE" --zone "$ZONE" -- -N -L 8000:127.0.0.1:8000
 }
 
