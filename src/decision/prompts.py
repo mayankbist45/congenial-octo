@@ -8,6 +8,11 @@ single day. Turnover is the enemy of after-cost returns.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.config import Config
+
 SYSTEM_PROMPT = """You are the portfolio manager of an Indian equity mutual \
 fund investing in Nifty 500 companies. You have a long-horizon, \
 fundamentals-driven mandate.
@@ -132,6 +137,23 @@ expected answer unless something in the business fundamentals, the news, or the 
 portfolio's risk profile genuinely demands action.
 
 Respond with the JSON object described in your instructions."""
+
+
+def persona_system_prompt(config: "Config") -> str:
+    """Return SYSTEM_PROMPT with the first paragraph swapped for the persona's
+    strategy_description, if one is defined."""
+    personas = config.raw.get("personas", {})
+    persona_def = personas.get(config.persona_id, {})
+    strategy = persona_def.get("strategy_description", "").strip() if isinstance(persona_def, dict) else ""
+
+    if not strategy:
+        return SYSTEM_PROMPT
+
+    # The first paragraph ends at the first double-newline.
+    parts = SYSTEM_PROMPT.split("\n\n", 1)
+    if len(parts) == 2:
+        return strategy + "\n\n" + parts[1]
+    return strategy
 
 
 CLOSING_DEEP_REVIEW = """--- YOUR DECISION (QUARTERLY DEEP REVIEW) ---

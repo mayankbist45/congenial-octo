@@ -79,6 +79,10 @@ class DashboardService:
         return self._repo
 
     @property
+    def persona_id(self) -> str:
+        return self._config.persona_id
+
+    @property
     def fund_name(self) -> str:
         return str(self._config.get("fund.name", "AI Managed Equity Fund"))
 
@@ -388,6 +392,28 @@ class DashboardService:
         ]
         rows.sort(key=lambda r: r["contribution_pct"] or 0.0, reverse=True)
         return rows
+
+    # ------------------------------------------------------------------
+    # Multi-persona overview
+    # ------------------------------------------------------------------
+    def all_personas_overview(self) -> List[Dict[str, Any]]:
+        from src.config import enabled_personas, get_persona_config, persona_description
+
+        results: List[Dict[str, Any]] = []
+        for pid in enabled_personas():
+            pcfg = get_persona_config(pid)
+            svc = DashboardService(config=pcfg)
+            overview = svc.overview()
+            results.append({
+                "persona_id": pid,
+                "description": persona_description(pid),
+                "total_value": overview["total_value"],
+                "position_count": overview["position_count"],
+                "cash_pct": overview["cash_pct"],
+                "pending_count": overview["pending_count"],
+                "has_data": overview["has_data"],
+            })
+        return results
 
     # ------------------------------------------------------------------
     # Journal

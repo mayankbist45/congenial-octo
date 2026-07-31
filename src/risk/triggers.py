@@ -216,6 +216,33 @@ class TriggerEngine:
             },
         )
 
+    def _trend_break(
+        self, position: Position, technical: Optional[TechnicalSnapshot]
+    ) -> Optional[Trigger]:
+        """Mandatory sell when a momentum portfolio's holding breaks its 200-DMA."""
+        momentum_weight = self._config.get("quant.factor_weights", {}).get("momentum", 0)
+        if float(momentum_weight) < 0.3:
+            return None
+        if technical is None or technical.sma_200 is None or not technical.has_price:
+            return None
+        if technical.last_price >= technical.sma_200:
+            return None
+        return Trigger(
+            symbol=position.symbol,
+            trigger_type=TriggerType.TRAILING_STOP,
+            severity=Severity.MANDATORY,
+            detail=(
+                f"Price {technical.last_price:.2f} is below the 200-DMA "
+                f"({technical.sma_200:.2f}). Trend has broken — exit the position."
+            ),
+            suggested_action=Action.SELL,
+            suggested_quantity=position.quantity,
+            metrics={
+                "last_price": technical.last_price,
+                "sma_200": technical.sma_200,
+            },
+        )
+
     def _news_event(
         self, position: Position, digest: Optional[NewsDigest]
     ) -> Optional[Trigger]:
@@ -459,11 +486,14 @@ class TriggerEngine:
             default=None,
         )
 
+        monthly_rebalance = bool(self._config.get("cadence.monthly_rebalance", False))
+
         for position in portfolio.positions:
             symbol = position.symbol
             weight = weights.get(symbol, 0.0)
             fundamental = fundamentals.get(symbol)
             score = scores.get(symbol)
+            technical = technicals.get(symbol)
 
             candidates = [
                 self._stop_loss(position),
@@ -474,13 +504,15 @@ class TriggerEngine:
                 self._fundamental_deterioration(position, fundamental, score),
                 self._news_event(position, digest),
                 self._position_cap(position, weight, total_value),
+                self._trend_break(position, technical),
             ]
 
             # Opportunity-cost rotation is a deliberate act of portfolio
             # housekeeping, so it is only considered for the single weakest
-            # holding and only during a quarterly deep review.
+            # holding and only during a quarterly deep review (or daily when
+            # monthly_rebalance is enabled for momentum personas).
             if (
-                is_deep_review
+                (is_deep_review or monthly_rebalance)
                 and weakest_holding is not None
                 and weakest_holding.symbol == symbol
             ):
@@ -490,8 +522,9 @@ class TriggerEngine:
                     )
                 )
 
-            # Drift bands are also a deep-review activity, not a daily one.
-            if is_deep_review:
+            # Drift bands are a deep-review activity unless monthly_rebalance
+            # is enabled, which effectively forces daily portfolio review.
+            if is_deep_review or monthly_rebalance:
                 candidates.append(
                     self._drift_band(position, weight, target_weight, total_value)
                 )

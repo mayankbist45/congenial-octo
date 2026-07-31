@@ -20,6 +20,14 @@ logger = get_logger(__name__)
 NSE_NIFTY500_URL = (
     "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 )
+NSE_SMALLCAP250_URL = (
+    "https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv"
+)
+
+UNIVERSE_URLS: Dict[str, str] = {
+    "data/nifty500.csv": NSE_NIFTY500_URL,
+    "data/nifty_smallcap250.csv": NSE_SMALLCAP250_URL,
+}
 
 
 def _read_csv(path: Path) -> List[UniverseEntry]:
@@ -98,15 +106,34 @@ def _load_universe_cached(path_str: str) -> Universe:
 def load_universe(config: Optional[Config] = None) -> Universe:
     config = config or get_config()
     path = config.path("universe.file", "data/nifty500.csv")
-    return _load_universe_cached(str(path))
+    universe = _load_universe_cached(str(path))
+
+    gold_symbol = config.get("gold.symbol")
+    if gold_symbol and not universe.contains(gold_symbol):
+        extra = UniverseEntry(
+            symbol=gold_symbol.upper(),
+            company_name="Gold ETF",
+            sector="Commodities",
+        )
+        universe = Universe(universe.entries + [extra])
+        logger.info("Added gold ETF %s to universe", gold_symbol)
+
+    return universe
 
 
 def refresh_universe_file(config: Optional[Config] = None) -> int:
-    """Download the current Nifty 500 constituent list from NSE."""
+    """Download the current index constituent list from NSE.
+
+    Resolves the correct URL from UNIVERSE_URLS based on the configured
+    universe.file path. Falls back to Nifty 500 if the file is not mapped.
+    """
     import requests
 
     config = config or get_config()
     path = config.path("universe.file", "data/nifty500.csv")
+    rel = str(Path(config.get("universe.file", "data/nifty500.csv")))
+    url = UNIVERSE_URLS.get(rel, NSE_NIFTY500_URL)
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -114,7 +141,7 @@ def refresh_universe_file(config: Optional[Config] = None) -> int:
         ),
         "Accept": "text/csv,*/*",
     }
-    response = requests.get(NSE_NIFTY500_URL, headers=headers, timeout=30)
+    response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,5 +149,5 @@ def refresh_universe_file(config: Optional[Config] = None) -> int:
     _load_universe_cached.cache_clear()
 
     count = len(_read_csv(path))
-    logger.info("Refreshed universe file with %d symbols", count)
+    logger.info("Refreshed universe file with %d symbols from %s", count, url)
     return count

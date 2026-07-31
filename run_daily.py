@@ -28,9 +28,15 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
-from src.config import get_config
+from src.config import (
+    DEFAULT_PERSONA,
+    enabled_personas,
+    get_config,
+    get_persona_config,
+    persona_description,
+)
 from src.logging_setup import setup_logging
 
 
@@ -110,18 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="log at DEBUG level",
     )
+    parser.add_argument(
+        "--persona",
+        metavar="ID",
+        help="run only this persona (default: all enabled personas)",
+    )
     return parser
 
-
-def _print_config_problems() -> None:
-    problems = get_config().validate()
-    if problems:
-        print("Configuration problems found:", file=sys.stderr)
-        for problem in problems:
-            print(f"  - {problem}", file=sys.stderr)
-        raise SystemExit(
-            "Fix config/settings.yaml before running. See scripts/setup_check.py."
-        )
 
 
 def _report_status() -> None:
@@ -182,6 +183,108 @@ def _clear_pending(manager, args) -> None:
     manager.wait_for_approval(timeout_minutes=args.wait)
 
 
+def _resolve_personas(args) -> List[str]:
+    """Which personas to run: the one from --persona, or all enabled ones."""
+    if args.persona:
+        return [args.persona]
+    return enabled_personas()
+
+
+def _run_persona(persona_id: str, args, base_config) -> int:
+    """Run a single command for one persona. Returns the exit code."""
+    from src.orchestrator import FundManager
+
+    try:
+        pcfg = get_persona_config(persona_id)
+    except ValueError as exc:
+        print(f"Persona error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\n{'─' * 60}")
+    print(f"Persona: {persona_id} — {persona_description(persona_id)}")
+    print(f"{'─' * 60}")
+
+    _print_config_problems_for(pcfg)
+
+    manager = FundManager(config=pcfg, force_simulated=args.simulated_broker)
+    as_of = _parse_date(args.as_of)
+
+    try:
+        if args.command == "analyse":
+            result = manager.analyse(
+                as_of=as_of,
+                skip_news=args.skip_news,
+                refresh_fundamentals=args.refresh_fundamentals,
+                max_candidates=args.max_candidates,
+            )
+            if result.proposal_count and _auto_mode(manager, args):
+                print(
+                    f"\n[{persona_id}] {result.proposal_count} proposal(s) pending. "
+                    f"Auto mode is on, so they are approved and placed by:\n"
+                    f"  python run_daily.py execute --persona {persona_id}"
+                )
+            elif result.proposal_count:
+                host = pcfg.get("dashboard.host", "127.0.0.1")
+                port = pcfg.get("dashboard.port", 8000)
+                print(
+                    f"\n[{persona_id}] {result.proposal_count} proposal(s) await "
+                    f"your approval.\n"
+                    f"  python run_daily.py dashboard   ->  http://{host}:{port}/proposals"
+                )
+            else:
+                print(f"\n[{persona_id}] No trades proposed today.")
+            return 0
+
+        if args.command == "execute":
+            if _auto_mode(manager, args) and manager.pending_count():
+                _clear_pending(manager, args)
+            summary = manager.execute_approved()
+            print(f"\n[{persona_id}] {summary.describe()}")
+            return 0 if not summary.failed else 1
+
+        if args.command == "cycle":
+            result = manager.analyse(
+                as_of=as_of,
+                skip_news=args.skip_news,
+                refresh_fundamentals=args.refresh_fundamentals,
+                max_candidates=args.max_candidates,
+            )
+            if not result.proposal_count:
+                print(f"\n[{persona_id}] No trades proposed today.")
+                return 0
+
+            _clear_pending(manager, args)
+            summary = manager.execute_approved(
+                technicals=result.technicals, fundamentals=result.fundamentals
+            )
+            print(f"\n[{persona_id}] {summary.describe()}")
+            return 0
+
+        if args.command == "close":
+            manager.close_of_day(as_of=as_of)
+            return 0
+
+    except KeyboardInterrupt:
+        print("\nInterrupted. Nothing further was sent to the broker.", file=sys.stderr)
+        return 130
+    finally:
+        manager.disconnect()
+
+    return 0
+
+
+def _print_config_problems_for(config) -> None:
+    problems = config.validate()
+    if problems:
+        print(f"Configuration problems for persona {config.persona_id!r}:",
+              file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        raise SystemExit(
+            "Fix config/settings.yaml before running. See scripts/setup_check.py."
+        )
+
+
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -201,76 +304,15 @@ def main(argv: Optional[list] = None) -> int:
         serve()
         return 0
 
-    _print_config_problems()
+    personas = _resolve_personas(args)
+    worst_exit = 0
+    for persona_id in personas:
+        exit_code = _run_persona(persona_id, args, config)
+        worst_exit = max(worst_exit, exit_code)
+        if exit_code == 130:
+            break
 
-    from src.orchestrator import FundManager
-
-    manager = FundManager(force_simulated=args.simulated_broker)
-    as_of = _parse_date(args.as_of)
-
-    try:
-        if args.command == "analyse":
-            result = manager.analyse(
-                as_of=as_of,
-                skip_news=args.skip_news,
-                refresh_fundamentals=args.refresh_fundamentals,
-                max_candidates=args.max_candidates,
-            )
-            if result.proposal_count and _auto_mode(manager, args):
-                print(
-                    f"\n{result.proposal_count} proposal(s) pending. Auto mode is "
-                    f"on, so they are approved and placed by:\n"
-                    f"  python run_daily.py execute"
-                )
-            elif result.proposal_count:
-                host = config.get("dashboard.host", "127.0.0.1")
-                port = config.get("dashboard.port", 8000)
-                print(
-                    f"\n{result.proposal_count} proposal(s) await your approval.\n"
-                    f"Start the dashboard and review them:\n"
-                    f"  python run_daily.py dashboard   ->  http://{host}:{port}/proposals"
-                )
-            else:
-                print("\nNo trades proposed today. See the memo:")
-                print(f"  python run_daily.py status")
-            return 0
-
-        if args.command == "execute":
-            if _auto_mode(manager, args) and manager.pending_count():
-                _clear_pending(manager, args)
-            summary = manager.execute_approved()
-            print(f"\n{summary.describe()}")
-            return 0 if not summary.failed else 1
-
-        if args.command == "cycle":
-            result = manager.analyse(
-                as_of=as_of,
-                skip_news=args.skip_news,
-                refresh_fundamentals=args.refresh_fundamentals,
-                max_candidates=args.max_candidates,
-            )
-            if not result.proposal_count:
-                print("\nNo trades proposed today; nothing to approve or execute.")
-                return 0
-
-            _clear_pending(manager, args)
-            summary = manager.execute_approved(
-                technicals=result.technicals, fundamentals=result.fundamentals
-            )
-            print(f"\n{summary.describe()}")
-            return 0
-
-        if args.command == "close":
-            manager.close_of_day(as_of=as_of)
-            return 0
-
-    except KeyboardInterrupt:
-        print("\nInterrupted. Nothing further was sent to the broker.", file=sys.stderr)
-        return 130
-    finally:
-        manager.disconnect()
-
-    return 0
+    return worst_exit
 
 
 if __name__ == "__main__":

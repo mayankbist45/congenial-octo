@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Personas &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Personas</h1>
+<p class="subtitle">Each persona runs its own strategy with separate holdings, risk limits, and capital.</p>
+
+<style>
+  .persona-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-top: 8px;
+  }
+  .persona-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px;
+    transition: border-color 0.15s;
+  }
+  .persona-card:hover { border-color: var(--accent); }
+  .persona-card h2 {
+    margin: 0 0 4px;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+  }
+  .persona-card h2 a { color: var(--ink); }
+  .persona-card h2 a:hover { color: var(--accent); text-decoration: none; }
+  .persona-card .desc {
+    color: var(--ink-soft);
+    font-size: 13px;
+    margin: 0 0 16px;
+  }
+  .persona-card .card-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .persona-card .card-stat .label {
+    color: var(--ink-soft);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 3px;
+  }
+  .persona-card .card-stat .value {
+    font-size: 16px;
+    font-weight: 620;
+    font-variant-numeric: tabular-nums;
+  }
+  .persona-card .no-data {
+    color: var(--ink-soft);
+    font-size: 13px;
+    font-style: italic;
+  }
+</style>
+
+<div class="persona-cards">
+  {% for card in persona_cards %}
+  <div class="persona-card">
+    <h2><a href="/?persona={{ card.persona_id }}">{{ card.persona_id | capitalize }}</a></h2>
+    <p class="desc">{{ card.description }}</p>
+    {% if card.has_data %}
+    <div class="card-stats">
+      <div class="card-stat">
+        <div class="label">Fund value</div>
+        <div class="value">{{ card.total_value | money }}</div>
+      </div>
+      <div class="card-stat">
+        <div class="label">Positions</div>
+        <div class="value">{{ card.position_count }}</div>
+      </div>
+      <div class="card-stat">
+        <div class="label">Cash</div>
+        <div class="value">{{ card.cash_pct | pct(1) }}</div>
+      </div>
+      <div class="card-stat">
+        <div class="label">Pending</div>
+        <div class="value">
+          {% if card.pending_count %}
+            <span style="color: var(--accent)">{{ card.pending_count }}</span>
+          {% else %}
+            0
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <p class="no-data">No runs recorded yet for this persona.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
