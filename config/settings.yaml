@@ -328,6 +328,8 @@ personas:
         momentum: 0.45
         trend: 0.25
       min_buy_score: 0.3
+      # Only ride confirmed trends; skip choppy / mean-reverting setups.
+      require_above_sma200: true
       gates:
         max_debt_to_equity: 2.0
         min_roe_pct: 5.0

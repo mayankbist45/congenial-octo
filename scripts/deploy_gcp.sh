@@ -7,7 +7,11 @@
 # fund can be lifted to any VM later with only bootstrap_vm.sh.
 #
 #   ./scripts/deploy_gcp.sh deploy      create the VM, push the fund, bootstrap it
-#   ./scripts/deploy_gcp.sh push        send local code, .env and caches again
+#   ./scripts/deploy_gcp.sh push        send local code and caches (never .env)
+#   ./scripts/deploy_gcp.sh push --with-env
+#                                       same, but also merge laptop .env onto the VM
+#                                       (keeps the VM DATABASE_URL). Prefer editing
+#                                       /opt/fund/.env on the VM instead.
 #   ./scripts/deploy_gcp.sh status      run run_daily.py status up there
 #   ./scripts/deploy_gcp.sh logs        follow data/scheduled.log on the VM
 #   ./scripts/deploy_gcp.sh cloudlogs   read what the Ops Agent shipped to Cloud Logging
@@ -92,16 +96,21 @@ create() {
 push() {
     instance_exists || die "$INSTANCE does not exist yet. Run: $0 deploy"
 
+    local with_env=0
+    if [ "${1:-}" = "--with-env" ]; then
+        with_env=1
+    fi
+
     local tarball
     tarball="$(mktemp -t fund-src)".tar.gz
     # Everything git would keep: tracked files plus new untracked ones that are
     # not gitignored, so a brand-new script reaches the VM before it is ever
     # committed. Taken from the working tree, so an uncommitted settings.yaml
     # tweak goes too. .env, caches and backups are gitignored and so excluded
-    # here; .env is copied separately with tighter permissions. Logs and the old
-    # SQLite sidecars are excluded by pathspec: the VM keeps its own run history,
-    # and unpacking the laptop's scheduled.log over it would erase that.
-    local excludes=(':!:data/*.log' ':!:data/fund.db*')
+    # here. Secrets live only on the VM (/opt/fund/.env); pass --with-env to
+    # merge a laptop .env deliberately. Logs and the old SQLite sidecars are
+    # excluded by pathspec: the VM keeps its own run history.
+    local excludes=(':!:data/*.log' ':!:data/fund.db*' './.env')
     (cd "$PROJECT_DIR" &&
         {
             git ls-files -z -- . "${excludes[@]}"
@@ -121,17 +130,31 @@ push() {
             chmod +x '$REMOTE_DIR'/scripts/*.sh &&
             mkdir -p '$REMOTE_DIR/data'" || die "unpacking on the VM failed"
 
-    if [ -f "$PROJECT_DIR/.env" ]; then
-        echo "Pushing .env"
-        gc compute scp "$PROJECT_DIR/.env" "$INSTANCE:/tmp/fund.env" --zone "$ZONE" ||
-            die "scp of .env failed"
-        # DATABASE_URL is dropped on the way up: the laptop's DSN points at a
-        # Homebrew server, and bootstrap_vm.sh writes the VM's own DSN instead.
-        ssh_vm "grep -v '^DATABASE_URL=' /tmp/fund.env > '$REMOTE_DIR/.env' &&
-                rm -f /tmp/fund.env && chmod 600 '$REMOTE_DIR/.env'" ||
-            die "installing .env failed"
+    if [ "$with_env" -eq 1 ]; then
+        if [ -f "$PROJECT_DIR/.env" ]; then
+            echo "Pushing .env (--with-env)"
+            gc compute scp "$PROJECT_DIR/.env" "$INSTANCE:/tmp/fund.env" --zone "$ZONE" ||
+                die "scp of .env failed"
+            # Merge laptop secrets into the VM .env, but keep the VM's DATABASE_URL.
+            ssh_vm "set -e
+                    ENV='$REMOTE_DIR/.env'
+                    KEEP_DB=''
+                    if [ -f \"\$ENV\" ]; then
+                        KEEP_DB=\$(grep -E '^DATABASE_URL=' \"\$ENV\" || true)
+                    fi
+                    grep -v '^DATABASE_URL=' /tmp/fund.env > \"\$ENV\"
+                    if [ -n \"\$KEEP_DB\" ]; then
+                        echo \"\$KEEP_DB\" >> \"\$ENV\"
+                    fi
+                    rm -f /tmp/fund.env
+                    chmod 600 \"\$ENV\"" ||
+                die "installing .env failed"
+        else
+            die "no local .env to push; create one or edit $REMOTE_DIR/.env on the VM"
+        fi
     else
-        echo "  no local .env found; create $REMOTE_DIR/.env on the VM by hand"
+        echo "  skipping .env (edit secrets on the VM: $0 ssh then nano $REMOTE_DIR/.env)"
+        echo "  use: $0 push --with-env   only if you intentionally want to sync laptop secrets"
     fi
 
     # Caches are gitignored but worth carrying: a cold fundamentals cache means
@@ -231,7 +254,7 @@ create)
 
 push)
     require_gcloud
-    push
+    push "${2:-}"
     ;;
 
 bootstrap)
