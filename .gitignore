@@ -15,3 +15,5 @@ data/backups/
 
 # Backtest datasets: multi-GB downloaded caches, regenerable via scripts/backtest_data.py
 data/backtest/
+
+data/baseline_test.db*

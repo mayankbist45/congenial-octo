@@ -80,7 +80,9 @@ METRIC_TAGS: Dict[str, List[str]] = {
         "SalesRevenueNet",
     ],
     "net_income": ["NetIncomeLoss", "ProfitLoss"],
-    "eps_diluted": ["EarningsPerShareDiluted"],
+    # Diluted first, basic as the spec-sanctioned fallback where diluted is
+    # not tagged; the column name stays eps_diluted for the primary tag.
+    "eps_diluted": ["EarningsPerShareDiluted", "EarningsPerShareBasic"],
     "operating_income": ["OperatingIncomeLoss"],
 }
 METRIC_UNITS: Dict[str, Tuple[str, ...]] = {
