@@ -26,8 +26,15 @@ from src.models import (
 )
 from tests.conftest import make_diversified_portfolio, make_scores
 
-PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/journal"]
-API = ["/api/overview", "/api/holdings", "/api/proposals", "/api/performance", "/api/risk"]
+PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/learning", "/journal"]
+API = [
+    "/api/overview",
+    "/api/holdings",
+    "/api/proposals",
+    "/api/performance",
+    "/api/risk",
+    "/api/learning",
+]
 
 
 @pytest.fixture
@@ -120,6 +127,44 @@ def seed_history(repo: JournalRepository, days: int = 40) -> None:
     )
 
 
+def seed_learning(repo: JournalRepository) -> None:
+    run_id = seed_run(repo)
+    [proposal_row] = repo.proposals_for_run(run_id)
+    review = {
+        "proposal_id": proposal_row["id"],
+        "trade_id": None,
+        "review_window_days": 90,
+        "proposal_date": date.today().isoformat(),
+        "review_date": date.today().isoformat(),
+        "symbol": "WIPRO",
+        "action": "BUY",
+        "status": "executed",
+        "label": "bad_decision_bad_outcome",
+        "stock_return_pct": -6.0,
+        "benchmark_return_pct": 1.0,
+        "excess_return_pct": -7.0,
+        "max_drawdown_pct": -9.0,
+        "realised_pnl": None,
+        "evidence": {"source": "test"},
+        "recommendation": "Research this pattern before repeating it.",
+    }
+    repo.upsert_decision_review(review)
+    repo.upsert_learning_lesson(
+        {
+            "label": "bad_decision_bad_outcome",
+            "status": "watch",
+            "evidence_count": 1,
+            "symbol_count": 1,
+            "review_date_count": 1,
+            "avg_excess_return_pct": -7.0,
+            "avg_stock_return_pct": -6.0,
+            "confidence": 0.43,
+            "recommendation": "Research this pattern before repeating it.",
+            "evidence": {"symbols": ["WIPRO"]},
+        }
+    )
+
+
 # ----------------------------------------------------------------------
 # Empty install
 # ----------------------------------------------------------------------
@@ -196,6 +241,24 @@ def test_performance_page_reports_excess_return(client, repo) -> None:
     assert "Excess return" in body
     assert "Sharpe" in body
     assert "<svg" in body
+
+
+def test_learning_page_shows_lessons_and_reviews(client, repo) -> None:
+    seed_learning(repo)
+
+    body = client.get("/learning").text
+    assert "bad_decision_bad_outcome" in body
+    assert "Research this pattern" in body
+    assert "WIPRO" in body
+
+
+def test_learning_api_returns_summary_lessons_and_reviews(client, repo) -> None:
+    seed_learning(repo)
+
+    payload = client.get("/api/learning").json()
+    assert payload["summary"]["reviewed_decisions"] == 1
+    assert payload["lessons"][0]["label"] == "bad_decision_bad_outcome"
+    assert payload["reviews"][0]["symbol"] == "WIPRO"
 
 
 def test_news_page_shows_the_digest(client, repo, temp_config) -> None:

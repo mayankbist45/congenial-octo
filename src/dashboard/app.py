@@ -221,6 +221,23 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             service=svc,
         )
 
+    @app.get("/learning", response_class=HTMLResponse)
+    def learning(
+        request: Request, persona: Optional[str] = Query(default=None)
+    ) -> HTMLResponse:
+        svc = _get_service(persona)
+        return render(
+            request,
+            "learning.html",
+            {
+                "page": "learning",
+                "summary": svc.learning_summary(),
+                "lessons": svc.learning_lessons(),
+                "reviews": svc.decision_reviews(limit=100),
+            },
+            service=svc,
+        )
+
     @app.get("/journal/{run_id}", response_class=HTMLResponse)
     def run_detail(
         request: Request,
@@ -325,6 +342,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def api_risk(persona: Optional[str] = Query(default=None)) -> JSONResponse:
         svc = _get_service(persona)
         return JSONResponse(svc.risk_profile() or {})
+
+    @app.get("/api/learning")
+    def api_learning(persona: Optional[str] = Query(default=None)) -> JSONResponse:
+        svc = _get_service(persona)
+        return JSONResponse(svc.learning_payload())
 
     @app.get("/api/personas")
     def api_personas() -> JSONResponse:

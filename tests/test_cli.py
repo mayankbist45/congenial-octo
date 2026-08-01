@@ -13,7 +13,7 @@ from typing import List, Optional
 
 import pytest
 
-from run_daily import _auto_mode, _clear_pending, build_parser
+from run_daily import _auto_mode, _clear_pending, _run_learning_for, build_parser
 from src.orchestrator import AutoApprovalRefused
 
 
@@ -83,3 +83,22 @@ def test_require_approval_and_auto_approve_cannot_be_combined() -> None:
 
 def test_approval_defaults_to_the_config_when_unspecified() -> None:
     assert build_parser().parse_args(["cycle"]).auto_approve is None
+
+
+def test_learn_is_a_supported_command() -> None:
+    assert build_parser().parse_args(["learn"]).command == "learn"
+
+
+def test_learning_failures_are_reported_without_raising(monkeypatch, capsys) -> None:
+    class BrokenEvaluator:
+        def __init__(self, config):
+            pass
+
+        def run(self, as_of=None):
+            raise RuntimeError("no price cache")
+
+    monkeypatch.setattr("src.learning.LearningEvaluator", BrokenEvaluator)
+
+    _run_learning_for(config={})
+
+    assert "learning skipped: no price cache" in capsys.readouterr().err

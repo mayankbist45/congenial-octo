@@ -199,6 +199,48 @@ CREATE TABLE IF NOT EXISTS liquid_positions (
     PRIMARY KEY (persona_id, run_date)
 );
 
+CREATE TABLE IF NOT EXISTS decision_reviews (
+    id {ID_PK},
+    proposal_id INTEGER NOT NULL REFERENCES proposals(id),
+    trade_id INTEGER REFERENCES trades(id),
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    review_window_days INTEGER NOT NULL,
+    proposal_date TEXT,
+    review_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    label TEXT NOT NULL,
+    stock_return_pct {REAL},
+    benchmark_return_pct {REAL},
+    excess_return_pct {REAL},
+    max_drawdown_pct {REAL},
+    realised_pnl {REAL},
+    evidence TEXT,
+    recommendation TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (persona_id, proposal_id, review_window_days)
+);
+
+CREATE TABLE IF NOT EXISTS learning_lessons (
+    id {ID_PK},
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    label TEXT NOT NULL,
+    status TEXT NOT NULL,
+    evidence_count INTEGER NOT NULL,
+    symbol_count INTEGER NOT NULL,
+    review_date_count INTEGER NOT NULL,
+    avg_excess_return_pct {REAL},
+    avg_stock_return_pct {REAL},
+    confidence {REAL},
+    recommendation TEXT,
+    evidence TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (persona_id, label)
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -209,6 +251,9 @@ CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(run_date);
 CREATE INDEX IF NOT EXISTS idx_runs_persona ON runs(persona_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_date ON position_snapshots(run_date);
 CREATE INDEX IF NOT EXISTS idx_snapshots_persona ON position_snapshots(persona_id);
+CREATE INDEX IF NOT EXISTS idx_decision_reviews_persona ON decision_reviews(persona_id);
+CREATE INDEX IF NOT EXISTS idx_decision_reviews_label ON decision_reviews(label);
+CREATE INDEX IF NOT EXISTS idx_learning_lessons_persona ON learning_lessons(persona_id);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -222,11 +267,13 @@ TABLES = (
     "risk_history",
     "news_digests",
     "liquid_positions",
+    "decision_reviews",
+    "learning_lessons",
 )
 
 # Tables whose primary key is a generated integer, so a migration that carries
 # ids across has to move the sequence past them.
-SEQUENCE_TABLES = ("runs", "proposals", "trades")
+SEQUENCE_TABLES = ("runs", "proposals", "trades", "decision_reviews", "learning_lessons")
 
 DbTarget = Union[None, str, Path, Config]
 
@@ -548,7 +595,7 @@ def truncate_all(target: DbTarget = None) -> None:
             # database, as TRUNCATE ... RESTART IDENTITY does on Postgres.
             conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name IN "
-                "('runs','proposals','trades')"
+                "('runs','proposals','trades','decision_reviews','learning_lessons')"
             )
 
 

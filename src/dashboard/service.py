@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from src.config import Config, get_config
 from src.journal.performance import PerformanceCalculator
 from src.journal.repository import JournalRepository
+from src.learning.service import LearningService
 from src.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -73,6 +74,7 @@ class DashboardService:
         self._config = config or get_config()
         self._repo = JournalRepository(self._config)
         self._performance = PerformanceCalculator(self._config)
+        self._learning = LearningService(self._config)
 
     @property
     def repository(self) -> JournalRepository:
@@ -369,6 +371,21 @@ class DashboardService:
             "style_tilts": payload.get("style_tilts") or {},
             "warnings": payload.get("warnings") or [],
         }
+
+    # ------------------------------------------------------------------
+    # Learning
+    # ------------------------------------------------------------------
+    def learning_summary(self) -> Dict[str, Any]:
+        return self._learning.summary()
+
+    def learning_lessons(self) -> List[Dict[str, Any]]:
+        return self._learning.lessons()
+
+    def decision_reviews(self, limit: int = 100) -> List[Dict[str, Any]]:
+        return self._learning.reviews(limit=limit)
+
+    def learning_payload(self) -> Dict[str, Any]:
+        return self._learning.payload()
 
     def attribution(self) -> List[Dict[str, Any]]:
         """Contribution to return by position, from the latest snapshot."""

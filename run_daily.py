@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         nargs="?",
         default="analyse",
-        choices=["analyse", "execute", "cycle", "close", "dashboard", "status"],
+        choices=["analyse", "execute", "cycle", "close", "learn", "dashboard", "status"],
         help="what to run (default: analyse)",
     )
     parser.add_argument(
@@ -190,6 +190,17 @@ def _resolve_personas(args) -> List[str]:
     return enabled_personas()
 
 
+def _run_learning_for(config, as_of: Optional[date] = None) -> None:
+    """Refresh advisory learning without affecting trading flows."""
+    from src.learning import LearningEvaluator
+
+    try:
+        summary = LearningEvaluator(config).run(as_of=as_of)
+        print(f"  {summary.describe()}")
+    except Exception as exc:
+        print(f"  learning skipped: {exc}", file=sys.stderr)
+
+
 def _run_persona(persona_id: str, args, base_config) -> int:
     """Run a single command for one persona. Returns the exit code."""
     from src.orchestrator import FundManager
@@ -206,8 +217,13 @@ def _run_persona(persona_id: str, args, base_config) -> int:
 
     _print_config_problems_for(pcfg)
 
-    manager = FundManager(config=pcfg, force_simulated=args.simulated_broker)
     as_of = _parse_date(args.as_of)
+
+    if args.command == "learn":
+        _run_learning_for(pcfg, as_of=as_of)
+        return 0
+
+    manager = FundManager(config=pcfg, force_simulated=args.simulated_broker)
 
     try:
         if args.command == "analyse":
@@ -262,6 +278,7 @@ def _run_persona(persona_id: str, args, base_config) -> int:
 
         if args.command == "close":
             manager.close_of_day(as_of=as_of)
+            _run_learning_for(pcfg, as_of=as_of)
             return 0
 
     except KeyboardInterrupt:
