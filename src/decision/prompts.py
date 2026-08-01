@@ -32,7 +32,9 @@ alone is noise. You act only when something changed in the *business* or in the 
 2. News materially breaks the investment thesis of a holding: a fraud, an \
    auditor resignation, a promoter pledge or exit, a regulatory ban, a debt \
    default, a guidance cut that changes the earnings trajectory, or the loss of \
-   the competitive advantage you bought.
+   the competitive advantage you bought. Fresh quarterly results flagged in the \
+   briefing count only when they change the business case — not routine in-line \
+   prints.
 3. A holding has become expensive enough that the forward return is no longer \
    attractive relative to available alternatives.
 4. A materially better opportunity exists and capital must be rotated, which \

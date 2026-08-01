@@ -36,6 +36,7 @@ class TriggerType(str, Enum):
     POSITION_CAP = "position_cap"
     RISK_LIMIT = "risk_limit"
     NEWS_EVENT = "news_event"
+    EARNINGS_EVENT = "earnings_event"
     UNDERWEIGHT_DEPLOY = "underweight_deploy"
     INITIAL_BUILD = "initial_build"
 
@@ -340,6 +341,35 @@ class NewsDigest:
     high_impact_count: int = 0
     articles: List[NewsArticle] = field(default_factory=list)
     generated_by_llm: bool = False
+
+
+@dataclass
+class EarningsAnalysis:
+    """LLM or rules-only read of one company's latest quarterly results."""
+
+    symbol: str
+    period_end: date
+    verdict: str = "in_line"
+    quality_of_earnings: Optional[int] = None
+    red_flags: List[str] = field(default_factory=list)
+    thesis_impact: str = "intact"
+    rationale: str = ""
+    confidence: Optional[float] = None
+    generated_by_llm: bool = False
+    brief_excerpt: str = ""
+
+
+@dataclass
+class EarningsDigest:
+    """Fresh quarterly analyses for holdings and watchlist names."""
+
+    as_of: date
+    analyses: Dict[str, EarningsAnalysis] = field(default_factory=dict)
+    holdings_notes: Dict[str, str] = field(default_factory=dict)
+    watchlist_notes: Dict[str, str] = field(default_factory=dict)
+    flagged_symbols: List[str] = field(default_factory=list)
+    symbols_polled: int = 0
+    new_reports: int = 0
 
 
 @dataclass

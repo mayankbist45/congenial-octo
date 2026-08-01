@@ -36,6 +36,7 @@ from src.models import (
     FactorScores,
     FundamentalSnapshot,
     NewsDigest,
+    EarningsDigest,
     PortfolioRiskProfile,
     PortfolioState,
     Severity,
@@ -94,6 +95,7 @@ class DecisionEngine:
         triggers: List[Trigger],
         candidates: List[FactorScores],
         digest: Optional[NewsDigest] = None,
+        earnings: Optional[EarningsDigest] = None,
         risk_profile: Optional[PortfolioRiskProfile] = None,
         as_of: Optional[date] = None,
     ) -> DailyDecision:
@@ -114,6 +116,7 @@ class DecisionEngine:
             triggers=triggers,
             candidates=candidates,
             digest=digest,
+            earnings=earnings,
             risk_profile=risk_profile,
             turnover=turnover,
             is_deep_review=deep_review,

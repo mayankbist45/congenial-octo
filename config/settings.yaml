@@ -161,6 +161,19 @@ llm:
   max_output_tokens: 2000
   timeout_seconds: 180
 
+earnings:
+  # Poll Screener.in quarterly tables during results season, analyse fresh
+  # prints, and feed the decision briefing. Triggers are REVIEW/OPPORTUNITY
+  # only — the LLM and risk engine still decide whether to trade. Mechanical
+  # backtest rules (S1/S2/S3 auto-bets) are NOT wired; see docs/earnings/.
+  enabled: true
+  poll_holdings: true
+  poll_candidates: true
+  max_candidates: 10
+  llm_analyze: true
+  cache_ttl_hours: 24
+  results_window_days: 60
+
 execution:
   # Unattended mode: approve the fund's own proposals and place them without a
   # human. Restricted to paper trading in code — with DRY_RUN=false the fund
