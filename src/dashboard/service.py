@@ -131,6 +131,7 @@ class DashboardService:
             "pending_count": len(pending),
             "top_holdings": holdings[:5],
             "sector_weights": self.sector_weights(),
+            "market_regime": (self.risk_profile() or {}).get("market_regime"),
         }
 
     def _run_view(self, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -370,6 +371,7 @@ class DashboardService:
             "max_pairwise_correlation": payload.get("max_pairwise_correlation"),
             "style_tilts": payload.get("style_tilts") or {},
             "warnings": payload.get("warnings") or [],
+            "market_regime": payload.get("market_regime"),
         }
 
     # ------------------------------------------------------------------

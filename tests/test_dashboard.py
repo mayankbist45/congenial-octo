@@ -19,6 +19,7 @@ from src.dashboard.service import DashboardService
 from src.journal.repository import JournalRepository
 from src.models import (
     Action,
+    MarketRegimeSnapshot,
     PortfolioRiskProfile,
     RiskMetrics,
     NewsDigest,
@@ -97,34 +98,47 @@ def seed_history(repo: JournalRepository, days: int = 40) -> None:
             daily_return_pct=0.06,
             benchmark_return_pct=0.04,
         )
+    risk_profile = PortfolioRiskProfile(
+        as_of=date.today(),
+        portfolio_beta=0.98,
+        portfolio_vol_annualised=16.4,
+        tracking_error_pct=6.2,
+        active_share_pct=71.0,
+        active_factor_share_pct=38.0,
+        active_selection_share_pct=62.0,
+        concentration_top5_pct=32.0,
+        effective_positions=12.4,
+        avg_pairwise_correlation=0.41,
+        market_regime=MarketRegimeSnapshot(
+            as_of=date.today(),
+            regime="elevated",
+            score=48.2,
+            components={"volatility": 60.0, "drawdown": 20.0, "breadth": 55.0},
+            evidence=[
+                "21-day benchmark volatility is 18.0% annualised",
+                "55% of priced universe names are above their 200-DMA",
+            ],
+            warnings=["Market regime is elevated"],
+        ),
+        per_position={
+            p.symbol: RiskMetrics(
+                symbol=p.symbol,
+                beta=1.02,
+                idiosyncratic_vol=19.0,
+                risk_contribution_pct=7.1,
+                pct_of_adv=0.4,
+            )
+            for p in portfolio.positions
+        },
+        warnings=["Tracking error 6.2% is within the limit"],
+    )
     repo.record_position_snapshot(
         date.today(),
         portfolio,
         scores={p.symbol: make_scores(p.symbol) for p in portfolio.positions},
-        risk_profile=PortfolioRiskProfile(
-            as_of=date.today(),
-            portfolio_beta=0.98,
-            portfolio_vol_annualised=16.4,
-            tracking_error_pct=6.2,
-            active_share_pct=71.0,
-            active_factor_share_pct=38.0,
-            active_selection_share_pct=62.0,
-            concentration_top5_pct=32.0,
-            effective_positions=12.4,
-            avg_pairwise_correlation=0.41,
-            per_position={
-                p.symbol: RiskMetrics(
-                    symbol=p.symbol,
-                    beta=1.02,
-                    idiosyncratic_vol=19.0,
-                    risk_contribution_pct=7.1,
-                    pct_of_adv=0.4,
-                )
-                for p in portfolio.positions
-            },
-            warnings=["Tracking error 6.2% is within the limit"],
-        ),
+        risk_profile=risk_profile,
     )
+    repo.record_risk_profile(date.today(), risk_profile)
 
 
 def seed_learning(repo: JournalRepository) -> None:
@@ -406,6 +420,26 @@ def test_sector_weights_sum_to_the_invested_share(service, repo) -> None:
     invested_pct = 100.0 - service.overview()["cash_pct"]
 
     assert abs(total - invested_pct) < 0.5
+
+
+def test_overview_exposes_market_regime(service, repo) -> None:
+    seed_run(repo)
+    seed_history(repo)
+
+    overview = service.overview()
+
+    assert overview["market_regime"]["regime"] == "elevated"
+    assert overview["market_regime"]["score"] == 48.2
+
+
+def test_risk_profile_exposes_market_regime(service, repo) -> None:
+    seed_history(repo)
+
+    risk = service.risk_profile()
+
+    assert risk is not None
+    assert risk["market_regime"]["regime"] == "elevated"
+    assert risk["market_regime"]["evidence"]
 
 
 def test_briefing_is_served_when_it_exists(service, temp_config) -> None:
