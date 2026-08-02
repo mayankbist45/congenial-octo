@@ -389,6 +389,19 @@ class DashboardService:
     def learning_payload(self) -> Dict[str, Any]:
         return self._learning.payload()
 
+    # ------------------------------------------------------------------
+    # Intraday paper/backtest summaries
+    # ------------------------------------------------------------------
+    def intraday_summary(self) -> Optional[Dict[str, Any]]:
+        path = self._config.root / "data" / "intraday" / f"{self.persona_id}_latest.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not read intraday summary %s: %s", path, exc)
+            return None
+
     def attribution(self) -> List[Dict[str, Any]]:
         """Contribution to return by position, from the latest snapshot."""
         holdings = self.holdings()
@@ -416,21 +429,41 @@ class DashboardService:
     # Multi-persona overview
     # ------------------------------------------------------------------
     def all_personas_overview(self) -> List[Dict[str, Any]]:
-        from src.config import enabled_personas, get_persona_config, persona_description
+        from src.config import Config, _deep_merge
 
         results: List[Dict[str, Any]] = []
-        for pid in enabled_personas():
-            pcfg = get_persona_config(pid)
+        personas = self._config.raw.get("personas", {})
+        if not isinstance(personas, dict):
+            personas = {}
+        for pid, pdef in personas.items():
+            if not isinstance(pdef, dict) or not pdef.get("enabled", True):
+                continue
+            meta_keys = {"enabled", "capital_inr", "description", "strategy_description"}
+            overrides = {k: v for k, v in pdef.items() if k not in meta_keys}
+            base_raw = {k: v for k, v in self._config.raw.items() if k != "personas"}
+            merged = _deep_merge(base_raw, overrides)
+            merged["personas"] = personas
+            secrets = self._config.secrets
+            if pdef.get("capital_inr") is not None:
+                secrets = secrets.with_capital(float(pdef["capital_inr"]))
+            pcfg = Config(
+                raw=merged,
+                secrets=secrets,
+                root=self._config.root,
+                persona_id=pid,
+            )
             svc = DashboardService(config=pcfg)
             overview = svc.overview()
             results.append({
                 "persona_id": pid,
-                "description": persona_description(pid),
+                "description": str(pdef.get("description", pid)),
                 "total_value": overview["total_value"],
                 "position_count": overview["position_count"],
                 "cash_pct": overview["cash_pct"],
                 "pending_count": overview["pending_count"],
                 "has_data": overview["has_data"],
+                "intraday": bool(pcfg.get("intraday.enabled", False)),
+                "intraday_summary": svc.intraday_summary(),
             })
         return results
 

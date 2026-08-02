@@ -27,13 +27,14 @@ from src.models import (
 )
 from tests.conftest import make_diversified_portfolio, make_scores
 
-PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/learning", "/journal"]
+PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/intraday", "/learning", "/journal"]
 API = [
     "/api/overview",
     "/api/holdings",
     "/api/proposals",
     "/api/performance",
     "/api/risk",
+    "/api/intraday",
     "/api/learning",
 ]
 
@@ -198,6 +199,12 @@ def test_empty_overview_tells_the_user_what_to_do(client) -> None:
     body = client.get("/").text
     assert "has not run yet" in body
     assert "run_daily.py" in body
+
+
+def test_personas_page_lists_calan_as_intraday(client) -> None:
+    body = client.get("/personas").text
+    assert "Calan" in body
+    assert "Paper/backtest" in body
 
 
 # ----------------------------------------------------------------------

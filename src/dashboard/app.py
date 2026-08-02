@@ -238,6 +238,21 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             service=svc,
         )
 
+    @app.get("/intraday", response_class=HTMLResponse)
+    def intraday(
+        request: Request, persona: Optional[str] = Query(default=None)
+    ) -> HTMLResponse:
+        svc = _get_service(persona)
+        return render(
+            request,
+            "intraday.html",
+            {
+                "page": "intraday",
+                "summary": svc.intraday_summary(),
+            },
+            service=svc,
+        )
+
     @app.get("/journal/{run_id}", response_class=HTMLResponse)
     def run_detail(
         request: Request,
@@ -347,6 +362,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def api_learning(persona: Optional[str] = Query(default=None)) -> JSONResponse:
         svc = _get_service(persona)
         return JSONResponse(svc.learning_payload())
+
+    @app.get("/api/intraday")
+    def api_intraday(persona: Optional[str] = Query(default=None)) -> JSONResponse:
+        svc = _get_service(persona)
+        return JSONResponse(svc.intraday_summary() or {})
 
     @app.get("/api/personas")
     def api_personas() -> JSONResponse:

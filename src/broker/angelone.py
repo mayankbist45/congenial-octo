@@ -28,9 +28,9 @@ from src.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
-# SmartAPI documents 10 orders/second; data endpoints are tighter. A small
-# delay between calls keeps well clear of throttling on a 500-name universe.
-_MIN_CALL_INTERVAL = 0.25
+# SmartAPI documents 10 orders/second for some endpoints; historical candle
+# data is tighter in practice, so keep calls deliberately spaced out.
+_MIN_CALL_INTERVAL = 0.75
 _MAX_RETRIES = 3
 
 _INTERVAL_MAP = {

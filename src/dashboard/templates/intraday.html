@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Intraday &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Intraday</h1>
+<p class="subtitle">Live paper and backtest results for intraday personas. These are simulations, not guaranteed or live trading income.</p>
+
+{% if not summary %}
+<div class="panel">
+  <p class="empty">No intraday paper or backtest summary has been saved yet. Run <code>python scripts/intraday_backtest.py --persona calan --start YYYY-MM-DD --end YYYY-MM-DD</code> or <code>python run_daily.py watch --persona calan</code>.</p>
+</div>
+{% else %}
+<div class="stats">
+  <div class="stat">
+    <div class="label">Net P&amp;L</div>
+    <div class="value {{ summary.total_net_pnl | sign }}">{{ summary.total_net_pnl | money }}</div>
+    <div class="sub">{{ summary.total_return_pct | pct(2, true) }} total return</div>
+  </div>
+  <div class="stat">
+    <div class="label">Trades</div>
+    <div class="value">{{ summary.total_trades }}</div>
+    <div class="sub">{{ summary.start_date }} to {{ summary.end_date }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Win rate</div>
+    <div class="value">{{ summary.win_rate_pct | pct(1) }}</div>
+    <div class="sub">Expectancy {{ summary.expectancy_r | number(2) }}R</div>
+  </div>
+  <div class="stat">
+    <div class="label">Max drawdown</div>
+    <div class="value down">{{ summary.max_drawdown_pct | pct(2) }}</div>
+    <div class="sub">Worst day {{ summary.worst_day_pnl | money }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Watch state</div>
+    <div class="value">{{ 'Active' if summary.active else 'Inactive' }}</div>
+    <div class="sub">{{ summary.last_scan_at or summary.label }}</div>
+  </div>
+</div>
+
+{% if summary.lockout_reason %}
+<div class="warnings">{{ summary.lockout_reason }}</div>
+{% endif %}
+
+{% if summary.open_positions %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Open Paper Positions</h2>
+    <span class="note">No live broker orders</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Strategy</th><th>Side</th><th class="num">Qty</th>
+        <th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th>Entered</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in summary.open_positions %}
+      <tr>
+        <td class="sym">{{ p.symbol }}</td>
+        <td>{{ p.strategy }}</td>
+        <td>{{ p.side }}</td>
+        <td class="num">{{ p.quantity }}</td>
+        <td class="num">{{ p.entry_price | number(2) }}</td>
+        <td class="num">{{ p.stop_price | number(2) }}</td>
+        <td class="num">{{ p.target_price | number(2) }}</td>
+        <td>{{ p.entry_time }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if summary.top_candidates %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Top Trader-Friendly Stocks</h2>
+    <span class="note">Ranked by liquidity, volatility, volume, key levels, and trend cleanliness</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th><th class="num">Score</th><th class="num">Turnover</th>
+        <th class="num">Volume x</th><th class="num">Range</th><th class="num">Trend</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in summary.top_candidates[:20] %}
+      <tr>
+        <td class="sym">{{ c.symbol }}</td>
+        <td class="num">{{ c.score | number(1) }}</td>
+        <td class="num">{{ c.turnover | money }}</td>
+        <td class="num">{{ c.volume_expansion | number(2) }}</td>
+        <td class="num">{{ c.range_pct | pct(2) }}</td>
+        <td class="num">{{ c.trend_cleanliness | number(2) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="two-col">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Strategy Contribution</h2>
+      <span class="note">Net P&amp;L after costs</span>
+    </div>
+    {% if summary.strategy_pnl %}
+    <table>
+      <thead><tr><th>Strategy</th><th class="num">Net P&amp;L</th></tr></thead>
+      <tbody>
+      {% for name, pnl in summary.strategy_pnl.items() %}
+        <tr><td>{{ name }}</td><td class="num {{ pnl | sign }}">{{ pnl | money }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No strategy P&amp;L yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Daily Distribution</h2>
+      <span class="note">{{ summary.label }}</span>
+    </div>
+    <table>
+      <tbody>
+        <tr><td>Best day</td><td class="num up">{{ summary.best_day_pnl | money }}</td></tr>
+        <tr><td>Median day</td><td class="num">{{ summary.median_day_pnl | money }}</td></tr>
+        <tr><td>Worst day</td><td class="num down">{{ summary.worst_day_pnl | money }}</td></tr>
+        <tr><td>Max losing streak</td><td class="num">{{ summary.max_losing_streak }}</td></tr>
+        <tr><td>Profit factor</td><td class="num">{{ summary.profit_factor | number(2) }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Recent Trades</h2>
+    <span class="note">All positions are simulated intraday square-offs</span>
+  </div>
+  {% if summary.trades %}
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th><th>Symbol</th><th>Strategy</th><th>Side</th>
+        <th class="num">Qty</th><th class="num">Entry</th><th class="num">Exit</th>
+        <th>Reason</th><th class="num">Net P&amp;L</th><th class="num">R</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for trade in summary.trades[-30:] %}
+      <tr>
+        <td>{{ trade.entry_time }}</td>
+        <td class="sym">{{ trade.symbol }}</td>
+        <td>{{ trade.strategy }}</td>
+        <td>{{ trade.side }}</td>
+        <td class="num">{{ trade.quantity }}</td>
+        <td class="num">{{ trade.entry_price | number(2) }}</td>
+        <td class="num">{{ trade.exit_price | number(2) }}</td>
+        <td>{{ trade.exit_reason }}</td>
+        <td class="num {{ trade.net_pnl | sign }}">{{ trade.net_pnl | money }}</td>
+        <td class="num">{{ trade.r_multiple | number(2) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No trades were generated in the latest run.</p>
+  {% endif %}
+</div>
+
+{% if summary.skipped_signals %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Skipped Signals</h2>
+    <span class="note">Why Calan stood down</span>
+  </div>
+  <table>
+    <thead><tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for signal in summary.skipped_signals[-30:] %}
+      <tr>
+        <td>{{ signal.time or '' }}</td>
+        <td class="sym">{{ signal.symbol }}</td>
+        <td>{{ signal.strategy or '' }}</td>
+        <td>{{ signal.reason }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         nargs="?",
         default="analyse",
-        choices=["analyse", "execute", "cycle", "close", "learn", "dashboard", "status"],
+        choices=["analyse", "execute", "cycle", "close", "learn", "dashboard", "status", "watch"],
         help="what to run (default: analyse)",
     )
     parser.add_argument(
@@ -201,6 +201,106 @@ def _run_learning_for(config, as_of: Optional[date] = None) -> None:
         print(f"  learning skipped: {exc}", file=sys.stderr)
 
 
+def _run_intraday_persona(persona_id: str, args, config) -> int:
+    """Run an intraday paper/backtest persona inside the normal daily loop."""
+    from src.dashboard.service import DashboardService, money, pct
+
+    if args.command == "status":
+        summary = DashboardService(config).intraday_summary()
+        if not summary:
+            print(
+                f"\n[{persona_id}] No intraday paper result saved yet. "
+                f"Start with: python run_daily.py analyse --persona {persona_id}"
+            )
+            return 0
+        print(f"\n[{persona_id}] Calan intraday paper/backtest")
+        print(f"  period        {summary['start_date']} to {summary['end_date']}")
+        print(f"  net P&L       {money(summary['total_net_pnl'])}")
+        print(f"  return        {pct(summary['total_return_pct'], 2, True)}")
+        print(f"  trades        {summary['total_trades']}")
+        print(f"  win rate      {pct(summary['win_rate_pct'])}")
+        print(f"  expectancy    {summary['expectancy_r']:+.3f}R")
+        return 0
+
+    from src.broker.factory import build_broker
+    from src.intraday.data import IntradayDataService
+    from src.intraday.reporting import save_summary, summarize_result
+    from src.intraday.scanner import IntradayScanner
+    from src.intraday.simulator import IntradaySimulator
+    from src.intraday.watch import IntradayWatchEngine
+    from src.universe import load_universe
+
+    as_of = _parse_date(args.as_of) or date.today()
+    max_symbols = args.max_candidates
+    interval = str(config.get("intraday.default_interval", "FIVE_MINUTE")).upper()
+    broker = build_broker(config, force_simulated=args.simulated_broker)
+
+    try:
+        broker.connect()
+        data = IntradayDataService(config, broker=broker)
+        universe = load_universe(config)
+        symbols = universe.symbols[:max_symbols] if max_symbols else universe.symbols
+
+        if args.command == "watch":
+            state = IntradayWatchEngine(config, data, symbols).run_until_close()
+            print(f"\n[{persona_id}] Calan watch finished")
+            print(f"  date          {state.trading_date}")
+            print(f"  trades        {len(state.completed_trades)} completed, {len(state.open_positions)} open")
+            print(f"  net P&L       Rs {state.daily_pnl:,.2f}")
+            if state.lockout_reason:
+                print(f"  lockout       {state.lockout_reason}")
+            return 0
+
+        frames = {}
+        one_shot_symbols = symbols[:25] if max_symbols is None else symbols
+        for symbol in one_shot_symbols:
+            frame = data.candles(symbol, as_of, interval=interval)
+            if not frame.empty:
+                frames[symbol] = frame
+
+        if args.command == "execute":
+            print(
+                f"\n[{persona_id}] Intraday execution is paper-only in v1; "
+                "no live orders are placed."
+            )
+            return 0
+
+        if args.command == "close":
+            print(
+                f"\n[{persona_id}] Intraday positions are force-closed inside "
+                "the paper simulation; no separate close step is needed."
+            )
+            return 0
+
+        if args.command == "learn":
+            print(f"\n[{persona_id}] Learning is not wired for intraday paper results yet.")
+            return 0
+
+        if args.command not in {"analyse", "cycle"}:
+            return 0
+
+        candidates = IntradayScanner(config).scan(frames)
+        result = IntradaySimulator(config).run(frames, {}, as_of, as_of)
+        summary = summarize_result(result)
+        path = save_summary(config, summary)
+
+        print(f"\n[{persona_id}] Calan intraday paper run for {as_of} ({interval})")
+        print(f"  scanned       {len(frames)} symbol(s)")
+        print(f"  setups        {len(candidates)} candidate(s)")
+        print(f"  trades        {summary['total_trades']}")
+        print(f"  net P&L       Rs {summary['total_net_pnl']:,.2f}")
+        print(f"  expectancy    {summary['expectancy_r']:+.3f}R")
+        print(f"  result        {path}")
+        if not frames:
+            print(
+                "  note          no intraday candles were available; "
+                "Angel One credentials or cached candles are needed"
+            )
+        return 0
+    finally:
+        broker.disconnect()
+
+
 def _run_persona(persona_id: str, args, base_config) -> int:
     """Run a single command for one persona. Returns the exit code."""
     from src.orchestrator import FundManager
@@ -219,6 +319,9 @@ def _run_persona(persona_id: str, args, base_config) -> int:
 
     as_of = _parse_date(args.as_of)
 
+    if pcfg.get("intraday.enabled", False):
+        return _run_intraday_persona(persona_id, args, pcfg)
+
     if args.command == "learn":
         _run_learning_for(pcfg, as_of=as_of)
         return 0
@@ -226,6 +329,10 @@ def _run_persona(persona_id: str, args, base_config) -> int:
     manager = FundManager(config=pcfg, force_simulated=args.simulated_broker)
 
     try:
+        if args.command == "watch":
+            print(f"\n[{persona_id}] Watch mode is only available for intraday personas.")
+            return 0
+
         if args.command == "analyse":
             result = manager.analyse(
                 as_of=as_of,
@@ -310,6 +417,12 @@ def main(argv: Optional[list] = None) -> int:
         level="DEBUG" if args.verbose else str(config.get("logging.level", "INFO")),
         log_file=config.path("logging.file", "data/fund.log"),
     )
+
+    if args.command == "status" and args.persona:
+        try:
+            return _run_persona(args.persona, args, config)
+        except SystemExit as exc:
+            raise exc
 
     if args.command == "status":
         _report_status()

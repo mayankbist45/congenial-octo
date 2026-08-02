@@ -89,6 +89,10 @@ def test_learn_is_a_supported_command() -> None:
     assert build_parser().parse_args(["learn"]).command == "learn"
 
 
+def test_watch_is_a_supported_command() -> None:
+    assert build_parser().parse_args(["watch", "--persona", "calan"]).command == "watch"
+
+
 def test_learning_failures_are_reported_without_raising(monkeypatch, capsys) -> None:
     class BrokenEvaluator:
         def __init__(self, config):

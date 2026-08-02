@@ -61,6 +61,9 @@
   <div class="persona-card">
     <h2><a href="/?persona={{ card.persona_id }}">{{ card.persona_id | capitalize }}</a></h2>
     <p class="desc">{{ card.description }}</p>
+    {% if card.intraday %}
+      <p class="desc"><span class="tag rule">Paper/backtest</span> Intraday strategies enabled.</p>
+    {% endif %}
     {% if card.has_data %}
     <div class="card-stats">
       <div class="card-stat">
@@ -87,7 +90,28 @@
       </div>
     </div>
     {% else %}
-    <p class="no-data">No runs recorded yet for this persona.</p>
+      {% if card.intraday_summary %}
+      <div class="card-stats">
+        <div class="card-stat">
+          <div class="label">Intraday P&amp;L</div>
+          <div class="value">{{ card.intraday_summary.total_net_pnl | money }}</div>
+        </div>
+        <div class="card-stat">
+          <div class="label">Trades</div>
+          <div class="value">{{ card.intraday_summary.total_trades }}</div>
+        </div>
+        <div class="card-stat">
+          <div class="label">Win rate</div>
+          <div class="value">{{ card.intraday_summary.win_rate_pct | pct(1) }}</div>
+        </div>
+        <div class="card-stat">
+          <div class="label">Expectancy</div>
+          <div class="value">{{ card.intraday_summary.expectancy_r | number(2) }}R</div>
+        </div>
+      </div>
+      {% else %}
+      <p class="no-data">No runs recorded yet for this persona.</p>
+      {% endif %}
     {% endif %}
   </div>
   {% endfor %}

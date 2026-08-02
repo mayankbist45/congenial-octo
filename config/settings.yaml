@@ -338,3 +338,56 @@ personas:
     cadence:
       monthly_rebalance: true
       new_position_grace_days: 30
+
+  calan:
+    enabled: true
+    description: "Calan — rules-based intraday trader"
+    strategy_description: >
+      Calan is a rules-based day trader. He trades only liquid NSE stocks whose
+      intraday price, volume, volatility and VWAP behaviour match a defined
+      playbook. He uses opening range breakouts, VWAP pullbacks, previous-day
+      high/low breaks and tightly filtered scalps, then squares off everything
+      before the closing auction. Version 1 is paper/backtest only.
+    capital_inr: 500000
+    universe:
+      file: "data/nifty500.csv"
+      min_avg_daily_turnover_inr: 100000000
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      default_interval: "FIVE_MINUTE"
+      scalping_interval: "ONE_MINUTE"
+      trade_window_start: "09:30"
+      trade_window_end: "14:45"
+      force_exit_time: "15:15"
+      watch_poll_seconds: 300
+      ranked_universe_size: 40
+      max_trades_per_day: 5
+      max_open_positions: 2
+      risk_per_trade_pct: 0.4
+      max_daily_loss_pct: 1.5
+      max_position_value_pct: 35.0
+      min_avg_volume: 100000
+      min_avg_turnover_inr: 100000000
+      min_atr_pct: 0.6
+      volume_spike_multiple: 1.2
+      opening_range_minutes: 15
+      stop_buffer_pct: 0.05
+      target_r_multiple: 1.5
+      scalping_target_pct: 0.35
+      scalping_stop_pct: 0.18
+      scalping_max_hold_minutes: 15
+      scalping_min_net_edge_bps: 8.0
+      slippage_bps_per_side: 2.0
+      costs:
+        brokerage_pct: 0.03
+        brokerage_cap_per_order: 20.0
+        stt_sell_pct: 0.025
+        exchange_txn_pct: 0.00325
+        sebi_pct: 0.0001
+        stamp_buy_pct: 0.003
+        gst_pct: 18.0

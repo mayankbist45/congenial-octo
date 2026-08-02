@@ -52,6 +52,12 @@ class DryRunBroker(BrokerClient):
     def get_last_prices(self, symbols: List[str]) -> Dict[str, float]:
         return self._inner.get_last_prices(symbols)
 
+    def get_candles(self, *args, **kwargs):
+        getter = getattr(self._inner, "get_candles", None)
+        if getter is None:
+            return []
+        return getter(*args, **kwargs)
+
     def place_order(self, request: OrderRequest) -> OrderResult:
         logger.warning(
             "[DRY RUN] Suppressed %s %s x%d @ %s",
