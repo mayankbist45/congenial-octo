@@ -1,13 +1,7 @@
-"""Intraday paper trading and backtesting for day-trader personas."""
+"""Intraday paper trading for the calan persona (SIP-ORB-VWAP)."""
 
-from src.intraday.models import IntradayBacktestResult, IntradaySignal, IntradayTrade
+from src.intraday.agent import IntradayAgent
 from src.intraday.simulator import IntradaySimulator
 from src.intraday.watch import IntradayWatchEngine
 
-__all__ = [
-    "IntradayBacktestResult",
-    "IntradaySignal",
-    "IntradayTrade",
-    "IntradaySimulator",
-    "IntradayWatchEngine",
-]
+__all__ = ["IntradayAgent", "IntradaySimulator", "IntradayWatchEngine"]

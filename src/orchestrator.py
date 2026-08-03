@@ -24,6 +24,7 @@ from src.broker.factory import build_broker
 from src.config import Config, get_config
 from src.decision.engine import DecisionEngine, is_deep_review_day
 from src.execution.executor import ExecutionSummary, OrderExecutor
+from src.earnings.service import EarningsService
 from src.fundamentals.service import FundamentalsService
 from src.fundamentals.reports import QuarterlyReportsService
 from src.journal.db import init_db
@@ -35,6 +36,7 @@ from src.market_data.liquid import LiquidFundService
 from src.market_data.prices import PriceService
 from src.models import (
     DailyDecision,
+    EarningsDigest,
     FactorScores,
     FundamentalSnapshot,
     NewsDigest,
@@ -76,6 +78,7 @@ class RunResult:
     risk_profile: Optional[PortfolioRiskProfile] = None
     digest: Optional[NewsDigest] = None
     quarterly_context: Optional[QuarterlyReportContext] = None
+    earnings: Optional[EarningsDigest] = None
 
     @property
     def proposal_count(self) -> int:
@@ -107,6 +110,7 @@ class FundManager:
         self._decision = DecisionEngine(
             self._config, risk_engine=self._risk, universe=self._universe
         )
+        self._earnings = EarningsService(self._config, self._universe)
         self._portfolios = PortfolioBuilder(self._config, self._universe)
         self._repo = JournalRepository(self._config)
 
@@ -165,6 +169,9 @@ class FundManager:
 
         logger.info("STAGE 6/9  Risk analytics")
         risk_profile = self._analyse_risk(portfolio, fundamentals, technicals)
+        
+        logger.info("STAGE 6b   Quarterly earnings")
+        earnings = self._build_earnings(portfolio, candidates, as_of)
 
         logger.info("STAGE 7/9  News")
         digest = None if skip_news else self._build_digest(portfolio, candidates, as_of)
@@ -172,8 +179,8 @@ class FundManager:
         logger.info("STAGE 8/9  Sell triggers and portfolio limits")
         triggers = self._evaluate_triggers(
             portfolio, scores, fundamentals, technicals, digest, risk_profile,
-            candidates, deep_review, quarterly_context,
-        )
+            candidates, deep_review, quarterly_context, earnings)
+        
 
         logger.info("STAGE 9/9  Decision")
         decision = self._decision.decide(
@@ -184,6 +191,7 @@ class FundManager:
             triggers=triggers,
             candidates=candidates,
             digest=digest,
+            earnings=earnings,
             risk_profile=risk_profile,
             quarterly_context=quarterly_context,
             as_of=as_of,
@@ -214,6 +222,7 @@ class FundManager:
             risk_profile=risk_profile,
             digest=digest,
             quarterly_context=quarterly_context,
+            earnings=earnings,
         )
 
     # ------------------------------------------------------------------
@@ -360,6 +369,22 @@ class FundManager:
             logger.error("Digest construction failed: %s", exc)
             return None
 
+    def _build_earnings(
+        self,
+        portfolio: PortfolioState,
+        candidates: List[FactorScores],
+        as_of: date,
+    ) -> Optional[EarningsDigest]:
+        try:
+            return self._earnings.build(
+                portfolio=portfolio,
+                candidate_symbols=[c.symbol for c in candidates],
+                as_of=as_of,
+            )
+        except Exception as exc:
+            logger.error("Earnings pipeline failed: %s", exc, exc_info=True)
+            return None
+
     def _evaluate_triggers(
         self,
         portfolio: PortfolioState,
@@ -371,6 +396,7 @@ class FundManager:
         candidates: List[FactorScores],
         deep_review: bool,
         quarterly_context: Optional[QuarterlyReportContext],
+        earnings: Optional[EarningsDigest] = None,
     ) -> List[Trigger]:
         triggers = self._triggers.evaluate(
             portfolio=portfolio,
@@ -382,6 +408,14 @@ class FundManager:
             best_candidate=candidates[0] if candidates else None,
             is_deep_review=deep_review,
             quarterly_context=quarterly_context,
+        )
+        triggers.extend(
+            self._earnings.triggers_for(
+                earnings,
+                portfolio,
+                [c.symbol for c in candidates],
+                deep_review,
+            )
         )
         triggers.extend(self._risk.cash_deployment_triggers(portfolio, candidates))
         return triggers
@@ -721,6 +755,10 @@ class FundManager:
             logger.warning("Liquid fund recording failed: %s", exc)
 
     def disconnect(self) -> None:
+        try:
+            self._earnings.close()
+        except Exception as exc:
+            logger.debug("Earnings disconnect: %s", exc)
         try:
             self._broker.disconnect()
         except Exception as exc:

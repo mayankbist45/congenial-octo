@@ -281,8 +281,11 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
         if args.command not in {"analyse", "cycle"}:
             return 0
 
-        candidates = IntradayScanner(config).scan(frames)
-        result = IntradaySimulator(config).run(frames, {}, as_of, as_of)
+        previous_days = data.previous_day_stats_batch(
+            list(frames.keys()), as_of, interval=interval
+        )
+        candidates = IntradayScanner(config).scan(frames, previous_days)
+        result = IntradaySimulator(config).run(frames, previous_days, as_of, as_of)
         summary = summarize_result(result)
         path = save_summary(config, summary)
 

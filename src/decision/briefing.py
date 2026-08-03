@@ -22,6 +22,7 @@ from src.models import (
     FactorScores,
     FundamentalSnapshot,
     NewsDigest,
+    EarningsDigest,
     PortfolioRiskProfile,
     PortfolioState,
     QuarterlyReportContext,
@@ -70,6 +71,7 @@ class BriefingBuilder:
         turnover: TurnoverStatus,
         is_deep_review: bool,
         as_of: Optional[date] = None,
+        earnings: Optional[EarningsDigest] = None,
     ) -> str:
         as_of = as_of or portfolio.as_of
         sections: List[str] = []
@@ -92,6 +94,7 @@ class BriefingBuilder:
         sections.append(self._triggers(triggers))
         sections.append(self._candidates(candidates, fundamentals, technicals))
         sections.append(self._news(digest, portfolio))
+        sections.append(self._earnings(earnings, portfolio))
 
         briefing = "\n\n".join(section for section in sections if section)
         self._save(briefing, as_of)
@@ -579,6 +582,41 @@ class BriefingBuilder:
                 + ", ".join(digest.flagged_symbols)
             )
 
+        return "\n".join(lines)
+
+    def _earnings(
+        self, digest: Optional[EarningsDigest], portfolio: PortfolioState
+    ) -> str:
+        if digest is None or not digest.analyses:
+            return ""
+
+        lines = [
+            "--- QUARTERLY EARNINGS ---",
+            f"({digest.new_reports} fresh report(s) analysed from "
+            f"{digest.symbols_polled} polled)",
+        ]
+        if digest.holdings_notes:
+            lines.append("")
+            lines.append("On current holdings:")
+            for symbol, note in digest.holdings_notes.items():
+                lines.append(f"  {symbol}: {note}")
+        if digest.watchlist_notes:
+            lines.append("")
+            lines.append("On watchlist / candidates:")
+            for symbol, note in digest.watchlist_notes.items():
+                lines.append(f"  {symbol}: {note}")
+        if digest.flagged_symbols:
+            lines.append("")
+            lines.append(
+                "FLAGGED from quarterly results: "
+                + ", ".join(digest.flagged_symbols)
+            )
+        lines.append("")
+        lines.append(
+            "These are analyst reads of reported numbers, not consensus "
+            "surprises. Act only if the business case changed — most quarters "
+            "are in line."
+        )
         return "\n".join(lines)
 
     def _save(self, briefing: str, as_of: date) -> None:

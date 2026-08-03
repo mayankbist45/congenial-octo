@@ -4,11 +4,16 @@ SmartAPI sessions are short-lived: the login uses the account PIN plus a TOTP
 generated from the secret shown when API 2FA is enabled, and the resulting
 token is only good for the trading day. The client therefore logs in lazily at
 the start of each run and caches the session in memory.
+
+Historical ``getCandleData`` is heavily rate-limited per API app. Use a second
+SmartAPI app via :class:`~src.broker.candle_pool.AngelOneCandlePool` (see
+``ANGELONE_DATA2_*`` in ``.env``) to double effective candle throughput.
 """
 
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -28,13 +33,6 @@ from src.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
-# SmartAPI documents 10 orders/second for some endpoints; historical candle
-# data is far tighter in practice and returns a non-JSON "Access denied
-# because of exceeding access rate" body when pushed. Space candle calls out
-# aggressively and back off hard when that message appears.
-_MIN_CALL_INTERVAL = 1.0
-_CANDLE_CALL_INTERVAL = 2.0
-_RATE_LIMIT_BACKOFF_SECONDS = 45.0
 _MAX_RETRIES = 3
 
 _INTERVAL_MAP = {
@@ -46,25 +44,71 @@ _INTERVAL_MAP = {
 }
 
 
+@dataclass(frozen=True)
+class AngelOneCredentials:
+    """One SmartAPI app + login identity."""
+
+    api_key: str
+    client_code: str
+    pin: str
+    totp_secret: str
+    label: str = "primary"
+
+    @property
+    def is_complete(self) -> bool:
+        return all([self.api_key, self.client_code, self.pin, self.totp_secret])
+
+
 class AngelOneClient(BrokerClient):
     """Live broker client backed by ``smartapi-python``."""
 
-    def __init__(self, config: Optional[Config] = None):
+    def __init__(
+        self,
+        config: Optional[Config] = None,
+        credentials: Optional[AngelOneCredentials] = None,
+    ):
         self._config = config or get_config()
-        self._secrets = self._config.secrets
+        self._credentials = credentials or self._credentials_from_secrets(self._config.secrets)
         self._api: Optional[Any] = None
         self._session: Optional[Dict[str, Any]] = None
         self._session_date: Optional[date] = None
         self._instruments = get_instrument_master(self._config)
         self._last_call_at = 0.0
+        self._last_rate_limit = False
+
+    @staticmethod
+    def _credentials_from_secrets(secrets) -> AngelOneCredentials:
+        return AngelOneCredentials(
+            api_key=secrets.angelone_api_key,
+            client_code=secrets.angelone_client_code,
+            pin=secrets.angelone_pin,
+            totp_secret=secrets.angelone_totp_secret,
+            label="primary",
+        )
+
+    @property
+    def credential_label(self) -> str:
+        return self._credentials.label
 
     @property
     def name(self) -> str:
-        return "AngelOne"
+        return f"AngelOne[{self._credentials.label}]"
 
     @property
     def is_connected(self) -> bool:
         return self._api is not None and self._session_date == date.today()
+
+    def _min_interval(self, method_name: str) -> float:
+        if method_name == "getCandleData":
+            return float(
+                self._config.get("angelone.candle_call_interval_seconds", 2.0) or 2.0
+            )
+        return float(self._config.get("angelone.min_call_interval_seconds", 1.0) or 1.0)
+
+    def _rate_limit_backoff(self) -> float:
+        return float(
+            self._config.get("angelone.rate_limit_backoff_seconds", 45.0) or 45.0
+        )
 
     # ------------------------------------------------------------------
     # Session management
@@ -73,28 +117,26 @@ class AngelOneClient(BrokerClient):
         if self.is_connected:
             return True
 
-        if not self._secrets.has_broker_credentials:
+        if not self._credentials.is_complete:
             raise BrokerError(
-                "Angel One credentials incomplete. Set ANGELONE_API_KEY, "
-                "ANGELONE_CLIENT_CODE, ANGELONE_PIN and ANGELONE_TOTP_SECRET "
-                "in .env"
+                f"Angel One credentials incomplete for [{self._credentials.label}]. "
+                "Set API key, client code, PIN and TOTP secret in .env"
             )
 
         from SmartApi.smartConnect import SmartConnect
 
-        self._api = SmartConnect(api_key=self._secrets.angelone_api_key)
+        self._api = SmartConnect(api_key=self._credentials.api_key)
 
         try:
-            totp = pyotp.TOTP(self._secrets.angelone_totp_secret).now()
+            totp = pyotp.TOTP(self._credentials.totp_secret).now()
         except Exception as exc:
             raise BrokerError(
-                f"Could not generate TOTP - check ANGELONE_TOTP_SECRET is the "
-                f"base32 secret, not a 6-digit code: {exc}"
+                f"Could not generate TOTP for [{self._credentials.label}]: {exc}"
             ) from exc
 
         response = self._api.generateSession(
-            self._secrets.angelone_client_code,
-            self._secrets.angelone_pin,
+            self._credentials.client_code,
+            self._credentials.pin,
             totp,
         )
 
@@ -102,14 +144,18 @@ class AngelOneClient(BrokerClient):
             message = ""
             if isinstance(response, dict):
                 message = response.get("message") or response.get("errorcode") or ""
-            raise BrokerError(f"Angel One login failed: {message or response}")
+            raise BrokerError(
+                f"Angel One login failed [{self._credentials.label}]: {message or response}"
+            )
 
         self._session = response.get("data") or {}
         self._session_date = date.today()
-        logger.info("Angel One session established for %s", self._secrets.angelone_client_code)
+        logger.info(
+            "Angel One session established [%s] for %s",
+            self._credentials.label,
+            self._credentials.client_code,
+        )
 
-        # Loading the instrument master here means every later call can resolve
-        # tokens without a network round trip.
         self._instruments.load()
         return True
 
@@ -117,8 +163,8 @@ class AngelOneClient(BrokerClient):
         if self._api is None:
             return
         try:
-            self._api.terminateSession(self._secrets.angelone_client_code)
-            logger.info("Angel One session terminated")
+            self._api.terminateSession(self._credentials.client_code)
+            logger.info("Angel One session terminated [%s]", self._credentials.label)
         except Exception as exc:
             logger.debug("Session termination failed (harmless): %s", exc)
         finally:
@@ -134,7 +180,7 @@ class AngelOneClient(BrokerClient):
         return self._api
 
     @staticmethod
-    def _is_rate_limited(message: str) -> bool:
+    def was_rate_limited(message: str) -> bool:
         text = message.lower()
         return (
             "access rate" in text
@@ -144,11 +190,7 @@ class AngelOneClient(BrokerClient):
         )
 
     def _throttle(self, method_name: str = "") -> None:
-        interval = (
-            _CANDLE_CALL_INTERVAL
-            if method_name == "getCandleData"
-            else _MIN_CALL_INTERVAL
-        )
+        interval = self._min_interval(method_name)
         elapsed = time.time() - self._last_call_at
         if elapsed < interval:
             time.sleep(interval - elapsed)
@@ -158,6 +200,7 @@ class AngelOneClient(BrokerClient):
         """Invoke a SmartAPI method with throttling and bounded retries."""
         api = self._ensure_connected()
         method = getattr(api, method_name)
+        self._last_rate_limit = False
 
         last_error: Optional[str] = None
         for attempt in range(1, _MAX_RETRIES + 1):
@@ -167,19 +210,23 @@ class AngelOneClient(BrokerClient):
             except Exception as exc:
                 last_error = str(exc)
                 logger.warning(
-                    "%s failed (attempt %d/%d): %s",
+                    "[%s] %s failed (attempt %d/%d): %s",
+                    self._credentials.label,
                     method_name,
                     attempt,
                     _MAX_RETRIES,
                     exc,
                 )
-                if self._is_rate_limited(last_error):
+                if self.was_rate_limited(last_error):
+                    self._last_rate_limit = True
+                    backoff = self._rate_limit_backoff()
                     logger.warning(
-                        "Angel One rate limited on %s; sleeping %.0fs before retry",
+                        "Angel One [%s] rate limited on %s; sleeping %.0fs before retry",
+                        self._credentials.label,
                         method_name,
-                        _RATE_LIMIT_BACKOFF_SECONDS,
+                        backoff,
                     )
-                    time.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
+                    time.sleep(backoff)
                     self._last_call_at = time.time()
                 else:
                     time.sleep(min(2**attempt, 8))
@@ -193,30 +240,40 @@ class AngelOneClient(BrokerClient):
                     or response.get("errorcode")
                     or str(response)
                 )
-                if self._is_rate_limited(str(last_error)):
+                if self.was_rate_limited(str(last_error)):
+                    self._last_rate_limit = True
+                    backoff = self._rate_limit_backoff()
                     logger.warning(
-                        "Angel One rate limited on %s; sleeping %.0fs before retry",
+                        "Angel One [%s] rate limited on %s; sleeping %.0fs before retry",
+                        self._credentials.label,
                         method_name,
-                        _RATE_LIMIT_BACKOFF_SECONDS,
+                        backoff,
                     )
-                    time.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
+                    time.sleep(backoff)
                     self._last_call_at = time.time()
                     continue
-                # Auth expiry mid-run: re-login once and retry.
                 if "token" in str(last_error).lower() and attempt < _MAX_RETRIES:
-                    logger.info("Session appears expired; re-authenticating")
+                    logger.info(
+                        "Session appears expired [%s]; re-authenticating",
+                        self._credentials.label,
+                    )
                     self._session_date = None
                     self._api = None
                     api = self._ensure_connected()
                     method = getattr(api, method_name)
                     continue
-                logger.warning("%s returned failure: %s", method_name, last_error)
+                logger.warning(
+                    "[%s] %s returned failure: %s",
+                    self._credentials.label,
+                    method_name,
+                    last_error,
+                )
                 break
 
             last_error = f"unexpected response type {type(response)!r}"
             break
 
-        raise BrokerError(f"{method_name} failed: {last_error}")
+        raise BrokerError(f"{method_name} failed [{self._credentials.label}]: {last_error}")
 
     # ------------------------------------------------------------------
     # Portfolio
@@ -336,9 +393,24 @@ class AngelOneClient(BrokerClient):
         from_date: datetime,
         to_date: datetime,
         interval: str = "ONE_DAY",
+        strict: bool = False,
     ) -> List[Dict[str, Any]]:
         """Historical OHLCV. Angel One caps each request by interval, so long
         ranges are fetched in windows and concatenated."""
+        try:
+            return self._fetch_candles(symbol, from_date, to_date, interval)
+        except BrokerError:
+            if strict:
+                raise
+            return []
+
+    def _fetch_candles(
+        self,
+        symbol: str,
+        from_date: datetime,
+        to_date: datetime,
+        interval: str = "ONE_DAY",
+    ) -> List[Dict[str, Any]]:
         instrument = self._instruments.get(symbol)
         if instrument is None:
             logger.warning("No instrument token for %s", symbol)
@@ -361,8 +433,13 @@ class AngelOneClient(BrokerClient):
             try:
                 response = self._call("getCandleData", params)
             except BrokerError as exc:
-                logger.warning("Candle fetch failed for %s: %s", symbol, exc)
-                break
+                logger.warning(
+                    "Candle fetch failed [%s] for %s: %s",
+                    self._credentials.label,
+                    symbol,
+                    exc,
+                )
+                raise
 
             for row in response.get("data") or []:
                 if not isinstance(row, list) or len(row) < 6:

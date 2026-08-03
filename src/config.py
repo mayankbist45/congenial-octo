@@ -54,6 +54,11 @@ class Secrets:
     angelone_client_code: str = ""
     angelone_pin: str = ""
     angelone_totp_secret: str = ""
+    # Optional second SmartAPI app — spreads getCandleData quota (see candle_pool).
+    angelone_data2_api_key: str = ""
+    angelone_data2_client_code: str = ""
+    angelone_data2_pin: str = ""
+    angelone_data2_totp_secret: str = ""
     openai_api_key: str = ""
     openai_base_url: Optional[str] = None
     dry_run: bool = True
@@ -67,11 +72,33 @@ class Secrets:
             angelone_client_code=self.angelone_client_code,
             angelone_pin=self.angelone_pin,
             angelone_totp_secret=self.angelone_totp_secret,
+            angelone_data2_api_key=self.angelone_data2_api_key,
+            angelone_data2_client_code=self.angelone_data2_client_code,
+            angelone_data2_pin=self.angelone_data2_pin,
+            angelone_data2_totp_secret=self.angelone_data2_totp_secret,
             openai_api_key=self.openai_api_key,
             openai_base_url=self.openai_base_url,
             dry_run=self.dry_run,
             initial_capital=capital,
             database_url=self.database_url,
+        )
+
+    @property
+    def has_secondary_candle_credentials(self) -> bool:
+        return bool(self.angelone_data2_api_key.strip())
+
+    def secondary_candle_credentials(self):
+        """Second SmartAPI app; reuses primary login if DATA2 login fields blank."""
+        from src.broker.angelone import AngelOneCredentials
+
+        if not self.has_secondary_candle_credentials:
+            return None
+        return AngelOneCredentials(
+            api_key=self.angelone_data2_api_key.strip(),
+            client_code=(self.angelone_data2_client_code or self.angelone_client_code).strip(),
+            pin=(self.angelone_data2_pin or self.angelone_pin).strip(),
+            totp_secret=(self.angelone_data2_totp_secret or self.angelone_totp_secret).strip(),
+            label="data2",
         )
 
     @property
@@ -275,6 +302,10 @@ def load_secrets() -> Secrets:
         angelone_client_code=os.getenv("ANGELONE_CLIENT_CODE", "").strip(),
         angelone_pin=os.getenv("ANGELONE_PIN", "").strip(),
         angelone_totp_secret=os.getenv("ANGELONE_TOTP_SECRET", "").strip(),
+        angelone_data2_api_key=os.getenv("ANGELONE_DATA2_API_KEY", "").strip(),
+        angelone_data2_client_code=os.getenv("ANGELONE_DATA2_CLIENT_CODE", "").strip(),
+        angelone_data2_pin=os.getenv("ANGELONE_DATA2_PIN", "").strip(),
+        angelone_data2_totp_secret=os.getenv("ANGELONE_DATA2_TOTP_SECRET", "").strip(),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_base_url=base_url,
         dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),

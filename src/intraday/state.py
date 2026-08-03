@@ -1,94 +1,151 @@
-"""JSON persistence for live intraday paper trading state."""
+"""Persist intraday paper state between polls."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 from src.config import Config
 from src.intraday.models import IntradayTrade, PaperPosition, PaperState
 
 
 class PaperStateStore:
-    def __init__(self, config: Config, path: Optional[Path] = None):
+    def __init__(self, config: Config):
         self._config = config
-        self.path = path or config.root / "data" / "intraday" / f"{config.persona_id}_state.json"
+        self._path = config.intraday_dir / f"{config.persona_id}_state.json"
 
-    def load(self, trading_date: Optional[date] = None) -> PaperState:
-        today = (trading_date or date.today()).isoformat()
-        if not self.path.exists():
-            return PaperState(persona_id=self._config.persona_id, trading_date=today)
+    def load(self, trading_date: date) -> PaperState:
+        if not self._path.exists():
+            return PaperState(
+                persona_id=self._config.persona_id,
+                trading_date=trading_date,
+            )
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-            state = self._from_payload(payload)
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            return PaperState(persona_id=self._config.persona_id, trading_date=today)
-        if state.trading_date != today:
-            return PaperState(persona_id=self._config.persona_id, trading_date=today)
-        return state
+            payload = json.loads(self._path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return PaperState(
+                persona_id=self._config.persona_id,
+                trading_date=trading_date,
+            )
+        if payload.get("trading_date") != trading_date.isoformat():
+            return PaperState(
+                persona_id=self._config.persona_id,
+                trading_date=trading_date,
+            )
+        return _state_from_dict(payload)
 
-    def save(self, state: PaperState) -> Path:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.to_payload(state), indent=2, default=str), encoding="utf-8")
-        return self.path
-
-    @staticmethod
-    def to_payload(state: PaperState) -> Dict[str, Any]:
-        return {
-            "persona_id": state.persona_id,
-            "trading_date": state.trading_date,
-            "active": state.active,
-            "last_scan_at": state.last_scan_at,
-            "lockout_reason": state.lockout_reason,
-            "open_positions": [p.to_dict() for p in state.open_positions],
-            "completed_trades": [trade_to_dict(t) for t in state.completed_trades],
-            "skipped_signals": state.skipped_signals[-100:],
-            "top_candidates": state.top_candidates[:40],
-            "daily_pnl": round(state.daily_pnl, 2),
-        }
-
-    @staticmethod
-    def _from_payload(payload: Dict[str, Any]) -> PaperState:
-        return PaperState(
-            persona_id=str(payload.get("persona_id") or "calan"),
-            trading_date=str(payload.get("trading_date") or date.today().isoformat()),
-            active=bool(payload.get("active")),
-            last_scan_at=payload.get("last_scan_at"),
-            lockout_reason=payload.get("lockout_reason"),
-            open_positions=[
-                PaperPosition.from_dict(row)
-                for row in payload.get("open_positions", [])
-                if isinstance(row, dict)
-            ],
-            completed_trades=[
-                trade_from_dict(row)
-                for row in payload.get("completed_trades", [])
-                if isinstance(row, dict)
-            ],
-            skipped_signals=[
-                row for row in payload.get("skipped_signals", [])
-                if isinstance(row, dict)
-            ],
-            top_candidates=[
-                row for row in payload.get("top_candidates", [])
-                if isinstance(row, dict)
-            ],
-            daily_pnl=float(payload.get("daily_pnl") or 0.0),
-        )
+    def save(self, state: PaperState) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(_state_to_dict(state), indent=2), encoding="utf-8")
 
 
-def trade_to_dict(trade: IntradayTrade) -> Dict[str, Any]:
-    payload = asdict(trade)
-    payload["entry_time"] = trade.entry_time.isoformat()
-    payload["exit_time"] = trade.exit_time.isoformat()
-    return payload
+def _state_to_dict(state: PaperState) -> dict:
+    return {
+        "persona_id": state.persona_id,
+        "trading_date": state.trading_date.isoformat(),
+        "active": state.active,
+        "last_scan_at": state.last_scan_at,
+        "lockout_reason": state.lockout_reason,
+        "daily_pnl": state.daily_pnl,
+        "watchlist": state.watchlist,
+        "open_positions": [_position_to_dict(p) for p in state.open_positions],
+        "completed_trades": [_trade_to_dict(t) for t in state.completed_trades],
+        "skipped_signals": state.skipped_signals,
+        "top_candidates": state.top_candidates,
+    }
 
 
-def trade_from_dict(payload: Dict[str, Any]) -> IntradayTrade:
-    data = dict(payload)
-    data["entry_time"] = datetime.fromisoformat(str(data["entry_time"]))
-    data["exit_time"] = datetime.fromisoformat(str(data["exit_time"]))
-    return IntradayTrade(**data)
+def _state_from_dict(payload: dict) -> PaperState:
+    return PaperState(
+        persona_id=str(payload.get("persona_id", "")),
+        trading_date=date.fromisoformat(str(payload["trading_date"])),
+        active=bool(payload.get("active", True)),
+        last_scan_at=payload.get("last_scan_at"),
+        lockout_reason=payload.get("lockout_reason"),
+        daily_pnl=float(payload.get("daily_pnl", 0.0) or 0.0),
+        watchlist=list(payload.get("watchlist") or []),
+        open_positions=[_position_from_dict(p) for p in payload.get("open_positions") or []],
+        completed_trades=[_trade_from_dict(t) for t in payload.get("completed_trades") or []],
+        skipped_signals=list(payload.get("skipped_signals") or []),
+        top_candidates=list(payload.get("top_candidates") or []),
+    )
+
+
+def _position_to_dict(p: PaperPosition) -> dict:
+    return {
+        "symbol": p.symbol,
+        "strategy": p.strategy,
+        "side": p.side,
+        "quantity": p.quantity,
+        "entry_time": p.entry_time.isoformat(sep=" "),
+        "entry_price": p.entry_price,
+        "stop_price": p.stop_price,
+        "target_price": p.target_price,
+        "max_exit_time": p.max_exit_time.isoformat(sep=" ") if p.max_exit_time else None,
+        "reason": p.reason,
+        "trailing_stop_pct": p.trailing_stop_pct,
+        "peak_price": p.peak_price,
+    }
+
+
+def _position_from_dict(payload: dict) -> PaperPosition:
+    from datetime import datetime
+
+    max_exit = payload.get("max_exit_time")
+    return PaperPosition(
+        symbol=str(payload["symbol"]),
+        strategy=str(payload["strategy"]),
+        side=str(payload["side"]),
+        quantity=int(payload["quantity"]),
+        entry_time=datetime.fromisoformat(str(payload["entry_time"])),
+        entry_price=float(payload["entry_price"]),
+        stop_price=float(payload["stop_price"]),
+        target_price=float(payload["target_price"]),
+        max_exit_time=datetime.fromisoformat(str(max_exit)) if max_exit else None,
+        reason=str(payload.get("reason", "")),
+        trailing_stop_pct=payload.get("trailing_stop_pct"),
+        peak_price=payload.get("peak_price"),
+    )
+
+
+def _trade_to_dict(t: IntradayTrade) -> dict:
+    return {
+        "symbol": t.symbol,
+        "strategy": t.strategy,
+        "side": t.side,
+        "quantity": t.quantity,
+        "entry_time": t.entry_time.isoformat(sep=" "),
+        "exit_time": t.exit_time.isoformat(sep=" "),
+        "entry_price": t.entry_price,
+        "exit_price": t.exit_price,
+        "stop_price": t.stop_price,
+        "target_price": t.target_price,
+        "exit_reason": t.exit_reason,
+        "gross_pnl": t.gross_pnl,
+        "costs": t.costs,
+        "net_pnl": t.net_pnl,
+        "r_multiple": t.r_multiple,
+    }
+
+
+def _trade_from_dict(payload: dict) -> IntradayTrade:
+    from datetime import datetime
+
+    return IntradayTrade(
+        symbol=str(payload["symbol"]),
+        strategy=str(payload["strategy"]),
+        side=str(payload["side"]),
+        quantity=int(payload["quantity"]),
+        entry_time=datetime.fromisoformat(str(payload["entry_time"])),
+        exit_time=datetime.fromisoformat(str(payload["exit_time"])),
+        entry_price=float(payload["entry_price"]),
+        exit_price=float(payload["exit_price"]),
+        stop_price=float(payload["stop_price"]),
+        target_price=float(payload["target_price"]),
+        exit_reason=str(payload["exit_reason"]),
+        gross_pnl=float(payload["gross_pnl"]),
+        costs=float(payload["costs"]),
+        net_pnl=float(payload["net_pnl"]),
+        r_multiple=float(payload["r_multiple"]),
+    )
