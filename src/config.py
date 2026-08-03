@@ -223,6 +223,12 @@ class Config:
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
+    @property
+    def intraday_dir(self) -> Path:
+        directory = self.root / "data" / "intraday"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
     def validate(self) -> List[str]:
         """Return human-readable problems with the configuration."""
         problems: List[str] = []

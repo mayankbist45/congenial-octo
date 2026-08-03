@@ -110,14 +110,22 @@ push() {
     # committed. Taken from the working tree, so an uncommitted settings.yaml
     # tweak goes too. .env, caches and backups are gitignored and so excluded
     # here. Secrets live only on the VM (/opt/fund/.env); pass --with-env to
-    # merge a laptop .env deliberately. Logs and the old SQLite sidecars are
-    # excluded by pathspec: the VM keeps its own run history.
-    local excludes=(':!:data/*.log' ':!:data/fund.db*' './.env')
+    # merge a laptop .env deliberately. Logs, intraday paper JSON, and the old
+    # SQLite sidecars are excluded: the VM keeps its own run history.
+    local excludes=(
+        ':!:data/*.log'
+        ':!:data/fund.db*'
+        ':!:logs'
+        ':!:logs/**'
+        ':!:data/intraday'
+        ':!:data/intraday/**'
+        './.env'
+    )
     (cd "$PROJECT_DIR" &&
         {
             git ls-files -z -- . "${excludes[@]}"
             git ls-files -z --others --exclude-standard -- . "${excludes[@]}"
-        } | tar -czf "$tarball" --null -T -) ||
+        } | COPYFILE_DISABLE=1 tar -czf "$tarball" --null -T -) ||
         die "could not archive the working tree"
 
     echo "Pushing code to $INSTANCE:$REMOTE_DIR"
@@ -125,12 +133,15 @@ push() {
         die "scp of the source archive failed"
     rm -f "$tarball"
 
-    ssh_vm "sudo mkdir -p '$REMOTE_DIR' &&
-            sudo chown \$(id -un):\$(id -gn) '$REMOTE_DIR' &&
-            tar -xzf /tmp/fund-src.tar.gz -C '$REMOTE_DIR' &&
+    ssh_vm "APP_USER=\$(stat -c '%U' '$REMOTE_DIR' 2>/dev/null || id -un) &&
+            APP_GROUP=\$(stat -c '%G' '$REMOTE_DIR' 2>/dev/null || id -gn) &&
+            sudo mkdir -p '$REMOTE_DIR' &&
+            sudo tar -xzf /tmp/fund-src.tar.gz -C '$REMOTE_DIR' --overwrite &&
+            sudo chown -R \"\$APP_USER\":\"\$APP_GROUP\" '$REMOTE_DIR' &&
             rm -f /tmp/fund-src.tar.gz &&
             chmod +x '$REMOTE_DIR'/scripts/*.sh &&
-            mkdir -p '$REMOTE_DIR/data'" || die "unpacking on the VM failed"
+            mkdir -p '$REMOTE_DIR/data' '$REMOTE_DIR/data/intraday' '$REMOTE_DIR/logs'" ||
+        die "unpacking on the VM failed"
 
     if [ "$with_env" -eq 1 ]; then
         if [ -f "$PROJECT_DIR/.env" ]; then

@@ -17,3 +17,10 @@ data/backups/
 data/backtest/
 
 data/baseline_test.db*
+
+# Runtime output — each machine keeps its own; never deploy these
+logs/
+data/intraday/
+
+# macOS metadata (AppleDouble); breaks Linux tar unpack
+**/._*
