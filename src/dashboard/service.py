@@ -118,6 +118,27 @@ class DashboardService:
     def is_dry_run(self) -> bool:
         return bool(self._config.secrets.dry_run)
 
+    def _empty_overview(self) -> Dict[str, Any]:
+        return {
+            "has_data": False,
+            "total_value": 0.0,
+            "position_count": 0,
+            "cash_pct": 100.0,
+            "pending_count": 0,
+            "cash": 0.0,
+            "invested_value": 0.0,
+            "unrealised_pnl": 0.0,
+            "run": None,
+            "daily_change_pct": None,
+        }
+
+    def _safe_overview(self) -> Dict[str, Any]:
+        try:
+            return self.overview()
+        except Exception as exc:
+            logger.debug("Overview unavailable for %s: %s", self.persona_id, exc)
+            return self._empty_overview()
+
     # ------------------------------------------------------------------
     # Overview
     # ------------------------------------------------------------------
@@ -535,7 +556,12 @@ class DashboardService:
                 persona_id=pid,
             )
             svc = DashboardService(config=pcfg)
-            overview = svc.overview()
+            is_intraday = bool(pcfg.get("intraday.enabled", False))
+            overview = (
+                self._empty_overview()
+                if is_intraday
+                else svc._safe_overview()
+            )
             intraday_summary = svc.intraday_summary()
             region = pcfg.market_region
             currency = str(pcfg.get("fund.base_currency", "INR" if region == "IN" else "USD"))

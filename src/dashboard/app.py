@@ -55,11 +55,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def render(
         request: Request, template: str, context: Dict[str, Any]
     ) -> HTMLResponse:
+        try:
+            pending_count = len(service.pending_proposals())
+        except Exception:
+            pending_count = 0
         base = {
             "fund_name": service.fund_name,
             "benchmark_label": service.benchmark_label,
             "is_dry_run": service.is_dry_run,
-            "pending_count": len(service.pending_proposals()),
+            "pending_count": pending_count,
         }
         base.update(context)
         return templates.TemplateResponse(request, template, base)
