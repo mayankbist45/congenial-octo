@@ -205,6 +205,7 @@ def test_personas_page_lists_calan_as_intraday(client) -> None:
     body = client.get("/personas").text
     assert "Calan" in body
     assert "Paper/backtest" in body
+    assert "Sector modules:" in body
 
 
 # ----------------------------------------------------------------------
@@ -237,6 +238,7 @@ def test_proposal_card_shows_rationale_thesis_and_warnings(client, repo) -> None
     assert "Margins hold" in body
     assert "overbought" in body
     assert "initial_build" in body
+    assert "Persona Constitution" in body
 
 
 def test_mandatory_proposal_is_marked_as_rule_enforced(client, repo) -> None:
@@ -253,6 +255,7 @@ def test_holdings_page_lists_positions_with_risk_metrics(client, repo) -> None:
     assert "TCS" in body
     assert "Idio vol" in body
     assert "Sector exposure" in body
+    assert "Mandate and Analytics" in body
 
 
 def test_performance_page_reports_excess_return(client, repo) -> None:

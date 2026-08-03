@@ -36,6 +36,7 @@ class TriggerType(str, Enum):
     POSITION_CAP = "position_cap"
     RISK_LIMIT = "risk_limit"
     NEWS_EVENT = "news_event"
+    QUARTERLY_REPORT_REVIEW = "quarterly_report_review"
     EARNINGS_EVENT = "earnings_event"
     UNDERWEIGHT_DEPLOY = "underweight_deploy"
     INITIAL_BUILD = "initial_build"
@@ -100,33 +101,127 @@ class FundamentalSnapshot:
     as_of: Optional[datetime] = None
     source: str = ""
     market_cap: Optional[float] = None
+    market_cap_bucket: Optional[str] = None
     pe_ratio: Optional[float] = None
     forward_pe: Optional[float] = None
     peg_ratio: Optional[float] = None
     price_to_book: Optional[float] = None
     ev_to_ebitda: Optional[float] = None
+    ev_to_ebit: Optional[float] = None
+    ev_to_sales: Optional[float] = None
     dividend_yield: Optional[float] = None
+    earnings_yield: Optional[float] = None
+    free_cash_flow_yield: Optional[float] = None
     roe_pct: Optional[float] = None
     roce_pct: Optional[float] = None
+    incremental_roic_pct: Optional[float] = None
     operating_margin_pct: Optional[float] = None
     profit_margin_pct: Optional[float] = None
+    gross_margin_pct: Optional[float] = None
+    ebit_margin_pct: Optional[float] = None
+    ebitda_margin_pct: Optional[float] = None
     debt_to_equity: Optional[float] = None
+    net_debt_to_ebitda: Optional[float] = None
     current_ratio: Optional[float] = None
     interest_coverage: Optional[float] = None
     revenue_growth_pct: Optional[float] = None
     earnings_growth_pct: Optional[float] = None
+    revenue_cagr_pct: Optional[float] = None
+    volume_cagr_pct: Optional[float] = None
+    revenue_acceleration_pct: Optional[float] = None
+    organic_growth_pct: Optional[float] = None
+    acquisition_growth_pct: Optional[float] = None
+    market_share_change_pct: Optional[float] = None
+    order_book: Optional[float] = None
+    book_to_bill: Optional[float] = None
+    guidance_realisation_pct: Optional[float] = None
     eps: Optional[float] = None
     free_cash_flow: Optional[float] = None
+    free_cash_flow_margin_pct: Optional[float] = None
     cash_conversion: Optional[float] = None
+    cfo_to_pat_pct: Optional[float] = None
+    accrual_ratio: Optional[float] = None
+    earnings_variability_pct: Optional[float] = None
+    operating_leverage: Optional[float] = None
+    working_capital_cycle_days: Optional[float] = None
+    maintenance_capex: Optional[float] = None
+    growth_capex: Optional[float] = None
+    debt_maturity_schedule: Dict[str, float] = field(default_factory=dict)
+    refinancing_requirements: Optional[float] = None
+    off_balance_sheet_obligations: Optional[float] = None
+    contingent_liabilities: Optional[float] = None
+    share_dilution_pct: Optional[float] = None
+    pension_obligations: Optional[float] = None
+    lease_obligations: Optional[float] = None
+    receivable_growth_pct: Optional[float] = None
+    inventory_growth_pct: Optional[float] = None
+    capitalised_expenses_pct: Optional[float] = None
+    one_off_items_pct: Optional[float] = None
+    accounting_policy_change_count: Optional[int] = None
     promoter_holding_pct: Optional[float] = None
     promoter_pledge_pct: Optional[float] = None
+    promoter_ownership_change_pct: Optional[float] = None
+    insider_buying_value: Optional[float] = None
+    insider_selling_value: Optional[float] = None
+    capital_allocation_score: Optional[float] = None
+    management_turnover_flag: Optional[bool] = None
+    auditor_turnover_flag: Optional[bool] = None
+    board_independence_pct: Optional[float] = None
+    regulatory_investigation_flag: Optional[bool] = None
+    minority_shareholder_risk_flag: Optional[bool] = None
+    related_party_transactions_flag: Optional[bool] = None
+    accounting_flags: List[str] = field(default_factory=list)
     analyst_target_price: Optional[float] = None
     analyst_recommendation: Optional[str] = None
+    consensus_revenue_revision_pct: Optional[float] = None
+    consensus_eps_revision_pct: Optional[float] = None
+    earnings_surprise_pct: Optional[float] = None
+    guidance_change_pct: Optional[float] = None
+    analyst_estimate_dispersion_pct: Optional[float] = None
+    analyst_upgrades: Optional[int] = None
+    analyst_downgrades: Optional[int] = None
+    market_price_reaction_pct: Optional[float] = None
+    sector_relative_valuation_pctile: Optional[float] = None
+    historical_valuation_pctile: Optional[float] = None
+    reverse_dcf_growth_pct: Optional[float] = None
+    implied_growth_pct: Optional[float] = None
+    bull_case_return_pct: Optional[float] = None
+    base_case_return_pct: Optional[float] = None
+    bear_case_return_pct: Optional[float] = None
+    valuation_method: Optional[str] = None
+    valuation_notes: List[str] = field(default_factory=list)
+    avg_daily_traded_value: Optional[float] = None
+    bid_ask_spread_bps: Optional[float] = None
+    estimated_market_impact_bps: Optional[float] = None
+    days_to_liquidate: Optional[float] = None
+    mutual_fund_ownership_pct: Optional[float] = None
+    fii_ownership_pct: Optional[float] = None
+    dii_ownership_pct: Optional[float] = None
+    promoter_ownership_pct: Optional[float] = None
+    crowding_score: Optional[float] = None
+    ownership_concentration_pct: Optional[float] = None
+    index_inclusion_risk: Optional[str] = None
+    unusual_volume_flag: Optional[bool] = None
+    block_trade_flag: Optional[bool] = None
+    macro_exposures: Dict[str, float] = field(default_factory=dict)
+    sector_model: Optional[str] = None
+    sector_metrics: Dict[str, Optional[float]] = field(default_factory=dict)
+    unsupported_metrics: List[str] = field(default_factory=list)
+    data_gaps: List[str] = field(default_factory=list)
+    latest_quarter_label: Optional[str] = None
 
     @property
     def is_usable(self) -> bool:
         """True when there is enough data to score the name at all."""
         return self.pe_ratio is not None or self.roe_pct is not None
+
+    @property
+    def valuation_range(self) -> Dict[str, Optional[float]]:
+        return {
+            "bull": self.bull_case_return_pct,
+            "base": self.base_case_return_pct,
+            "bear": self.bear_case_return_pct,
+        }
 
 
 @dataclass
@@ -145,6 +240,12 @@ class FactorScores:
     passes_gates: bool = False
     gate_failures: List[str] = field(default_factory=list)
     contributing_metrics: Dict[str, float] = field(default_factory=dict)
+    sector_model: Optional[str] = None
+    supported_metrics: List[str] = field(default_factory=list)
+    unsupported_metrics: List[str] = field(default_factory=list)
+    metric_coverage_pct: Optional[float] = None
+    valuation_summary: Dict[str, Optional[float]] = field(default_factory=dict)
+    macro_exposures: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -322,6 +423,60 @@ class PortfolioState:
     @property
     def symbols(self) -> List[str]:
         return [p.symbol for p in self.positions]
+
+
+@dataclass
+class QuarterlyReport:
+    """One quarterly results row-set normalized into key metrics."""
+
+    symbol: str
+    fiscal_period: str
+    report_key: str
+    source: str = "screener.in"
+    fetched_at: Optional[datetime] = None
+    period_end: Optional[date] = None
+    revenue: Optional[float] = None
+    operating_profit: Optional[float] = None
+    opm_pct: Optional[float] = None
+    net_profit: Optional[float] = None
+    eps: Optional[float] = None
+    interest: Optional[float] = None
+    borrowings: Optional[float] = None
+    promoter_holding_pct: Optional[float] = None
+    promoter_pledge_pct: Optional[float] = None
+    revenue_yoy_pct: Optional[float] = None
+    profit_yoy_pct: Optional[float] = None
+    eps_yoy_pct: Optional[float] = None
+    opm_delta_pct: Optional[float] = None
+    debt_delta_pct: Optional[float] = None
+
+
+@dataclass
+class QuarterlyReportAnalysis:
+    """Persona-specific interpretation of a newly seen quarterly report."""
+
+    symbol: str
+    report_key: str
+    run_date: date
+    fiscal_period: str
+    summary: str
+    thesis_impact: str = "unclear"
+    flags: List[str] = field(default_factory=list)
+    highlights: Dict[str, str] = field(default_factory=dict)
+    metrics: Dict[str, Optional[float]] = field(default_factory=dict)
+    sector_model: Optional[str] = None
+    source: str = "heuristic"
+    raw_error: str = ""
+
+
+@dataclass
+class QuarterlyReportContext:
+    """Quarterly report state assembled for one run."""
+
+    histories: Dict[str, List[QuarterlyReport]] = field(default_factory=dict)
+    analyses: Dict[str, QuarterlyReportAnalysis] = field(default_factory=dict)
+    new_symbols: List[str] = field(default_factory=list)
+    errors: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

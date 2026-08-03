@@ -40,6 +40,7 @@ from src.models import (
     EarningsDigest,
     PortfolioRiskProfile,
     PortfolioState,
+    QuarterlyReportContext,
     Severity,
     TechnicalSnapshot,
     TradeProposal,
@@ -98,6 +99,7 @@ class DecisionEngine:
         digest: Optional[NewsDigest] = None,
         earnings: Optional[EarningsDigest] = None,
         risk_profile: Optional[PortfolioRiskProfile] = None,
+        quarterly_context: Optional[QuarterlyReportContext] = None,
         as_of: Optional[date] = None,
     ) -> DailyDecision:
         """Run one full decision cycle."""
@@ -119,6 +121,7 @@ class DecisionEngine:
             digest=digest,
             earnings=earnings,
             risk_profile=risk_profile,
+            quarterly_context=quarterly_context,
             turnover=turnover,
             is_deep_review=deep_review,
             as_of=as_of,

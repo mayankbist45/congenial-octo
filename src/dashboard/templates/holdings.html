@@ -10,6 +10,28 @@
 
 <div class="panel">
   <div class="panel-head">
+    <h2>Mandate and Analytics</h2>
+    <span class="note">Persona constitution and sector-aware research coverage</span>
+  </div>
+  <p class="subtitle" style="margin-top:0">
+    Benchmark {{ mandate.benchmark }}, {{ mandate.horizon_years }}-year horizon,
+    target excess return {{ mandate.target_excess_return_pct | pct(1) }}, max drawdown
+    {{ mandate.max_drawdown_pct | pct(1) }}, turnover budget {{ mandate.turnover_budget_pct | pct(1) }}.
+  </p>
+  <p class="note">
+    Market-cap buckets: {{ mandate.market_caps | join(', ') }}.
+    Liquidity floor {{ mandate.liquidity_floor_inr | money }},
+    ADV usage cap {{ mandate.adv_limit_pct | pct(1) }},
+    derivatives {{ 'allowed' if mandate.derivatives_allowed else 'not allowed' }},
+    leverage {{ 'allowed' if mandate.leverage_allowed else 'not allowed' }}.
+  </p>
+  {% if analytics.sector_models %}
+    <p class="note">Sector modules active: {{ analytics.sector_models | join(', ') }}</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-head">
     <h2>{{ holdings | length }} position{{ 's' if holdings | length != 1 }}</h2>
     <span class="note">Beta and idiosyncratic volatility come from the factor model</span>
   </div>
@@ -38,6 +60,9 @@
         <td>
           <div class="sym">{{ h.symbol }}</div>
           <div class="sub-line">{{ h.sector }}</div>
+          {% if h.latest_quarter %}
+          <div class="sub-line">Latest quarter: {{ h.latest_quarter }}</div>
+          {% endif %}
         </td>
         <td class="num">{{ h.quantity }}</td>
         <td class="num">{{ h.avg_cost | number }}</td>
@@ -54,6 +79,20 @@
         <td class="num">{{ h.idiosyncratic_vol | pct(1) }}</td>
         <td class="num">{{ h.risk_contribution_pct | pct(1) }}</td>
       </tr>
+      {% if h.quarterly_summary %}
+      <tr>
+        <td colspan="13">
+          <strong>Quarterly read{% if h.quarterly_thesis_impact %} ({{ h.quarterly_thesis_impact }}){% endif %}:</strong>
+          {{ h.quarterly_summary }}
+          {% if h.quarterly_sector_model %}
+            <div class="sub-line">Sector model: {{ h.quarterly_sector_model }}</div>
+          {% endif %}
+          {% if h.quarterly_flags %}
+            <div class="sub-line">Flags: {{ h.quarterly_flags | join(', ') }}</div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endif %}
       {% endfor %}
     </tbody>
   </table>
@@ -74,6 +113,41 @@
 </div>
 
 {% if holdings %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Quarterly trends</h2>
+    <span class="note">Stored report history from previous runs plus the latest fresh analysis</span>
+  </div>
+  {% if quarterly_cards %}
+    {% for card in quarterly_cards %}
+    <div class="proposal-card">
+      <h3>{{ card.symbol }}{% if card.latest_quarter %} · {{ card.latest_quarter }}{% endif %}</h3>
+      <p class="note">{{ card.quarterly_summary or 'No quarterly summary recorded yet.' }}</p>
+      {% if card.quarterly_sector_model %}
+      <p class="note">Sector model: {{ card.quarterly_sector_model }}</p>
+      {% endif %}
+      {% if card.quarterly_flags %}
+      <p class="note">Flags: {{ card.quarterly_flags | join(', ') }}</p>
+      {% endif %}
+      {% if card.revenue_chart %}
+      <h4>Revenue by quarter</h4>
+      {{ card.revenue_chart | safe }}
+      {% endif %}
+      {% if card.profit_chart %}
+      <h4>Net profit by quarter</h4>
+      {{ card.profit_chart | safe }}
+      {% endif %}
+      {% if card.opm_chart %}
+      <h4>Operating margin trend</h4>
+      {{ card.opm_chart | safe }}
+      {% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="empty">No quarterly report history has been stored yet.</p>
+  {% endif %}
+</div>
+
 <div class="panel">
   <h2>Why the fund owns these</h2>
   <table>

@@ -136,6 +136,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "proposals": svc.pending_proposals(),
                 "approved": svc.approved_proposals(),
                 "history": svc.recent_decisions(),
+                "mandate": svc.mandate_summary(),
+                "analytics": svc.analytics_summary(),
             },
             service=svc,
         )
@@ -153,6 +155,32 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             {
                 "page": "holdings",
                 "holdings": svc.holdings(),
+                "mandate": svc.mandate_summary(),
+                "analytics": svc.analytics_summary(),
+                "quarterly_cards": [
+                    {
+                        **card,
+                        "revenue_chart": charts.line_chart(
+                            card["revenue_series"]["dates"],
+                            card["revenue_series"]["values"],
+                        )
+                        if card["revenue_series"]["has_values"]
+                        else "",
+                        "profit_chart": charts.line_chart(
+                            card["profit_series"]["dates"],
+                            card["profit_series"]["values"],
+                        )
+                        if card["profit_series"]["has_values"]
+                        else "",
+                        "opm_chart": charts.line_chart(
+                            card["opm_series"]["dates"],
+                            card["opm_series"]["values"],
+                        )
+                        if card["opm_series"]["has_values"]
+                        else "",
+                    }
+                    for card in svc.quarterly_report_cards()
+                ],
                 "sectors": sectors,
                 "sector_chart": charts.bar_chart(
                     [s["sector"] for s in sectors],

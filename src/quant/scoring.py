@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import Config, get_config
+from src.fundamentals.sector_models import supported_sector_metrics
 from src.logging_setup import get_logger
 from src.models import FactorScores, FundamentalSnapshot, TechnicalSnapshot
 from src.universe import Universe, load_universe
@@ -49,6 +50,7 @@ class MetricSpec:
     # Values outside this range are treated as data errors and dropped.
     valid_min: Optional[float] = None
     valid_max: Optional[float] = None
+    sector_models: Tuple[str, ...] = ()
 
 
 def _f(name: str) -> Callable[[FundamentalSnapshot, TechnicalSnapshot], Optional[float]]:
@@ -65,6 +67,10 @@ def _price_to_sma200(
     if not technical.last_price or not technical.sma_200:
         return None
     return (technical.last_price / technical.sma_200 - 1.0) * 100.0
+
+
+def _sector_metric(name: str) -> Callable[[FundamentalSnapshot, TechnicalSnapshot], Optional[float]]:
+    return lambda fundamental, _technical: fundamental.sector_metrics.get(name)
 
 
 METRIC_SPECS: Tuple[MetricSpec, ...] = (
@@ -126,6 +132,51 @@ METRIC_SPECS: Tuple[MetricSpec, ...] = (
     ),
     # --- Trend ---
     MetricSpec("price_vs_sma200", "trend", _price_to_sma200, weight=1.0, valid_min=-90, valid_max=200),
+    # --- Sector-aware overlays ---
+    MetricSpec(
+        "nim", "quality", _sector_metric("nim"),
+        weight=1.0, valid_min=-10, valid_max=20, sector_models=("banks",),
+    ),
+    MetricSpec(
+        "gnpa", "quality", _sector_metric("gnpa"),
+        lower_is_better=True, weight=1.0, valid_min=0, valid_max=30, sector_models=("banks",),
+    ),
+    MetricSpec(
+        "cet1", "quality", _sector_metric("cet1"),
+        weight=0.75, valid_min=0, valid_max=40, sector_models=("banks",),
+    ),
+    MetricSpec(
+        "arr", "growth", _sector_metric("arr"),
+        weight=1.0, valid_min=0, valid_max=1e12, sector_models=("saas",),
+    ),
+    MetricSpec(
+        "nrr", "quality", _sector_metric("nrr"),
+        weight=0.75, valid_min=0, valid_max=300, sector_models=("saas",),
+    ),
+    MetricSpec(
+        "rule_of_40", "growth", _sector_metric("rule_of_40"),
+        weight=1.0, valid_min=-100, valid_max=200, sector_models=("saas",),
+    ),
+    MetricSpec(
+        "same_store_sales", "growth", _sector_metric("same_store_sales"),
+        weight=0.75, valid_min=-100, valid_max=200, sector_models=("retail",),
+    ),
+    MetricSpec(
+        "capacity_utilisation", "quality", _sector_metric("capacity_utilisation"),
+        weight=0.75, valid_min=0, valid_max=120, sector_models=("manufacturing",),
+    ),
+    MetricSpec(
+        "realised_price", "value", _sector_metric("realised_price"),
+        weight=0.5, valid_min=0, valid_max=1e9, sector_models=("commodities",),
+    ),
+    MetricSpec(
+        "pre_sales", "growth", _sector_metric("pre_sales"),
+        weight=0.75, valid_min=0, valid_max=1e12, sector_models=("real_estate",),
+    ),
+    MetricSpec(
+        "arpu", "quality", _sector_metric("arpu"),
+        weight=0.75, valid_min=0, valid_max=1e6, sector_models=("telecom",),
+    ),
 )
 
 FACTOR_NAMES = ("quality", "value", "growth", "momentum", "trend")
@@ -165,6 +216,10 @@ class ScoringEngine:
             name: float(weights.get(name, 0.0)) for name in FACTOR_NAMES
         }
         self._clip = float(self._config.get("quant.zscore_clip", 3.0) or 3.0)
+        metric_weights = self._config.get("analytics.metric_weights", {}) or {}
+        self._metric_weight_overrides: Dict[str, float] = {
+            str(name): float(value) for name, value in metric_weights.items()
+        }
 
     # ------------------------------------------------------------------
     # Gates
@@ -244,6 +299,26 @@ class ScoringEngine:
         if not fundamental.is_usable:
             failures.append("insufficient fundamental data")
 
+        allowed_caps = (
+            self._config.get("mandate.market_cap_limits.allowed", []) or []
+        )
+        if (
+            allowed_caps
+            and fundamental.market_cap_bucket
+            and fundamental.market_cap_bucket not in set(str(v) for v in allowed_caps)
+        ):
+            failures.append(
+                f"market cap bucket {fundamental.market_cap_bucket} outside mandate"
+            )
+
+        preferred_sector_models = (
+            self._config.get("analytics.preferred_sector_models", []) or []
+        )
+        if preferred_sector_models and fundamental.sector_model not in preferred_sector_models:
+            failures.append(
+                f"sector model {fundamental.sector_model or 'unknown'} not preferred by persona"
+            )
+
         return failures
 
     # ------------------------------------------------------------------
@@ -262,9 +337,16 @@ class ScoringEngine:
 
         # Build the raw metric matrix.
         raw = pd.DataFrame(index=symbols, columns=[s.name for s in METRIC_SPECS], dtype=float)
+        supported_map = {
+            symbol: set(supported_sector_metrics(fundamentals[symbol].sector_model))
+            for symbol in symbols
+        }
         for spec in METRIC_SPECS:
             column: List[Optional[float]] = []
             for symbol in symbols:
+                if spec.sector_models and fundamentals[symbol].sector_model not in spec.sector_models:
+                    column.append(np.nan)
+                    continue
                 value = spec.extract(fundamentals[symbol], technicals[symbol])
                 if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
                     column.append(np.nan)
@@ -305,8 +387,9 @@ class ScoringEngine:
             for spec in specs:
                 column = zscores[spec.name]
                 present = column.notna()
-                weighted_sum = weighted_sum.add(column.fillna(0.0) * spec.weight, fill_value=0.0)
-                weight_total = weight_total.add(present.astype(float) * spec.weight, fill_value=0.0)
+                metric_weight = self._metric_weight_overrides.get(spec.name, spec.weight)
+                weighted_sum = weighted_sum.add(column.fillna(0.0) * metric_weight, fill_value=0.0)
+                weight_total = weight_total.add(present.astype(float) * metric_weight, fill_value=0.0)
             factor_frame[factor] = (weighted_sum / weight_total.replace(0.0, np.nan)).fillna(0.0)
 
         composite = pd.Series(0.0, index=symbols)
@@ -327,6 +410,28 @@ class ScoringEngine:
                 for spec in METRIC_SPECS
                 if not pd.isna(raw.at[symbol, spec.name])
             }
+            applicable_specs = [
+                spec
+                for spec in METRIC_SPECS
+                if not spec.sector_models
+                or fundamentals[symbol].sector_model in spec.sector_models
+            ]
+            supported_metrics = sorted(
+                set(contributing.keys()) | supported_map[symbol]
+            )
+            unsupported_metrics = sorted(
+                set(fundamentals[symbol].unsupported_metrics)
+                | {
+                    metric
+                    for metric in supported_map[symbol]
+                    if metric not in contributing
+                }
+            )
+            metric_coverage = (
+                len(contributing) / len(applicable_specs) * 100.0
+                if applicable_specs
+                else None
+            )
             results[symbol] = FactorScores(
                 symbol=symbol,
                 quality=round(float(factor_frame.at[symbol, "quality"]), 4),
@@ -340,6 +445,12 @@ class ScoringEngine:
                 passes_gates=not failures,
                 gate_failures=failures,
                 contributing_metrics=contributing,
+                sector_model=fundamentals[symbol].sector_model,
+                supported_metrics=supported_metrics,
+                unsupported_metrics=unsupported_metrics,
+                metric_coverage_pct=round(metric_coverage, 1) if metric_coverage is not None else None,
+                valuation_summary=fundamentals[symbol].valuation_range,
+                macro_exposures=dict(fundamentals[symbol].macro_exposures),
             )
 
         eligible = sum(1 for s in results.values() if s.passes_gates)

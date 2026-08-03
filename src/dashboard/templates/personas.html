@@ -61,6 +61,9 @@
   <div class="persona-card">
     <h2><a href="/?persona={{ card.persona_id }}">{{ card.persona_id | capitalize }}</a></h2>
     <p class="desc">{{ card.description }}</p>
+    {% if card.analytics.sector_models %}
+      <p class="desc">Sector modules: {{ card.analytics.sector_models | join(', ') }}</p>
+    {% endif %}
     {% if card.intraday %}
       <p class="desc"><span class="tag rule">Paper/backtest</span> Intraday strategies enabled.</p>
     {% endif %}
@@ -89,6 +92,11 @@
         </div>
       </div>
     </div>
+    <p class="desc">
+      Mandate: {{ card.mandate.horizon_years }}y horizon, {{ card.mandate.target_excess_return_pct | pct(1) }}
+      excess-return target, stock cap {{ card.mandate.max_stock_weight_pct | pct(1) }},
+      sector cap {{ card.mandate.max_sector_weight_pct | pct(1) }}.
+    </p>
     {% else %}
       {% if card.intraday_summary %}
       <div class="card-stats">

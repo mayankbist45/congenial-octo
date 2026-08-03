@@ -191,6 +191,24 @@ class Config:
         return self.section("fundamentals")
 
     @property
+    def persona_definition(self) -> Dict[str, Any]:
+        personas = self.raw.get("personas", {})
+        if not isinstance(personas, dict):
+            return {}
+        value = personas.get(self.persona_id)
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def mandate(self) -> Dict[str, Any]:
+        value = self.get("mandate", {}) or {}
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def analytics(self) -> Dict[str, Any]:
+        value = self.get("analytics", {}) or {}
+        return value if isinstance(value, dict) else {}
+
+    @property
     def db_path(self) -> Path:
         """Where the SQLite journal lives, when SQLite is the backend."""
         return self.path("database.path", "data/fund.db")
@@ -260,6 +278,18 @@ class Config:
         if not self.path("universe.file").exists():
             problems.append(f"universe file not found: {self.get('universe.file')}")
 
+        mandate = self.mandate
+        if mandate:
+            cash_bounds = mandate.get("cash_bounds_pct", {}) or {}
+            minimum = cash_bounds.get("min")
+            maximum = cash_bounds.get("max")
+            if minimum is not None and maximum is not None and float(minimum) > float(maximum):
+                problems.append("mandate.cash_bounds_pct.min cannot exceed max")
+
+            permitted = mandate.get("permitted_instruments", []) or []
+            if permitted and not isinstance(permitted, list):
+                problems.append("mandate.permitted_instruments must be a list")
+
         return problems
 
 
@@ -295,7 +325,70 @@ def get_config(settings_path: Optional[str] = None) -> Config:
     path = Path(settings_path) if settings_path else DEFAULT_SETTINGS_PATH
     with open(path, "r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
+    _apply_policy_defaults(raw)
     return Config(raw=raw, secrets=load_secrets())
+
+
+def _apply_policy_defaults(raw: Dict[str, Any]) -> None:
+    """Backfill mandate and analytics blocks for older configs."""
+    fund = raw.setdefault("fund", {})
+    risk = raw.setdefault("risk", {})
+    universe = raw.setdefault("universe", {})
+    mandate = raw.setdefault("mandate", {})
+    analytics = raw.setdefault("analytics", {})
+
+    mandate.setdefault("benchmark_label", fund.get("benchmark_label"))
+    mandate.setdefault("benchmark_symbol", fund.get("benchmark_symbol"))
+    mandate.setdefault("investment_horizon_years", 3)
+    mandate.setdefault("target_excess_return_pct", 4.0)
+    mandate.setdefault("target_positions", fund.get("target_positions"))
+    mandate.setdefault("max_stock_weight_pct", risk.get("max_position_pct"))
+    mandate.setdefault("max_sector_weight_pct", risk.get("max_sector_pct"))
+    mandate.setdefault("max_tracking_error_pct", risk.get("max_tracking_error_pct"))
+    mandate.setdefault("max_drawdown_pct", 20.0)
+    mandate.setdefault(
+        "liquidity",
+        {
+            "min_avg_daily_turnover_inr": universe.get("min_avg_daily_turnover_inr"),
+            "max_position_pct_of_adv": universe.get("max_position_pct_of_adv"),
+            "days_to_liquidate": 5.0,
+        },
+    )
+    mandate.setdefault(
+        "cash_bounds_pct",
+        {
+            "min": fund.get("min_cash_buffer_pct", 5.0),
+            "max": 25.0,
+        },
+    )
+    mandate.setdefault("turnover_budget_pct", risk.get("annual_turnover_budget_pct"))
+    mandate.setdefault("market_cap_limits", {"allowed": ["large", "mid", "small"]})
+    mandate.setdefault("permitted_instruments", ["equity"])
+    mandate.setdefault("foreign_securities_allowed", False)
+    mandate.setdefault("derivatives_allowed", False)
+    mandate.setdefault("leverage_allowed", False)
+    mandate.setdefault("tax_constraints", ["respect long-term holding bias where practical"])
+    mandate.setdefault("esg_exclusions", [])
+    mandate.setdefault("governance_exclusions", ["promoter pledging above internal limits"])
+    mandate.setdefault("rebalancing_policy", "rebalance on drift, deep review, or thesis change")
+    mandate.setdefault("emergency_exit_policy", "exit on mandatory risk triggers or thesis-breaking governance events")
+
+    analytics.setdefault("enabled", True)
+    analytics.setdefault(
+        "sector_models",
+        [
+            "banks",
+            "insurance",
+            "saas",
+            "retail",
+            "manufacturing",
+            "commodities",
+            "real_estate",
+            "telecom",
+        ],
+    )
+    analytics.setdefault("preferred_sector_models", [])
+    analytics.setdefault("metric_weights", {})
 
 
 def list_personas(settings_path: Optional[str] = None) -> List[str]:
