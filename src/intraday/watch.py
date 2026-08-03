@@ -14,8 +14,8 @@ from src.intraday.agent import IntradayAgent
 from src.intraday.data import IntradayDataService
 from src.intraday.engine_helpers import collect_signals
 from src.intraday.models import IntradaySignal, IntradayTrade, PaperPosition, PaperState, RankedStock
-from src.intraday.cross_stat_math import is_two_leg_persona
 from src.intraday.persona_rankers import filter_ranked_for_persona, load_ranker
+from src.intraday.reporting import save_summary, summarize_state
 from src.intraday.state import PaperStateStore
 from src.intraday.strategies import load_strategies
 
@@ -82,7 +82,7 @@ class IntradayWatchEngine:
 
         if self._can_enter_new_trades(state, now):
             watch_symbols = {str(w["symbol"]).upper() for w in state.watchlist if w.get("in_play")}
-            if watch_symbols and not is_two_leg_persona(self._config):
+            if watch_symbols and self._config.persona_id != "spread":
                 ranked = [r for r in ranked if r.symbol in watch_symbols]
             self._open_new_positions(state, frames, ranked, now)
 
@@ -199,7 +199,7 @@ class IntradayWatchEngine:
         ranked: List[RankedStock],
         state: PaperState,
     ) -> List[tuple[float, IntradaySignal]]:
-        if state.watchlist and not is_two_leg_persona(self._config):
+        if state.watchlist and self._config.persona_id != "spread":
             watch_symbols = {str(w["symbol"]).upper() for w in state.watchlist if w.get("in_play")}
             if watch_symbols:
                 ranked = [r for r in ranked if r.symbol in watch_symbols]

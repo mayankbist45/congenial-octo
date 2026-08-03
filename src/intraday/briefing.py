@@ -26,8 +26,6 @@ def build_catalyst_briefing(
         return _build_flux_flow_briefing(config, ranked, frames, as_of, daily_pnl)
     if persona_id == "spread":
         return _build_spread_analyst_briefing(config, ranked, frames, as_of, daily_pnl)
-    if persona_id == "xstat":
-        return _build_xstat_analyst_briefing(config, ranked, frames, as_of, daily_pnl)
     if persona_id == "slice":
         return _build_slice_monitor_briefing(config, ranked, frames, as_of, daily_pnl)
     return _build_calan_catalyst_briefing(config, ranked, frames, as_of, daily_pnl)
@@ -54,10 +52,6 @@ def build_trade_gate_briefing(
         )
     if persona_id == "spread":
         return _build_spread_gate_briefing(
-            config, signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
-        )
-    if persona_id == "xstat":
-        return _build_xstat_gate_briefing(
             config, signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
         )
     if persona_id == "slice":
@@ -210,53 +204,6 @@ def _build_spread_analyst_briefing(
         lines.append(f"  {leg_a}/{leg_b}: spread_z={spread_z}")
     lines.append("")
     lines.append("Return pair_opportunities JSON (0-2 technical divergences).")
-    return "\n".join(lines)
-
-
-def _build_xstat_analyst_briefing(
-    config: Config,
-    ranked: List[RankedStock],
-    frames: Dict[str, pd.DataFrame],
-    as_of: datetime,
-    daily_pnl: float,
-) -> str:
-    from src.intraday.cross_stat_math import configured_cross_baskets, residual_z_at
-
-    baskets = configured_cross_baskets(config)
-    beta_lookback = int(config.get("intraday.cross_beta_lookback", 60) or 60)
-    min_bars = int(config.get("intraday.cross_min_bars", 25) or 25)
-    lines = [
-        f"CROSS-ASSET STAT-ARB — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
-        f"Persona: {config.persona_id}",
-        f"Capital: Rs {config.secrets.initial_capital:,.0f}",
-        f"Daily P&L so far: Rs {daily_pnl:,.2f}",
-        "",
-        "CONFIGURED BASKETS (anchor → leg):",
-    ]
-    for basket in baskets:
-        anchor = frames.get(basket.anchor)
-        leg = frames.get(basket.leg)
-        residual_z = "n/a"
-        beta = basket.beta
-        if anchor is not None and leg is not None and not anchor.empty and not leg.empty:
-            residual_z_val = residual_z_at(
-                anchor,
-                leg,
-                beta=basket.beta,
-                beta_lookback=beta_lookback,
-                min_bars=min_bars,
-            )
-            if residual_z_val is not None:
-                residual_z = f"{residual_z_val:+.2f}"
-            if beta is None:
-                from src.intraday.cross_stat_math import hedge_beta
-
-                beta = hedge_beta(anchor, leg, beta_lookback)
-        lines.append(
-            f"  {basket.anchor} → {basket.leg}: residual_z={residual_z} beta={beta}"
-        )
-    lines.append("")
-    lines.append("Return basket_opportunities JSON (0-2 technical divergences).")
     return "\n".join(lines)
 
 
@@ -428,39 +375,6 @@ def _build_spread_gate_briefing(
             f"Reason: {signal.reason}",
             "",
             "Approve or veto this pair trade. Return JSON only.",
-        ]
-    )
-
-
-def _build_xstat_gate_briefing(
-    config: Config,
-    signal: IntradaySignal,
-    ranked: RankedStock,
-    frame: pd.DataFrame,
-    as_of: datetime,
-    daily_pnl: float,
-    watchlist_entry: Optional[Dict[str, object]],
-    estimated_costs: float,
-) -> str:
-    basket_id = str(watchlist_entry.get("pair_id", "n/a")) if watchlist_entry else "n/a"
-    residual = ranked.residual_z if ranked.residual_z is not None else ranked.spread_z
-    beta = ranked.hedge_beta if ranked.hedge_beta is not None else "n/a"
-    return "\n".join(
-        [
-            f"CROSS-ASSET CONVERGENCE GATE — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
-            f"Equity leg: {signal.symbol}",
-            f"Basket: {basket_id}",
-            f"Residual z: {residual}",
-            f"Hedge beta: {beta}",
-            f"Strategy: {signal.strategy}",
-            f"Side: {signal.side}",
-            f"Entry: {signal.entry_price:.2f}",
-            f"Anchor hedge leg: {signal.pair_leg or 'n/a'}",
-            f"Estimated round-trip costs (both legs): Rs {estimated_costs:,.2f}",
-            f"Daily P&L: Rs {daily_pnl:,.2f}",
-            f"Reason: {signal.reason}",
-            "",
-            "Approve or veto this beta-hedged basket. Return JSON only.",
         ]
     )
 

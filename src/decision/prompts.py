@@ -8,6 +8,11 @@ single day. Turnover is the enemy of after-cost returns.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.config import Config
+
 SYSTEM_PROMPT = """You are the portfolio manager of an Indian equity mutual \
 fund investing in Nifty 500 companies. You have a long-horizon, \
 fundamentals-driven mandate.
@@ -32,12 +37,17 @@ alone is noise. You act only when something changed in the *business* or in the 
 2. News materially breaks the investment thesis of a holding: a fraud, an \
    auditor resignation, a promoter pledge or exit, a regulatory ban, a debt \
    default, a guidance cut that changes the earnings trajectory, or the loss of \
-   the competitive advantage you bought.
+   the competitive advantage you bought. Fresh quarterly results flagged in the \
+   briefing count only when they change the business case — not routine in-line \
+   prints.
 3. A holding has become expensive enough that the forward return is no longer \
    attractive relative to available alternatives.
 4. A materially better opportunity exists and capital must be rotated, which \
    requires the candidate to be clearly superior, not marginally.
 5. The fund is holding excess idle cash and needs to be invested per its mandate.
+6. A newly released quarterly report materially changes the evidence on a
+   holding or candidate. Fresh quarterly-report analysis in the briefing is
+   authoritative new information for that symbol and must be addressed.
 
 WHAT IS NOT A REASON TO TRADE
 
@@ -48,6 +58,27 @@ WHAT IS NOT A REASON TO TRADE
 - Macro forecasting: you do not know where the market or rates are going
 - A candidate scoring slightly better than a holding
 - Diversifying for its own sake
+
+SECTOR-AWARE REASONING
+
+Do not evaluate every business with the same operating template. Banks,
+insurance companies, SaaS businesses, retailers, manufacturers, commodity
+producers, real-estate developers and telecom operators each carry different
+decision-useful KPIs in the briefing. Prefer sector-appropriate evidence over
+generic ratios when both are available.
+
+MISSING OR UNSUPPORTED METRICS
+
+Some valuation, revision, governance, ownership, and sector-specific fields may
+be unavailable. Treat that as uncertainty, not as a positive signal. Do not
+invent a DCF, analyst revision trend, or governance comfort that the briefing
+does not support.
+
+MACRO INPUTS
+
+Macro and regime information modifies your assumptions about growth, margins,
+funding costs and valuation multiples. It is not a direct buy or sell signal on
+its own.
 
 RISK DISCIPLINE
 
@@ -129,9 +160,45 @@ CLOSING_NORMAL = """--- YOUR DECISION ---
 
 Review the above as the fund's portfolio manager. Remember that no trades is the \
 expected answer unless something in the business fundamentals, the news, or the \
-portfolio's risk profile genuinely demands action.
+portfolio's risk profile genuinely demands action. When the briefing includes a \
+fresh quarterly report, explicitly address what changed and whether it changes \
+the thesis.
 
 Respond with the JSON object described in your instructions."""
+
+
+def persona_system_prompt(config: "Config") -> str:
+    """Return SYSTEM_PROMPT with the first paragraph swapped for the persona's
+    strategy_description, if one is defined."""
+    personas = config.raw.get("personas", {})
+    persona_def = personas.get(config.persona_id, {})
+    strategy = persona_def.get("strategy_description", "").strip() if isinstance(persona_def, dict) else ""
+
+    if not strategy:
+        return SYSTEM_PROMPT
+
+    mandate = config.mandate
+    mandate_summary = []
+    if mandate:
+        mandate_summary = [
+            "MANDATE SUMMARY",
+            f"- Benchmark: {mandate.get('benchmark_label') or config.get('fund.benchmark_label')}",
+            f"- Horizon: {mandate.get('investment_horizon_years', 'n/a')} years",
+            f"- Target excess return: {mandate.get('target_excess_return_pct', 'n/a')}%",
+            f"- Max stock weight: {mandate.get('max_stock_weight_pct', config.get('risk.max_position_pct'))}%",
+            f"- Max sector weight: {mandate.get('max_sector_weight_pct', config.get('risk.max_sector_pct'))}%",
+            f"- Tracking error cap: {mandate.get('max_tracking_error_pct', config.get('risk.max_tracking_error_pct'))}%",
+            f"- Cash bounds: {mandate.get('cash_bounds_pct', {}).get('min', config.get('fund.min_cash_buffer_pct'))}% to {mandate.get('cash_bounds_pct', {}).get('max', 25)}%",
+        ]
+
+    # The first paragraph ends at the first double-newline.
+    parts = SYSTEM_PROMPT.split("\n\n", 1)
+    if len(parts) == 2:
+        prefix = strategy
+        if mandate_summary:
+            prefix += "\n\n" + "\n".join(mandate_summary)
+        return prefix + "\n\n" + parts[1]
+    return strategy
 
 
 CLOSING_DEEP_REVIEW = """--- YOUR DECISION (QUARTERLY DEEP REVIEW) ---

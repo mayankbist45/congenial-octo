@@ -10,7 +10,6 @@ from src.config import Config
 from src.intraday.models import RankedStock
 from src.intraday.ofi import ofi_divergence, ofi_z_proxy
 from src.intraday.ranking import IntradayRanker
-from src.intraday.cross_stat_math import configured_cross_baskets, hedge_beta, residual_z_at
 from src.intraday.spread_math import configured_pairs, spread_z_at
 
 
@@ -191,81 +190,6 @@ class SpreadRanker(IntradayRanker):
         return ranked
 
 
-class XStatRanker(IntradayRanker):
-    """Rank cross-asset baskets by |beta-hedged residual z| × liquidity."""
-
-    def rank(
-        self,
-        frames: Dict[str, pd.DataFrame],
-        previous_days: Optional[Dict[str, Dict[str, float]]] = None,
-    ) -> List[RankedStock]:
-        ranked: List[RankedStock] = []
-        seen: set[str] = set()
-        min_bars = int(self._config.get("intraday.cross_min_bars", 25) or 25)
-        beta_lookback = int(self._config.get("intraday.cross_beta_lookback", 60) or 60)
-        entry_z = float(self._config.get("intraday.cross_entry_z", 2.0) or 2.0)
-
-        for basket in configured_cross_baskets(self._config):
-            anchor = frames.get(basket.anchor)
-            leg = frames.get(basket.leg)
-            if anchor is None or leg is None or anchor.empty or leg.empty:
-                continue
-            beta = basket.beta if basket.beta is not None else hedge_beta(
-                anchor, leg, beta_lookback
-            )
-            z = residual_z_at(
-                anchor,
-                leg,
-                beta=beta,
-                beta_lookback=beta_lookback,
-                min_bars=min_bars,
-            )
-            if z is None:
-                continue
-            turnover_leg = float((leg["close"] * leg["volume"]).sum())
-            turnover_anchor = float((anchor["close"] * anchor["volume"]).sum())
-            liquidity = min(min(turnover_leg, turnover_anchor) / 1e8, 4.0) * 25.0
-            residual_score = min(abs(z), 4.0) * 35.0
-            beta_stability = 15.0 if 0.2 <= abs(beta) <= 2.5 else -10.0
-            score = residual_score + liquidity + beta_stability
-            basket_id = basket.basket_id
-
-            for symbol, frame, turnover in (
-                (basket.leg, leg, turnover_leg),
-                (basket.anchor, anchor, turnover_anchor),
-            ):
-                if symbol in seen:
-                    continue
-                seen.add(symbol)
-                trend = self.trend_cleanliness(frame, self._config)
-                ranked.append(
-                    RankedStock(
-                        symbol=symbol,
-                        score=round(score, 3),
-                        turnover=turnover,
-                        volume_expansion=1.0,
-                        range_pct=(float(frame["high"].max()) / float(frame["low"].min()) - 1.0)
-                        * 100.0,
-                        gap_pct=None,
-                        vwap_distance_pct=None,
-                        prior_level_distance_pct=None,
-                        trend_cleanliness=trend,
-                        in_play=abs(z) >= entry_z * 0.9,
-                        residual_z=round(z, 3),
-                        hedge_beta=round(beta, 3),
-                        spread_z=round(z, 3),
-                        pair_id=basket_id,
-                        reasons=[
-                            f"basket {basket_id}",
-                            f"residual_z {z:+.2f}",
-                            f"beta {beta:.2f}",
-                        ],
-                    )
-                )
-        ranked.sort(key=lambda r: r.score, reverse=True)
-        return ranked
-
-
 class SliceRanker(IntradayRanker):
     """Rank symbols with active parent orders."""
 
@@ -310,8 +234,6 @@ def load_ranker(config: Config) -> IntradayRanker:
         return FluxRanker(config)
     if persona == "spread":
         return SpreadRanker(config)
-    if persona == "xstat":
-        return XStatRanker(config)
     if persona == "slice":
         return SliceRanker(config)
     return IntradayRanker(config)

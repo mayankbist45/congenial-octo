@@ -52,6 +52,52 @@ risk:
   # the names chosen, not for an accidental sector bet.
   min_idiosyncratic_risk_share_pct: 40.0
 
+mandate:
+  benchmark_label: "Nifty 500"
+  benchmark_symbol: "^CRSLDX"
+  investment_horizon_years: 3
+  target_excess_return_pct: 4.0
+  target_positions: 25
+  max_stock_weight_pct: 8.0
+  max_sector_weight_pct: 25.0
+  max_tracking_error_pct: 12.0
+  max_drawdown_pct: 20.0
+  liquidity:
+    min_avg_daily_turnover_inr: 50000000
+    max_position_pct_of_adv: 5.0
+    days_to_liquidate: 5.0
+  cash_bounds_pct:
+    min: 5.0
+    max: 25.0
+  turnover_budget_pct: 75.0
+  market_cap_limits:
+    allowed: ["large", "mid", "small"]
+  permitted_instruments: ["equity"]
+  foreign_securities_allowed: false
+  derivatives_allowed: false
+  leverage_allowed: false
+  tax_constraints:
+    - "Prefer low-turnover decisions where thesis is unchanged"
+  esg_exclusions: []
+  governance_exclusions:
+    - "Avoid persistent promoter pledging or poor minority-shareholder treatment"
+  rebalancing_policy: "Rebalance on drift, deep review, or thesis change"
+  emergency_exit_policy: "Exit on mandatory risk triggers or thesis-breaking governance events"
+
+analytics:
+  enabled: true
+  sector_models:
+    - banks
+    - insurance
+    - saas
+    - retail
+    - manufacturing
+    - commodities
+    - real_estate
+    - telecom
+  preferred_sector_models: []
+  metric_weights: {}
+
 cadence:
   # Deep full-portfolio review only once a quarter; daily runs are monitoring.
   deep_review_months: [1, 4, 7, 10]
@@ -81,6 +127,13 @@ quant:
     min_roe_pct: 10.0
     max_pe: 80.0
     min_revenue_growth_pct: 0.0
+
+liquid_fund:
+  enabled: false
+  scheme_code: "119551"  # Nippon India Liquid Fund Direct Growth
+  scheme_name: "Nippon India Liquid Fund"
+  # Only park cash above this threshold in liquid fund
+  min_cash_for_parking_pct: 10.0
 
 market_data:
   history_days: 500             # Enough for 200-DMA plus a year of context
@@ -161,6 +214,19 @@ llm:
   max_output_tokens: 2000
   timeout_seconds: 180
 
+earnings:
+  # Poll Screener.in quarterly tables during results season, analyse fresh
+  # prints, and feed the decision briefing. Triggers are REVIEW/OPPORTUNITY
+  # only — the LLM and risk engine still decide whether to trade. Mechanical
+  # backtest rules (S1/S2/S3 auto-bets) are NOT wired; see docs/earnings/.
+  enabled: true
+  poll_holdings: true
+  poll_candidates: true
+  max_candidates: 10
+  llm_analyze: true
+  cache_ttl_hours: 24
+  results_window_days: 60
+
 execution:
   # Unattended mode: approve the fund's own proposals and place them without a
   # human. Restricted to paper trading in code — with DRY_RUN=false the fund
@@ -175,8 +241,28 @@ execution:
   # Refuse to trade if the market order book looks abnormal.
   max_slippage_pct: 1.0
 
-# Broker connectors — pluggable adapters; Angel One stays the default for India.
-# Set connectors.broker: alpaca (and connectors.market_region: US) for US paper.
+angelone:
+  # Historical getCandleData is throttled per SmartAPI app. A second API key
+  # (ANGELONE_DATA2_API_KEY in .env) doubles throughput via candle_pool.
+  min_call_interval_seconds: 1.0
+  candle_call_interval_seconds: 2.0
+  rate_limit_backoff_seconds: 45.0
+  # Watch mode skips API when cache is this fresh (defaults to bar size + 1 min).
+  candle_cache_stale_minutes: 6
+
+alpaca:
+  # US equities via Alpaca Markets (paper-api.alpaca.markets by default).
+  min_call_interval_seconds: 0.25
+
+# Default broker for top-level config; US personas override with broker.provider.
+broker:
+  provider: angelone
+
+market:
+  region: IN
+  currency: INR
+
+# Pluggable broker connectors; US personas override via personas_us.yaml.
 connectors:
   broker: angelone
   market_region: IN
@@ -199,6 +285,13 @@ database:
 logging:
   level: "INFO"
   file: "data/fund.log"
+
+# ---------------------------------------------------------------------------
+# Personas — named investment strategies that each run as an independent fund.
+#
+# Every key under a persona is deep-merged onto the top-level defaults above.
+# Only override what differs; everything else is inherited.
+# ---------------------------------------------------------------------------
 personas:
   balanced:
     enabled: true
@@ -604,80 +697,3 @@ personas:
       parent_orders: []
       agent:
         enabled: true
-
-  xstat:
-    enabled: false
-    description: "Xstat — cross-asset beta-hedged stat-arb (ETF vs equity)"
-    strategy_description: >
-      Trades rolling beta-hedged residuals between Nifty/Bank ETF anchors and
-      liquid single names. Two-leg MIS execution. See docs/intraday/personas/xstat.md.
-    capital_inr: 500000
-    universe:
-      file: "data/nifty50.csv"
-      min_avg_daily_turnover_inr: 100000000
-    execution:
-      product_type: "INTRADAY"
-      order_type: "LIMIT"
-      auto_approve: false
-    intraday:
-      enabled: true
-      mode: "paper"
-      strategies:
-        - cross_zscore
-      cross_baskets:
-        - anchor: NIFTYBEES
-          leg: RELIANCE
-        - anchor: NIFTYBEES
-          leg: TCS
-        - anchor: BANKBEES
-          leg: HDFCBANK
-        - anchor: BANKBEES
-          leg: ICICIBANK
-      default_interval: "FIVE_MINUTE"
-      max_trades_per_day: 2
-      max_position_value_pct: 12.0
-      risk_per_trade_pct: 0.25
-      max_daily_loss_pct: 1.0
-      trade_window_start: "09:45"
-      trade_window_end: "14:00"
-      cross_entry_z: 2.0
-      cross_exit_z: 0.25
-      cross_min_bars: 25
-      cross_beta_lookback: 60
-      cross_max_widen_z: 0.35
-      cross_stop_buffer_pct: 0.30
-      watch_scan_size: 12
-      ranked_universe_size: 8
-      agent:
-        enabled: true
-        min_watch_confidence: 0.50
-        min_trade_confidence: 0.50
-
-  balanced_us:
-    enabled: true
-    description: "Balanced US — S&P 500 GARP via Alpaca paper"
-    strategy_description: >
-      US equity book on the S&P 500, mirroring the balanced GARP mandate.
-      Orders route to Alpaca paper trading; Yahoo Finance supplies daily history
-      for scoring. Run with: python run_daily.py status --persona balanced_us
-    capital_usd: 100000
-    market:
-      region: US
-      currency: USD
-    broker:
-      provider: alpaca
-    fund:
-      name: "AI Managed US Equity Fund"
-      benchmark_symbol: "^GSPC"
-      benchmark_label: "S&P 500"
-      base_currency: USD
-      target_positions: 25
-      max_positions: 30
-      min_cash_buffer_pct: 5.0
-    universe:
-      file: "data/sp500.csv"
-    execution:
-      product_type: "CASH"
-      order_type: "LIMIT"
-      exchange: "US"
-      auto_approve: false

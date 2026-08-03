@@ -137,8 +137,6 @@ class IntradayAgent:
             return self._flux_catalyst_rules(ranked)
         if persona_id == "spread":
             return self._spread_catalyst_rules(ranked)
-        if persona_id == "xstat":
-            return self._xstat_catalyst_rules(ranked)
         if persona_id == "slice":
             return self._slice_catalyst_rules()
         return self._calan_catalyst_rules(ranked)
@@ -329,92 +327,6 @@ class IntradayAgent:
             "generated_by_llm": False,
         }
 
-    def _xstat_catalyst_rules(self, ranked: List[RankedStock]) -> dict:
-        entry_z = float(self._config.get("intraday.cross_entry_z", 2.0) or 2.0)
-        opportunities = []
-        watchlist = []
-        seen: set[str] = set()
-        for item in ranked:
-            if not item.pair_id or item.residual_z is None:
-                continue
-            if item.pair_id in seen:
-                continue
-            if abs(item.residual_z) < entry_z * 0.9:
-                continue
-            parts = item.pair_id.split(":", 1)
-            if len(parts) != 2:
-                continue
-            anchor, leg = parts
-            direction = "short_residual" if item.residual_z > 0 else "long_residual"
-            conf = min(0.95, 0.5 + abs(item.residual_z) * 0.1)
-            opportunities.append(
-                {
-                    "anchor": anchor,
-                    "leg": leg,
-                    "residual_z": item.residual_z,
-                    "hedge_beta": item.hedge_beta or 1.0,
-                    "divergence_type": "technical",
-                    "cointegration_ok": True,
-                    "direction": direction,
-                    "confidence": round(conf, 2),
-                    "rationale": f"Rules residual z={item.residual_z:+.2f}",
-                }
-            )
-            for symbol in (anchor, leg):
-                watchlist.append(
-                    {
-                        "symbol": symbol,
-                        "in_play": True,
-                        "direction_bias": "either",
-                        "confidence": round(conf, 2),
-                        "pair_id": item.pair_id,
-                        "rationale": f"Basket residual z={item.residual_z:+.2f}",
-                    }
-                )
-            seen.add(item.pair_id)
-            if len(opportunities) >= 2:
-                break
-        if not opportunities:
-            from src.intraday.cross_stat_math import configured_cross_baskets
-
-            for basket in configured_cross_baskets(self._config):
-                if basket.basket_id in seen:
-                    continue
-                opportunities.append(
-                    {
-                        "anchor": basket.anchor,
-                        "leg": basket.leg,
-                        "residual_z": entry_z,
-                        "hedge_beta": basket.beta or 1.0,
-                        "divergence_type": "technical",
-                        "cointegration_ok": True,
-                        "direction": "short_residual",
-                        "confidence": 0.55,
-                        "rationale": "Rules cross-asset fallback.",
-                    }
-                )
-                for symbol in (basket.anchor, basket.leg):
-                    watchlist.append(
-                        {
-                            "symbol": symbol,
-                            "in_play": True,
-                            "direction_bias": "either",
-                            "confidence": 0.55,
-                            "pair_id": basket.basket_id,
-                            "rationale": "Rules cross-asset fallback.",
-                        }
-                    )
-                seen.add(basket.basket_id)
-                if len(opportunities) >= 2:
-                    break
-        return {
-            "session_view": "Rules-only cross-asset stat-arb scan.",
-            "trade_day_quality": "fair" if opportunities else "poor",
-            "basket_opportunities": opportunities,
-            "watchlist": watchlist,
-            "generated_by_llm": False,
-        }
-
     def _slice_catalyst_rules(self) -> dict:
         orders = self._config.get("intraday.parent_orders") or []
         schedules = []
@@ -475,10 +387,6 @@ class IntradayAgent:
             )
         if persona_id == "spread":
             return self._spread_gate_rules(
-                signal, ranked, as_of, daily_pnl, watchlist_entry
-            )
-        if persona_id == "xstat":
-            return self._xstat_gate_rules(
                 signal, ranked, as_of, daily_pnl, watchlist_entry
             )
         if persona_id == "slice":
@@ -734,18 +642,6 @@ class IntradayAgent:
             "rationale": "; ".join(veto_reasons) if veto_reasons else "Convergence gate passed",
             "generated_by_llm": False,
         }
-
-    def _xstat_gate_rules(
-        self,
-        signal: IntradaySignal,
-        ranked: RankedStock,
-        as_of: datetime,
-        daily_pnl: float,
-        watchlist_entry: Optional[Dict[str, object]],
-    ) -> dict:
-        return self._spread_gate_rules(
-            signal, ranked, as_of, daily_pnl, watchlist_entry
-        )
 
     def _slice_gate_rules(
         self,

@@ -27,6 +27,7 @@ from src.decision.prompts import (
     DEEP_REVIEW_ADDENDUM,
     SYSTEM_PROMPT,
     USER_TEMPLATE,
+    persona_system_prompt,
 )
 from src.llm import LLMClient, LLMUnavailable
 from src.logging_setup import get_logger
@@ -36,8 +37,10 @@ from src.models import (
     FactorScores,
     FundamentalSnapshot,
     NewsDigest,
+    EarningsDigest,
     PortfolioRiskProfile,
     PortfolioState,
+    QuarterlyReportContext,
     Severity,
     TechnicalSnapshot,
     TradeProposal,
@@ -94,7 +97,9 @@ class DecisionEngine:
         triggers: List[Trigger],
         candidates: List[FactorScores],
         digest: Optional[NewsDigest] = None,
+        earnings: Optional[EarningsDigest] = None,
         risk_profile: Optional[PortfolioRiskProfile] = None,
+        quarterly_context: Optional[QuarterlyReportContext] = None,
         as_of: Optional[date] = None,
     ) -> DailyDecision:
         """Run one full decision cycle."""
@@ -114,7 +119,9 @@ class DecisionEngine:
             triggers=triggers,
             candidates=candidates,
             digest=digest,
+            earnings=earnings,
             risk_profile=risk_profile,
+            quarterly_context=quarterly_context,
             turnover=turnover,
             is_deep_review=deep_review,
             as_of=as_of,
@@ -178,7 +185,8 @@ class DecisionEngine:
             logger.info("No LLM configured; running rules-only")
             return fall_back("no LLM configured")
 
-        system = SYSTEM_PROMPT + (DEEP_REVIEW_ADDENDUM if deep_review else "")
+        base_prompt = persona_system_prompt(self._config)
+        system = base_prompt + (DEEP_REVIEW_ADDENDUM if deep_review else "")
         closing = CLOSING_DEEP_REVIEW if deep_review else CLOSING_NORMAL
         user = USER_TEMPLATE.format(briefing=briefing, closing=closing)
 

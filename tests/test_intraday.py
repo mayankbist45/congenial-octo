@@ -253,5 +253,5 @@ def test_list_personas_includes_new_stubs():
     from src.config import list_personas
 
     personas = list_personas()
-    for pid in ("calan", "revert", "flux", "spread", "xstat", "slice"):
+    for pid in ("calan", "revert", "flux", "spread", "slice"):
         assert pid in personas

@@ -12,7 +12,6 @@ from src.config import Config
 from src.intraday.agent import IntradayAgent
 from src.intraday.engine_helpers import collect_signals
 from src.intraday.models import IntradayBacktestResult, IntradaySignal, IntradayTrade
-from src.intraday.cross_stat_math import is_two_leg_persona
 from src.intraday.persona_rankers import filter_ranked_for_persona, load_ranker
 
 
@@ -120,7 +119,7 @@ class IntradaySimulator:
             for item in catalyst.get("watchlist", [])
             if item.get("in_play")
         }
-        if self._watchlist and not is_two_leg_persona(self._config):
+        if self._watchlist and self._config.persona_id != "spread":
             ranked = [r for r in ranked if r.symbol in self._watchlist]
 
         collected = collect_signals(self._config, day_frames, ranked, day_previous)

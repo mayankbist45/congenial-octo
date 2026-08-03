@@ -10,13 +10,12 @@ import pytest
 
 from src.config import get_persona_config
 from src.intraday.meta import triple_barrier_label
-from src.intraday.persona_rankers import FluxRanker, RevertRanker, SpreadRanker, XStatRanker, load_ranker
+from src.intraday.persona_rankers import FluxRanker, RevertRanker, SpreadRanker, load_ranker
 from src.intraday.strategies import (
     OpeningGapFadeStrategy,
     RangeRevertStrategy,
     VwapFadeStrategy,
     load_strategies,
-    scan_cross_signals,
     scan_pair_signals,
 )
 
@@ -71,11 +70,6 @@ def spread_config():
     return get_persona_config("spread")
 
 
-@pytest.fixture
-def xstat_config():
-    return get_persona_config("xstat")
-
-
 def test_load_revert_strategies(revert_config):
     names = [s.name for s in load_strategies(revert_config)]
     assert names == ["vwap_fade", "opening_gap_fade"]
@@ -84,11 +78,6 @@ def test_load_revert_strategies(revert_config):
 def test_load_flux_strategies(flux_config):
     names = [s.name for s in load_strategies(flux_config)]
     assert names == ["ofi_momentum", "ofi_exhaustion"]
-
-
-def test_load_xstat_strategies(xstat_config):
-    names = [s.name for s in load_strategies(xstat_config)]
-    assert names == ["cross_zscore"]
 
 
 def test_revert_ranker_prefers_low_trend(revert_config):
@@ -167,14 +156,6 @@ def test_spread_ranker_and_signals(spread_config):
     assert isinstance(signals, dict)
 
 
-def test_xstat_ranker_and_signals(xstat_config):
-    fa, fb = _pair_frames(diverge_at_end=True)
-    ranked = XStatRanker(xstat_config).rank({"NIFTYBEES": fa, "RELIANCE": fb})
-    assert ranked
-    signals = scan_cross_signals(xstat_config, {"NIFTYBEES": fa, "RELIANCE": fb})
-    assert isinstance(signals, dict)
-
-
 def test_triple_barrier_label():
     idx = pd.date_range("2026-08-03 10:00", periods=5, freq="5min")
     frame = pd.DataFrame(
@@ -204,4 +185,3 @@ def test_triple_barrier_label():
 def test_load_ranker_factory():
     assert load_ranker(get_persona_config("calan")).__class__.__name__ == "IntradayRanker"
     assert load_ranker(get_persona_config("revert")).__class__.__name__ == "RevertRanker"
-    assert load_ranker(get_persona_config("xstat")).__class__.__name__ == "XStatRanker"

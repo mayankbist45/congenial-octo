@@ -51,6 +51,7 @@ _SCHEMA_TOKENS = {
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id {ID_PK},
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
     run_date TEXT NOT NULL,
     started_at TEXT NOT NULL,
     finished_at TEXT,
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS proposals (
     id {ID_PK},
     run_id INTEGER NOT NULL REFERENCES runs(id),
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
     created_at TEXT NOT NULL,
     symbol TEXT NOT NULL,
     company_name TEXT,
@@ -92,6 +94,7 @@ CREATE TABLE IF NOT EXISTS proposals (
 CREATE TABLE IF NOT EXISTS trades (
     id {ID_PK},
     proposal_id INTEGER REFERENCES proposals(id),
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
     executed_at TEXT NOT NULL,
     symbol TEXT NOT NULL,
     action TEXT NOT NULL,
@@ -106,20 +109,20 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 
 CREATE TABLE IF NOT EXISTS position_meta (
-    symbol TEXT PRIMARY KEY,
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    symbol TEXT NOT NULL,
     entry_date TEXT,
     entry_price {REAL},
     entry_pe {REAL},
     peak_price {REAL},
     thesis TEXT,
     target_price {REAL},
-    updated_at TEXT
+    updated_at TEXT,
+    PRIMARY KEY (persona_id, symbol)
 );
 
--- What the fund held at the close of each run, with the metrics that justified
--- holding it. Lets the dashboard and any later review show exactly what the
--- manager saw on a given day without re-querying the broker or recomputing.
 CREATE TABLE IF NOT EXISTS position_snapshots (
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
     run_date TEXT NOT NULL,
     symbol TEXT NOT NULL,
     company_name TEXT,
@@ -138,11 +141,12 @@ CREATE TABLE IF NOT EXISTS position_snapshots (
     risk_contribution_pct {REAL},
     pct_of_adv {REAL},
     thesis TEXT,
-    PRIMARY KEY (run_date, symbol)
+    PRIMARY KEY (persona_id, run_date, symbol)
 );
 
 CREATE TABLE IF NOT EXISTS nav_history (
-    run_date TEXT PRIMARY KEY,
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    run_date TEXT NOT NULL,
     total_value {REAL} NOT NULL,
     invested_value {REAL} NOT NULL,
     cash {REAL} NOT NULL,
@@ -151,11 +155,13 @@ CREATE TABLE IF NOT EXISTS nav_history (
     daily_return_pct {REAL},
     benchmark_return_pct {REAL},
     realised_pnl {REAL},
-    unrealised_pnl {REAL}
+    unrealised_pnl {REAL},
+    PRIMARY KEY (persona_id, run_date)
 );
 
 CREATE TABLE IF NOT EXISTS risk_history (
-    run_date TEXT PRIMARY KEY,
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    run_date TEXT NOT NULL,
     portfolio_beta {REAL},
     portfolio_vol {REAL},
     idio_share_pct {REAL},
@@ -163,11 +169,13 @@ CREATE TABLE IF NOT EXISTS risk_history (
     active_share_pct {REAL},
     concentration_top5_pct {REAL},
     avg_pairwise_correlation {REAL},
-    payload TEXT
+    payload TEXT,
+    PRIMARY KEY (persona_id, run_date)
 );
 
 CREATE TABLE IF NOT EXISTS news_digests (
-    run_date TEXT PRIMARY KEY,
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    run_date TEXT NOT NULL,
     macro_summary TEXT,
     market_summary TEXT,
     holdings_notes TEXT,
@@ -175,15 +183,126 @@ CREATE TABLE IF NOT EXISTS news_digests (
     flagged_symbols TEXT,
     article_count INTEGER,
     high_impact_count INTEGER,
-    generated_by_llm INTEGER
+    generated_by_llm INTEGER,
+    PRIMARY KEY (persona_id, run_date)
+);
+
+CREATE TABLE IF NOT EXISTS liquid_positions (
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    run_date TEXT NOT NULL,
+    scheme_code TEXT NOT NULL,
+    scheme_name TEXT,
+    units {REAL} NOT NULL DEFAULT 0,
+    nav {REAL},
+    market_value {REAL},
+    daily_return_pct {REAL},
+    PRIMARY KEY (persona_id, run_date)
+);
+
+CREATE TABLE IF NOT EXISTS quarterly_reports (
+    id {ID_PK},
+    symbol TEXT NOT NULL,
+    fiscal_period TEXT NOT NULL,
+    report_key TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'screener.in',
+    fetched_at TEXT NOT NULL,
+    period_end TEXT,
+    revenue {REAL},
+    operating_profit {REAL},
+    opm_pct {REAL},
+    net_profit {REAL},
+    eps {REAL},
+    interest {REAL},
+    borrowings {REAL},
+    promoter_holding_pct {REAL},
+    promoter_pledge_pct {REAL},
+    revenue_yoy_pct {REAL},
+    profit_yoy_pct {REAL},
+    eps_yoy_pct {REAL},
+    opm_delta_pct {REAL},
+    debt_delta_pct {REAL},
+    UNIQUE (symbol, fiscal_period, source)
+);
+
+CREATE TABLE IF NOT EXISTS quarterly_report_analyses (
+    id {ID_PK},
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    symbol TEXT NOT NULL,
+    fiscal_period TEXT NOT NULL,
+    report_key TEXT NOT NULL,
+    run_date TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    thesis_impact TEXT NOT NULL,
+    sector_model TEXT,
+    flags TEXT,
+    highlights TEXT,
+    metrics TEXT,
+    source TEXT,
+    raw_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (persona_id, symbol, report_key)
+);
+
+CREATE TABLE IF NOT EXISTS decision_reviews (
+    id {ID_PK},
+    proposal_id INTEGER NOT NULL REFERENCES proposals(id),
+    trade_id INTEGER REFERENCES trades(id),
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    review_window_days INTEGER NOT NULL,
+    proposal_date TEXT,
+    review_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    label TEXT NOT NULL,
+    stock_return_pct {REAL},
+    benchmark_return_pct {REAL},
+    excess_return_pct {REAL},
+    max_drawdown_pct {REAL},
+    realised_pnl {REAL},
+    evidence TEXT,
+    recommendation TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (persona_id, proposal_id, review_window_days)
+);
+
+CREATE TABLE IF NOT EXISTS learning_lessons (
+    id {ID_PK},
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    label TEXT NOT NULL,
+    status TEXT NOT NULL,
+    evidence_count INTEGER NOT NULL,
+    symbol_count INTEGER NOT NULL,
+    review_date_count INTEGER NOT NULL,
+    avg_excess_return_pct {REAL},
+    avg_stock_return_pct {REAL},
+    confidence {REAL},
+    recommendation TEXT,
+    evidence TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (persona_id, label)
 );
 
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
+CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_executed ON trades(executed_at);
+CREATE INDEX IF NOT EXISTS idx_trades_persona ON trades(persona_id);
 CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(run_date);
+CREATE INDEX IF NOT EXISTS idx_runs_persona ON runs(persona_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_date ON position_snapshots(run_date);
+CREATE INDEX IF NOT EXISTS idx_snapshots_persona ON position_snapshots(persona_id);
+CREATE INDEX IF NOT EXISTS idx_quarterly_reports_symbol ON quarterly_reports(symbol);
+CREATE INDEX IF NOT EXISTS idx_quarterly_reports_key ON quarterly_reports(report_key);
+CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_persona ON quarterly_report_analyses(persona_id);
+CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_run_date ON quarterly_report_analyses(run_date);
+CREATE INDEX IF NOT EXISTS idx_decision_reviews_persona ON decision_reviews(persona_id);
+CREATE INDEX IF NOT EXISTS idx_decision_reviews_label ON decision_reviews(label);
+CREATE INDEX IF NOT EXISTS idx_learning_lessons_persona ON learning_lessons(persona_id);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -196,11 +315,24 @@ TABLES = (
     "nav_history",
     "risk_history",
     "news_digests",
+    "liquid_positions",
+    "quarterly_reports",
+    "quarterly_report_analyses",
+    "decision_reviews",
+    "learning_lessons",
 )
 
 # Tables whose primary key is a generated integer, so a migration that carries
 # ids across has to move the sequence past them.
-SEQUENCE_TABLES = ("runs", "proposals", "trades")
+SEQUENCE_TABLES = (
+    "runs",
+    "proposals",
+    "trades",
+    "quarterly_reports",
+    "quarterly_report_analyses",
+    "decision_reviews",
+    "learning_lessons",
+)
 
 DbTarget = Union[None, str, Path, Config]
 
@@ -346,9 +478,146 @@ def connect(target: DbTarget = None) -> Connection:
 
 
 def _apply_schema(conn: Connection) -> None:
+    # Migration must run before the full schema DDL because new indexes
+    # reference persona_id which doesn't exist on old tables.
+    _migrate_add_persona_id(conn)
+    _migrate_quarterly_analysis_sector_model(conn)
+
     statements = [s.strip() for s in schema_for(conn.dialect).split(";") if s.strip()]
     for statement in statements:
         conn.execute(statement)
+    conn.commit()
+
+
+def _table_exists(conn: Connection, table: str) -> bool:
+    """Check whether *table* exists in the database."""
+    if conn.dialect == "postgres":
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = ?",
+            (table,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+            (table,),
+        ).fetchone()
+    return row is not None
+
+
+def _has_column(conn: Connection, table: str, column: str) -> bool:
+    """Check whether *column* exists on *table*."""
+    if not _table_exists(conn, table):
+        return True  # Table doesn't exist yet; schema DDL will create it correctly.
+    if conn.dialect == "postgres":
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = ? AND column_name = ?",
+            (table, column),
+        ).fetchone()
+    else:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        row = next((r for r in rows if r["name"] == column), None)
+    return row is not None
+
+
+def _migrate_add_persona_id(conn: Connection) -> None:
+    """Add persona_id column to existing tables if they lack it.
+
+    For tables whose primary key changed to include persona_id (position_meta,
+    position_snapshots, nav_history, risk_history, news_digests) the table is
+    recreated. For auto-id tables (runs, proposals, trades) only the column
+    is added.
+    """
+    if _has_column(conn, "runs", "persona_id"):
+        return
+
+    logger.info("Migrating journal: adding persona_id to all tables")
+
+    for table in ("runs", "proposals", "trades"):
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN persona_id TEXT NOT NULL DEFAULT 'balanced'"
+        )
+
+    _recreate_tables = {
+        "position_meta": {
+            "columns": "persona_id, symbol, entry_date, entry_price, entry_pe, "
+                        "peak_price, thesis, target_price, updated_at",
+            "select": "'balanced', symbol, entry_date, entry_price, entry_pe, "
+                      "peak_price, thesis, target_price, updated_at",
+        },
+        "position_snapshots": {
+            "columns": "persona_id, run_date, symbol, company_name, sector, quantity, "
+                       "avg_cost, last_price, market_value, weight_pct, return_pct, "
+                       "unrealised_pnl, holding_days, composite_score, beta, "
+                       "idiosyncratic_vol, risk_contribution_pct, pct_of_adv, thesis",
+            "select": "'balanced', run_date, symbol, company_name, sector, quantity, "
+                      "avg_cost, last_price, market_value, weight_pct, return_pct, "
+                      "unrealised_pnl, holding_days, composite_score, beta, "
+                      "idiosyncratic_vol, risk_contribution_pct, pct_of_adv, thesis",
+        },
+        "nav_history": {
+            "columns": "persona_id, run_date, total_value, invested_value, cash, "
+                       "position_count, benchmark_close, daily_return_pct, "
+                       "benchmark_return_pct, realised_pnl, unrealised_pnl",
+            "select": "'balanced', run_date, total_value, invested_value, cash, "
+                      "position_count, benchmark_close, daily_return_pct, "
+                      "benchmark_return_pct, realised_pnl, unrealised_pnl",
+        },
+        "risk_history": {
+            "columns": "persona_id, run_date, portfolio_beta, portfolio_vol, "
+                       "idio_share_pct, tracking_error_pct, active_share_pct, "
+                       "concentration_top5_pct, avg_pairwise_correlation, payload",
+            "select": "'balanced', run_date, portfolio_beta, portfolio_vol, "
+                      "idio_share_pct, tracking_error_pct, active_share_pct, "
+                      "concentration_top5_pct, avg_pairwise_correlation, payload",
+        },
+        "news_digests": {
+            "columns": "persona_id, run_date, macro_summary, market_summary, "
+                       "holdings_notes, watchlist_notes, flagged_symbols, "
+                       "article_count, high_impact_count, generated_by_llm",
+            "select": "'balanced', run_date, macro_summary, market_summary, "
+                      "holdings_notes, watchlist_notes, flagged_symbols, "
+                      "article_count, high_impact_count, generated_by_llm",
+        },
+    }
+
+    tokens = _SCHEMA_TOKENS[conn.dialect]
+
+    for table, spec in _recreate_tables.items():
+        conn.execute(
+            f"ALTER TABLE {table} RENAME TO _{table}_old"
+        )
+
+    conn.commit()
+
+    # Re-run schema creation to build the new tables with correct PKs.
+    schema_stmts = [
+        s.strip()
+        for s in schema_for(conn.dialect).split(";")
+        if s.strip()
+    ]
+    for stmt in schema_stmts:
+        conn.execute(stmt)
+    conn.commit()
+
+    for table, spec in _recreate_tables.items():
+        conn.execute(
+            f"INSERT INTO {table} ({spec['columns']}) "
+            f"SELECT {spec['select']} FROM _{table}_old"
+        )
+        conn.execute(f"DROP TABLE _{table}_old")
+
+    conn.commit()
+    logger.info("Migration complete: persona_id added to all tables")
+
+
+def _migrate_quarterly_analysis_sector_model(conn: Connection) -> None:
+    if _has_column(conn, "quarterly_report_analyses", "sector_model"):
+        return
+    logger.info("Migrating journal: adding sector_model to quarterly_report_analyses")
+    conn.execute(
+        "ALTER TABLE quarterly_report_analyses ADD COLUMN sector_model TEXT"
+    )
     conn.commit()
 
 
@@ -396,7 +665,8 @@ def truncate_all(target: DbTarget = None) -> None:
             # database, as TRUNCATE ... RESTART IDENTITY does on Postgres.
             conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name IN "
-                "('runs','proposals','trades')"
+                "('runs','proposals','trades','quarterly_reports',"
+                "'quarterly_report_analyses','decision_reviews','learning_lessons')"
             )
 
 

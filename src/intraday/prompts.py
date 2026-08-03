@@ -233,65 +233,6 @@ OUTPUT JSON only:
   "rationale": "2-3 sentences"
 }"""
 
-# --- xstat (cross-asset statistical arbitrage) ---
-
-XSTAT_ANALYST_PROMPT = """You are the cross-asset stat-arb analyst for an intraday NSE book. Your job is
-NOT to pick individual stocks. Identify beta-hedged residual opportunities where
-an equity leg has diverged from its index/sector anchor (ETF proxy) for technical
-(not macro shock) reasons.
-
-RULES
-- Use ONLY the data in the briefing.
-- Anchor examples: NIFTYBEES (Nifty), BANKBEES (banking sector).
-- Only baskets with cointegration_ok true and divergence_type "technical".
-- Veto baskets where either leg has earnings, RBI/macro, or sector shock catalyst.
-- Max 2 basket opportunities. Empty list is valid.
-
-OUTPUT: single JSON object only:
-{
-  "session_view": "2 sentences",
-  "trade_day_quality": "poor" | "fair" | "good",
-  "basket_opportunities": [
-    {
-      "anchor": "NIFTYBEES",
-      "leg": "RELIANCE",
-      "residual_z": 0.0,
-      "hedge_beta": 1.0,
-      "divergence_type": "fundamental" | "technical",
-      "cointegration_ok": true,
-      "direction": "short_residual" | "long_residual",
-      "confidence": 0.0-1.0,
-      "rationale": "1-2 sentences"
-    }
-  ]
-}"""
-
-XSTAT_CONVERGENCE_PROMPT = """You are the convergence gate for a paper-trading NSE cross-asset stat-arb book
-(MIS, flat by 15:15). The rule engine proposed ONE beta-hedged basket trade
-(equity leg + anchor ETF leg). Approve or veto.
-
-VETO if:
-- divergence_type is "fundamental"
-- residual still widening (> 0.5 sigma in last 3 bars per briefing)
-- either leg below minimum turnover
-- two-leg margin exceeds per-leg cap
-- daily loss limit hit
-- time >= 14:00 IST
-
-OUTPUT JSON only:
-{
-  "decision": "approve" | "veto",
-  "symbol": "equity leg symbol (primary)",
-  "strategy": "cross_zscore",
-  "side": "BUY" | "SELL",
-  "adjusted_stop": null or number,
-  "adjusted_target": null or number,
-  "use_trailing_stop": false,
-  "trailing_stop_pct": null,
-  "confidence": 0.0-1.0,
-  "rationale": "2-3 sentences"
-}"""
-
 # --- slice (execution monitor) ---
 
 SLICE_MONITOR_PROMPT = """You are the execution monitor for a TWAP/VWAP scheduling book on NSE. Parent
@@ -363,7 +304,6 @@ GATE_STRATEGIES = CALAN_GATE_STRATEGIES  # backward compat
 REVERT_GATE_STRATEGIES = ("vwap_fade", "opening_gap_fade", "range_revert")
 FLUX_GATE_STRATEGIES = ("ofi_momentum", "ofi_exhaustion")
 SPREAD_GATE_STRATEGIES = ("pair_zscore",)
-XSTAT_GATE_STRATEGIES = ("cross_zscore",)
 SLICE_GATE_STRATEGIES = ("twap_slice", "vwap_schedule")
 
 DEFAULT_PERSONA_ID = "calan"
@@ -564,76 +504,6 @@ def validate_spread_catalyst_payload(payload: Any) -> Optional[dict]:
     }
 
 
-def validate_xstat_catalyst_payload(payload: Any) -> Optional[dict]:
-    if not isinstance(payload, dict):
-        return None
-    quality = payload.get("trade_day_quality")
-    if quality not in TRADE_DAY_QUALITIES:
-        return None
-    baskets = payload.get("basket_opportunities")
-    if not isinstance(baskets, list):
-        return None
-    cleaned: List[dict] = []
-    watchlist: List[dict] = []
-    for item in baskets:
-        if not isinstance(item, dict):
-            continue
-        anchor = str(item.get("anchor", "")).upper()
-        leg = str(item.get("leg", "")).upper()
-        if not anchor or not leg:
-            continue
-        div = item.get("divergence_type", "fundamental")
-        if div not in DIVERGENCE_TYPES:
-            div = "fundamental"
-        if div != "technical" or not bool(item.get("cointegration_ok", False)):
-            continue
-        try:
-            confidence = float(item.get("confidence", 0.0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        try:
-            residual_z = float(item.get("residual_z", 0.0))
-        except (TypeError, ValueError):
-            residual_z = 0.0
-        try:
-            hedge_beta = float(item.get("hedge_beta", 1.0))
-        except (TypeError, ValueError):
-            hedge_beta = 1.0
-        direction = item.get("direction", "short_residual")
-        if direction not in ("short_residual", "long_residual"):
-            direction = "short_residual"
-        basket_id = f"{anchor}:{leg}"
-        row = {
-            "anchor": anchor,
-            "leg": leg,
-            "residual_z": residual_z,
-            "hedge_beta": hedge_beta,
-            "divergence_type": div,
-            "cointegration_ok": True,
-            "direction": direction,
-            "confidence": max(0.0, min(1.0, confidence)),
-            "rationale": str(item.get("rationale", "")).strip(),
-        }
-        cleaned.append(row)
-        for symbol in (anchor, leg):
-            watchlist.append(
-                {
-                    "symbol": symbol,
-                    "in_play": True,
-                    "direction_bias": "either",
-                    "confidence": row["confidence"],
-                    "rationale": row["rationale"],
-                    "pair_id": basket_id,
-                }
-            )
-    return {
-        "session_view": str(payload.get("session_view", "")).strip(),
-        "trade_day_quality": quality,
-        "basket_opportunities": cleaned,
-        "watchlist": watchlist,
-    }
-
-
 def validate_slice_monitor_payload(payload: Any) -> Optional[dict]:
     if not isinstance(payload, dict):
         return None
@@ -762,13 +632,6 @@ PERSONA_PROMPTS: Dict[str, PersonaPromptBundle] = {
         validate_catalyst=validate_spread_catalyst_payload,
         validate_gate=_gate_validator(SPREAD_GATE_STRATEGIES),
         gate_strategies=SPREAD_GATE_STRATEGIES,
-    ),
-    "xstat": PersonaPromptBundle(
-        catalyst_prompt=XSTAT_ANALYST_PROMPT,
-        gate_prompt=XSTAT_CONVERGENCE_PROMPT,
-        validate_catalyst=validate_xstat_catalyst_payload,
-        validate_gate=_gate_validator(XSTAT_GATE_STRATEGIES),
-        gate_strategies=XSTAT_GATE_STRATEGIES,
     ),
     "slice": PersonaPromptBundle(
         catalyst_prompt=SLICE_MONITOR_PROMPT,

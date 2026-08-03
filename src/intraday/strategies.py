@@ -11,7 +11,6 @@ from src.config import Config
 from src.intraday.models import IntradaySignal
 from src.intraday.ofi import ofi_divergence, ofi_z_proxy
 from src.intraday.spread_math import configured_pairs, spread_z_history
-from src.intraday.cross_stat_math import configured_cross_baskets, residual_z_history
 
 STRATEGY_REGISTRY: Dict[str, type] = {}
 
@@ -763,108 +762,6 @@ def scan_pair_signals(
             break
         _ = stop_z
     return out
-
-
-def scan_cross_signals(
-    config: Config,
-    frames: Dict[str, pd.DataFrame],
-) -> Dict[str, List[IntradaySignal]]:
-    """Return primary-leg (equity) cross-asset stat-arb signals keyed by leg symbol."""
-    entry_z = _cfg_float(config, "cross_entry_z", 2.0)
-    min_bars = _cfg_int(config, "cross_min_bars", 25)
-    max_widen = _cfg_float(config, "cross_max_widen_z", 0.35)
-    stop_buffer = _cfg_float(config, "cross_stop_buffer_pct", 0.30) / 100.0
-    beta_lookback = _cfg_int(config, "cross_beta_lookback", 60)
-    window_start = _parse_time(str(config.get("intraday.trade_window_start", "09:45")))
-    window_end = _parse_time(str(config.get("intraday.trade_window_end", "14:00")))
-    out: Dict[str, List[IntradaySignal]] = {}
-
-    for basket in configured_cross_baskets(config):
-        anchor = frames.get(basket.anchor)
-        leg = frames.get(basket.leg)
-        if anchor is None or leg is None or anchor.empty or leg.empty:
-            continue
-        z_hist = residual_z_history(
-            anchor,
-            leg,
-            beta=basket.beta,
-            beta_lookback=beta_lookback,
-            min_bars=min_bars,
-        )
-        if z_hist.empty:
-            continue
-
-        for ts, z_now in z_hist.items():
-            bar_time = ts.time() if hasattr(ts, "time") else ts.to_pydatetime().time()
-            if bar_time < window_start or bar_time > window_end:
-                continue
-            if abs(z_now) < entry_z:
-                continue
-            idx = z_hist.index.get_loc(ts)
-            if idx >= 3 and abs(z_now - float(z_hist.iloc[idx - 3])) > max_widen:
-                continue
-
-            close_leg = float(leg.loc[ts, "close"])
-            close_anchor = float(anchor.loc[ts, "close"])
-            basket_id = basket.basket_id
-            force_exit = _force_exit_dt(ts.to_pydatetime(), config)
-            ts_dt = ts.to_pydatetime()
-
-            if z_now >= entry_z:
-                signal = IntradaySignal(
-                    basket.leg,
-                    "cross_zscore",
-                    "SELL",
-                    ts_dt,
-                    close_leg,
-                    close_leg * (1.0 + stop_buffer),
-                    close_leg * (1.0 - stop_buffer * 2),
-                    f"Short residual z={z_now:.2f} vs {basket.anchor}",
-                    force_exit,
-                    pair_id=basket_id,
-                    pair_leg=basket.anchor,
-                    pair_side="BUY",
-                    pair_entry_price=close_anchor,
-                    pair_stop_price=close_anchor * (1.0 - stop_buffer),
-                    pair_target_price=close_anchor * (1.0 + stop_buffer * 2),
-                )
-            else:
-                signal = IntradaySignal(
-                    basket.leg,
-                    "cross_zscore",
-                    "BUY",
-                    ts_dt,
-                    close_leg,
-                    close_leg * (1.0 - stop_buffer),
-                    close_leg * (1.0 + stop_buffer * 2),
-                    f"Long residual z={z_now:.2f} vs {basket.anchor}",
-                    force_exit,
-                    pair_id=basket_id,
-                    pair_leg=basket.anchor,
-                    pair_side="SELL",
-                    pair_entry_price=close_anchor,
-                    pair_stop_price=close_anchor * (1.0 + stop_buffer),
-                    pair_target_price=close_anchor * (1.0 - stop_buffer * 2),
-                )
-            out.setdefault(basket.leg, []).append(signal)
-            break
-    return out
-
-
-@_register
-class CrossZscoreStrategy(IntradayStrategy):
-    """Cross-asset beta-hedged residual (signals via scan_cross_signals)."""
-
-    name = "cross_zscore"
-
-    def signals(
-        self,
-        symbol: str,
-        frame: pd.DataFrame,
-        config: Config,
-        previous_day=None,
-    ) -> List[IntradaySignal]:
-        return []
 
 
 def _schedule_signals(

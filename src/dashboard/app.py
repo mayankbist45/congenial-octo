@@ -102,6 +102,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "proposals": service.pending_proposals(),
                 "approved": service.approved_proposals(),
                 "history": service.recent_decisions(),
+                "mandate": service.mandate_summary(),
+                "analytics": service.analytics_summary(),
             },
         )
 
@@ -121,6 +123,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 ),
                 "max_sector_pct": config.get("risk.max_sector_pct"),
                 "max_position_pct": config.get("risk.max_position_pct"),
+                "mandate": service.mandate_summary(),
+                "analytics": service.analytics_summary(),
             },
         )
 

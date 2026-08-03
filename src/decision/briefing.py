@@ -22,8 +22,10 @@ from src.models import (
     FactorScores,
     FundamentalSnapshot,
     NewsDigest,
+    EarningsDigest,
     PortfolioRiskProfile,
     PortfolioState,
+    QuarterlyReportContext,
     Severity,
     TechnicalSnapshot,
     Trigger,
@@ -65,20 +67,34 @@ class BriefingBuilder:
         candidates: List[FactorScores],
         digest: Optional[NewsDigest],
         risk_profile: Optional[PortfolioRiskProfile],
+        quarterly_context: Optional[QuarterlyReportContext],
         turnover: TurnoverStatus,
         is_deep_review: bool,
         as_of: Optional[date] = None,
+        earnings: Optional[EarningsDigest] = None,
     ) -> str:
         as_of = as_of or portfolio.as_of
         sections: List[str] = []
 
         sections.append(self._header(as_of, is_deep_review, portfolio, turnover))
         sections.append(self._mandate())
-        sections.append(self._holdings(portfolio, scores, fundamentals, technicals, risk_profile))
+        sections.append(
+            self._holdings(
+                portfolio,
+                scores,
+                fundamentals,
+                technicals,
+                risk_profile,
+                quarterly_context,
+            )
+        )
+        sections.append(self._quarterly_updates(quarterly_context))
+        sections.append(self._market_regime(risk_profile))
         sections.append(self._risk(risk_profile))
         sections.append(self._triggers(triggers))
         sections.append(self._candidates(candidates, fundamentals, technicals))
         sections.append(self._news(digest, portfolio))
+        sections.append(self._earnings(earnings, portfolio))
 
         briefing = "\n\n".join(section for section in sections if section)
         self._save(briefing, as_of)
@@ -118,21 +134,34 @@ class BriefingBuilder:
 
     def _mandate(self) -> str:
         risk = self._config.risk
+        mandate = self._config.mandate
+        liquidity = mandate.get("liquidity", {}) or {}
+        cash_bounds = mandate.get("cash_bounds_pct", {}) or {}
+        sector_models = self._config.get("analytics.sector_models", []) or []
         return "\n".join(
             [
                 "--- MANDATE AND HARD LIMITS ---",
-                f"Universe            : Nifty 500 (NSE), delivery trades only",
-                f"Benchmark           : {self._config.get('fund.benchmark_label')}",
-                f"Max per position    : {risk.get('max_position_pct')}%",
-                f"Max per sector      : {risk.get('max_sector_pct')}%",
-                f"Min cash buffer     : {self._config.get('fund.min_cash_buffer_pct')}%",
+                f"Benchmark           : {mandate.get('benchmark_label') or self._config.get('fund.benchmark_label')}",
+                f"Horizon             : {mandate.get('investment_horizon_years', 'n/a')} years",
+                f"Target excess return: {_number(mandate.get('target_excess_return_pct'), '%')}",
+                f"Universe            : {', '.join(mandate.get('permitted_instruments', ['equity']))}",
+                f"Market-cap buckets  : {', '.join(mandate.get('market_cap_limits', {}).get('allowed', ['large', 'mid', 'small']))}",
+                f"Max per position    : {mandate.get('max_stock_weight_pct', risk.get('max_position_pct'))}%",
+                f"Max per sector      : {mandate.get('max_sector_weight_pct', risk.get('max_sector_pct'))}%",
+                f"Tracking error cap  : {_number(mandate.get('max_tracking_error_pct'), '%')}",
+                f"Max drawdown        : {_number(mandate.get('max_drawdown_pct'), '%')}",
+                f"Liquidity floor     : {_money(liquidity.get('min_avg_daily_turnover_inr'))} ADV | {_number(liquidity.get('max_position_pct_of_adv'), '%')} of ADV",
+                f"Cash bounds         : {_number(cash_bounds.get('min'), '%')} to {_number(cash_bounds.get('max'), '%')}",
                 f"Hard stop loss      : {risk.get('stop_loss_pct')}% from cost",
                 f"Profit review level : +{risk.get('profit_review_pct')}% from cost",
-                f"Annual turnover cap : {risk.get('annual_turnover_budget_pct')}%",
+                f"Annual turnover cap : {mandate.get('turnover_budget_pct', risk.get('annual_turnover_budget_pct'))}%",
+                f"Derivatives/leverage: {'allowed' if mandate.get('derivatives_allowed') else 'not allowed'} / {'allowed' if mandate.get('leverage_allowed') else 'not allowed'}",
+                f"Sector modules      : {', '.join(sector_models) if sector_models else 'none configured'}",
                 "",
                 "These limits are enforced mechanically after you respond. A "
                 "proposal that breaches one is discarded, so proposing it only "
-                "wastes the opportunity.",
+                "wastes the opportunity. Missing analytics are not a green "
+                "light: treat unsupported metrics as unknown, not favourable.",
             ]
         )
 
@@ -143,6 +172,7 @@ class BriefingBuilder:
         fundamentals: Dict[str, FundamentalSnapshot],
         technicals: Dict[str, TechnicalSnapshot],
         risk_profile: Optional[PortfolioRiskProfile],
+        quarterly_context: Optional[QuarterlyReportContext] = None,
     ) -> str:
         if not portfolio.positions:
             return (
@@ -194,6 +224,16 @@ class BriefingBuilder:
                     f"trend {score.trend:+.2f}) | universe percentile "
                     f"{_number(score.percentile, '', 0)}"
                 )
+                lines.append(
+                    f"  analytics: sector model {score.sector_model or 'generic'} | "
+                    f"coverage {_number(score.metric_coverage_pct, '%')} | "
+                    f"supported metrics {', '.join(score.supported_metrics[:6]) if score.supported_metrics else 'none'}"
+                )
+                if score.unsupported_metrics:
+                    lines.append(
+                        "  unsupported/missing sector metrics: "
+                        + ", ".join(score.unsupported_metrics[:6])
+                    )
                 if not score.passes_gates:
                     lines.append(
                         f"  WARNING fails entry gates: {'; '.join(score.gate_failures)}"
@@ -207,10 +247,36 @@ class BriefingBuilder:
                     f"rev growth {_number(fundamental.revenue_growth_pct, '%')} | "
                     f"EPS growth {_number(fundamental.earnings_growth_pct, '%')}"
                 )
+                lines.append(
+                    f"  valuation: fwd P/E {_number(fundamental.forward_pe)} | "
+                    f"EV/EBITDA {_number(fundamental.ev_to_ebitda)} | "
+                    f"EV/Sales {_number(fundamental.ev_to_sales)} | "
+                    f"FCF yield {_number(fundamental.free_cash_flow_yield, '%')} | "
+                    f"expected return bear/base/bull "
+                    f"{_number(fundamental.bear_case_return_pct, '%')}/"
+                    f"{_number(fundamental.base_case_return_pct, '%')}/"
+                    f"{_number(fundamental.bull_case_return_pct, '%')}"
+                )
+                lines.append(
+                    f"  governance/revisions: promoter {_number(fundamental.promoter_holding_pct, '%')} | "
+                    f"pledge {_number(fundamental.promoter_pledge_pct, '%')} | "
+                    f"EPS revision {_number(fundamental.consensus_eps_revision_pct, '%')} | "
+                    f"surprise {_number(fundamental.earnings_surprise_pct, '%')} | "
+                    f"guidance {_number(fundamental.guidance_change_pct, '%')}"
+                )
+                if fundamental.macro_exposures:
+                    macro = ", ".join(
+                        f"{name} {value:+.1f}" for name, value in fundamental.macro_exposures.items()
+                    )
+                    lines.append(f"  macro exposures: {macro}")
                 if position.entry_pe and fundamental.pe_ratio:
                     lines.append(
                         f"  P/E at entry {position.entry_pe:.1f} -> now "
                         f"{fundamental.pe_ratio:.1f}"
+                    )
+                if fundamental.latest_quarter_label:
+                    lines.append(
+                        f"  latest quarter reported: {fundamental.latest_quarter_label}"
                     )
             if technical:
                 trend = (
@@ -229,6 +295,12 @@ class BriefingBuilder:
                     f"contributes {_number(metrics.risk_contribution_pct, '%')} "
                     f"of portfolio risk"
                 )
+            if quarterly_context and symbol in quarterly_context.analyses:
+                analysis = quarterly_context.analyses[symbol]
+                lines.append(
+                    f"  quarterly read ({analysis.fiscal_period}, "
+                    f"{analysis.thesis_impact}): {analysis.summary}"
+                )
 
         lines.append("")
         lines.append("Sector exposure:")
@@ -236,6 +308,69 @@ class BriefingBuilder:
             portfolio.sector_weights().items(), key=lambda kv: kv[1], reverse=True
         ):
             lines.append(f"  {sector}: {weight:.1f}%")
+
+        return "\n".join(lines)
+
+    def _quarterly_updates(
+        self, quarterly_context: Optional[QuarterlyReportContext]
+    ) -> str:
+        if quarterly_context is None:
+            return ""
+        if not quarterly_context.new_symbols and not quarterly_context.errors:
+            return "--- QUARTERLY REPORT UPDATES ---\nNo fresh quarterly report detected today."
+
+        lines = ["--- QUARTERLY REPORT UPDATES ---"]
+        for symbol in quarterly_context.new_symbols:
+            analysis = quarterly_context.analyses.get(symbol)
+            history = quarterly_context.histories.get(symbol) or []
+            latest = history[0] if history else None
+            lines.append("")
+            lines.append(f"{symbol}: fresh quarterly report analysed.")
+            if latest:
+                lines.append(
+                    f"  {latest.fiscal_period} | revenue {_number(latest.revenue)} | "
+                    f"net profit {_number(latest.net_profit)} | "
+                    f"EPS {_number(latest.eps)} | OPM {_number(latest.opm_pct, '%')}"
+                )
+                if latest.revenue_yoy_pct is not None or latest.profit_yoy_pct is not None:
+                    lines.append(
+                        f"  YoY: revenue {_number(latest.revenue_yoy_pct, '%')} | "
+                        f"profit {_number(latest.profit_yoy_pct, '%')} | "
+                        f"EPS {_number(latest.eps_yoy_pct, '%')}"
+                    )
+            if analysis:
+                lines.append(f"  assessment ({analysis.thesis_impact}): {analysis.summary}")
+                if analysis.sector_model:
+                    lines.append(f"  sector model: {analysis.sector_model}")
+                for key, value in analysis.highlights.items():
+                    lines.append(f"  {key.replace('_', ' ')}: {value}")
+
+        for symbol, error in quarterly_context.errors.items():
+            lines.append("")
+            lines.append(
+                f"{symbol}: fresh quarterly report could not be analysed fully ({error[:250]})."
+            )
+        return "\n".join(lines)
+
+    def _market_regime(self, profile: Optional[PortfolioRiskProfile]) -> str:
+        if profile is None or profile.market_regime is None:
+            return ""
+
+        regime = profile.market_regime
+        score = "n/a" if regime.score is None else f"{regime.score:.1f}/100"
+        lines = [
+            "--- MARKET REGIME ---",
+            f"Regime                 : {regime.regime.upper()} ({score})",
+        ]
+
+        for detail in regime.evidence[:4]:
+            lines.append(f"  - {detail}")
+
+        if regime.warnings:
+            lines.append("")
+            lines.append("Regime advisory:")
+            for warning in regime.warnings:
+                lines.append(f"  - {warning}")
 
         return "\n".join(lines)
 
@@ -387,6 +522,19 @@ class BriefingBuilder:
                     f"rev growth {_number(fundamental.revenue_growth_pct, '%')} | "
                     f"mcap {_money(fundamental.market_cap)}"
                 )
+                lines.append(
+                    f"   sector model {score.sector_model or 'generic'} | "
+                    f"coverage {_number(score.metric_coverage_pct, '%')} | "
+                    f"valuation bear/base/bull "
+                    f"{_number(fundamental.bear_case_return_pct, '%')}/"
+                    f"{_number(fundamental.base_case_return_pct, '%')}/"
+                    f"{_number(fundamental.bull_case_return_pct, '%')}"
+                )
+                if fundamental.unsupported_metrics:
+                    lines.append(
+                        "   missing sector metrics: "
+                        + ", ".join(fundamental.unsupported_metrics[:5])
+                    )
             if technical:
                 lines.append(
                     f"   price {_number(technical.last_price, '', 2)} | "
@@ -434,6 +582,41 @@ class BriefingBuilder:
                 + ", ".join(digest.flagged_symbols)
             )
 
+        return "\n".join(lines)
+
+    def _earnings(
+        self, digest: Optional[EarningsDigest], portfolio: PortfolioState
+    ) -> str:
+        if digest is None or not digest.analyses:
+            return ""
+
+        lines = [
+            "--- QUARTERLY EARNINGS ---",
+            f"({digest.new_reports} fresh report(s) analysed from "
+            f"{digest.symbols_polled} polled)",
+        ]
+        if digest.holdings_notes:
+            lines.append("")
+            lines.append("On current holdings:")
+            for symbol, note in digest.holdings_notes.items():
+                lines.append(f"  {symbol}: {note}")
+        if digest.watchlist_notes:
+            lines.append("")
+            lines.append("On watchlist / candidates:")
+            for symbol, note in digest.watchlist_notes.items():
+                lines.append(f"  {symbol}: {note}")
+        if digest.flagged_symbols:
+            lines.append("")
+            lines.append(
+                "FLAGGED from quarterly results: "
+                + ", ".join(digest.flagged_symbols)
+            )
+        lines.append("")
+        lines.append(
+            "These are analyst reads of reported numbers, not consensus "
+            "surprises. Act only if the business case changed — most quarters "
+            "are in line."
+        )
         return "\n".join(lines)
 
     def _save(self, briefing: str, as_of: date) -> None:

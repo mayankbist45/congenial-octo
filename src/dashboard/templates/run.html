@@ -19,6 +19,25 @@
 </div>
 {% endif %}
 
+{% if run.quarterly_updates %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Fresh quarterly reports analysed on this run</h2>
+    <span class="note">Only symbols with newly detected reports appear here</span>
+  </div>
+  {% for item in run.quarterly_updates %}
+  <div class="proposal-card">
+    <h3>{{ item.symbol }} · {{ item.fiscal_period }}</h3>
+    <p><strong>Impact:</strong> {{ item.thesis_impact }}</p>
+    <p>{{ item.summary }}</p>
+    {% if item.flags %}
+    <p class="note">Flags: {{ item.flags | join(', ') }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="panel">
   <h2>Proposals from this run</h2>
   {% if run.proposals %}

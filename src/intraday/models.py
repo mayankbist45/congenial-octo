@@ -71,8 +71,6 @@ class RankedStock:
     in_play: bool = False
     ofi_z: Optional[float] = None
     spread_z: Optional[float] = None
-    residual_z: Optional[float] = None
-    hedge_beta: Optional[float] = None
     pair_id: Optional[str] = None
     reasons: List[str] = field(default_factory=list)
 

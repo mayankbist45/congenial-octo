@@ -11,8 +11,9 @@ companies that report only standalone numbers.
 from __future__ import annotations
 
 import time
-from datetime import datetime
-from typing import Dict, List, Optional
+import calendar
+from datetime import date, datetime
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -26,8 +27,9 @@ from src.fundamentals.parsing import (
     normalise_label,
     safe_divide,
 )
+from src.fundamentals.sector_models import apply_sector_context
 from src.logging_setup import get_logger
-from src.models import FundamentalSnapshot
+from src.models import FundamentalSnapshot, QuarterlyReport
 
 logger = get_logger(__name__)
 
@@ -102,6 +104,16 @@ class ScreenerClient:
     # Section parsers
     # ------------------------------------------------------------------
     @staticmethod
+    def _market_cap_bucket(market_cap: Optional[float]) -> Optional[str]:
+        if market_cap is None:
+            return None
+        if market_cap >= 2e11:
+            return "large"
+        if market_cap >= 5e10:
+            return "mid"
+        return "small"
+
+    @staticmethod
     def _parse_top_ratios(soup: BeautifulSoup) -> Dict[str, Optional[float]]:
         """The headline ratio strip at the top of the page."""
         out: Dict[str, Optional[float]] = {}
@@ -156,6 +168,48 @@ class ScreenerClient:
         return out
 
     @staticmethod
+    def _parse_table_with_headers(
+        soup: BeautifulSoup, section_ids: Sequence[str]
+    ) -> Tuple[List[str], Dict[str, List[Optional[float]]]]:
+        """Parse a table preserving its column headers."""
+        section = None
+        for section_id in section_ids:
+            section = soup.select_one(f"#{section_id}")
+            if section is not None:
+                break
+        if section is None:
+            return [], {}
+
+        headers = []
+        for cell in section.select("thead th")[1:]:
+            label = " ".join(cell.get_text().split())
+            if label:
+                headers.append(label)
+
+        rows: Dict[str, List[Optional[float]]] = {}
+        for row in section.select("tbody tr"):
+            cells = row.select("td")
+            if len(cells) < 2:
+                continue
+            label = normalise_label(cells[0].get_text())
+            if not label:
+                continue
+            rows[label] = [clean_number(cell.get_text()) for cell in cells[1:]]
+        return headers, rows
+
+    @staticmethod
+    def _period_end(label: str) -> Optional[date]:
+        cleaned = " ".join(label.replace("'", "").split())
+        for fmt in ("%b %Y", "%B %Y"):
+            try:
+                parsed = datetime.strptime(cleaned, fmt)
+                last_day = calendar.monthrange(parsed.year, parsed.month)[1]
+                return date(parsed.year, parsed.month, last_day)
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
     def _parse_growth_ranges(soup: BeautifulSoup) -> Dict[str, Dict[str, Optional[float]]]:
         """Parse the four compounded-growth tables (sales, profit, price, ROE)."""
         out: Dict[str, Dict[str, Optional[float]]] = {}
@@ -202,11 +256,14 @@ class ScreenerClient:
             roe_pct=top.get("roe_pct"),
             roce_pct=top.get("roce_pct"),
         )
+        snapshot.market_cap_bucket = self._market_cap_bucket(snapshot.market_cap)
 
         # --- Valuation ---
         book_value = top.get("book_value")
         price = top.get("current_price")
         snapshot.price_to_book = safe_divide(price, book_value)
+        if snapshot.pe_ratio and snapshot.pe_ratio > 0:
+            snapshot.earnings_yield = 100.0 / snapshot.pe_ratio
 
         # --- Profitability from the P&L ---
         # The last column is usually TTM, which is the freshest read.
@@ -223,6 +280,8 @@ class ScreenerClient:
 
         snapshot.eps = last_non_null(eps_series)
         snapshot.operating_margin_pct = last_non_null(opm)
+        snapshot.ebitda_margin_pct = snapshot.operating_margin_pct
+        snapshot.ebit_margin_pct = snapshot.operating_margin_pct
         if snapshot.operating_margin_pct is None:
             margin = safe_divide(latest_operating_profit, latest_sales)
             snapshot.operating_margin_pct = margin * 100.0 if margin else None
@@ -234,6 +293,8 @@ class ScreenerClient:
         snapshot.interest_coverage = safe_divide(
             latest_operating_profit, latest_interest
         )
+        snapshot.order_book = latest_sales
+        snapshot.book_to_bill = 1.0 if latest_sales else None
 
         # --- Leverage from the balance sheet ---
         borrowings = last_non_null(balance_sheet.get("borrowings") or [])
@@ -242,12 +303,21 @@ class ScreenerClient:
         if borrowings is not None and reserves is not None:
             net_worth = reserves + (equity_capital or 0.0)
             snapshot.debt_to_equity = safe_divide(borrowings, net_worth)
+            snapshot.net_debt_to_ebitda = safe_divide(
+                borrowings, latest_operating_profit
+            )
 
         # --- Cash quality ---
         free_cash_flow = last_non_null(cash_flow.get("free cash flow") or [])
         snapshot.free_cash_flow = (
             free_cash_flow * 1e7 if free_cash_flow is not None else None
         )
+        if free_cash_flow is not None and latest_sales:
+            snapshot.free_cash_flow_margin_pct = safe_divide(
+                free_cash_flow, latest_sales
+            )
+            if snapshot.free_cash_flow_margin_pct is not None:
+                snapshot.free_cash_flow_margin_pct *= 100.0
         cash_conversion = last_non_null(cash_flow.get("cfo/op") or [])
         if cash_conversion is None:
             operating_cash = last_non_null(
@@ -255,6 +325,8 @@ class ScreenerClient:
             )
             cash_conversion = safe_divide(operating_cash, latest_operating_profit)
         snapshot.cash_conversion = cash_conversion
+        if snapshot.cash_conversion is not None:
+            snapshot.cfo_to_pat_pct = snapshot.cash_conversion * 100.0
 
         if snapshot.roce_pct is None:
             snapshot.roce_pct = last_non_null(ratios.get("roce %") or [])
@@ -267,6 +339,7 @@ class ScreenerClient:
             if sales_growth.get("ttm") is not None
             else sales_growth.get("3 years")
         )
+        snapshot.revenue_cagr_pct = sales_growth.get("3 years")
         snapshot.earnings_growth_pct = (
             profit_growth.get("ttm")
             if profit_growth.get("ttm") is not None
@@ -277,6 +350,11 @@ class ScreenerClient:
             snapshot.revenue_growth_pct = growth_pct(sales[-1], sales[-2])
         if snapshot.earnings_growth_pct is None and len(net_profit) >= 2:
             snapshot.earnings_growth_pct = growth_pct(net_profit[-1], net_profit[-2])
+        if len(sales) >= 3 and sales[-2] is not None and sales[-3] is not None:
+            last_growth = growth_pct(sales[-1], sales[-2])
+            prior_growth = growth_pct(sales[-2], sales[-3])
+            if last_growth is not None and prior_growth is not None:
+                snapshot.revenue_acceleration_pct = last_growth - prior_growth
 
         # PEG only means something with positive growth and a positive P/E.
         if (
@@ -289,8 +367,92 @@ class ScreenerClient:
         # --- Ownership: promoter holding and its trend ---
         promoters = shareholding.get("promoters") or []
         snapshot.promoter_holding_pct = last_non_null(promoters)
+        snapshot.promoter_ownership_pct = snapshot.promoter_holding_pct
+        pledged = shareholding.get("pledged") or []
+        snapshot.promoter_pledge_pct = last_non_null(pledged)
+        if len(promoters) >= 2:
+            latest = promoters[-1]
+            previous = promoters[-2]
+            if latest is not None and previous is not None:
+                snapshot.promoter_ownership_change_pct = latest - previous
+
+        quarter_headers, _ = self._parse_table_with_headers(
+            soup, ("quarters", "quarterly-results")
+        )
+        if quarter_headers:
+            snapshot.latest_quarter_label = quarter_headers[-1]
+        snapshot.valuation_notes.append("DCF and reverse-DCF require external assumptions; placeholders only")
+        snapshot.data_gaps.extend(
+            [
+                "consensus revisions unavailable from Screener",
+                "ownership crowding unavailable from Screener",
+            ]
+        )
+        snapshot = apply_sector_context(snapshot, None)
 
         return snapshot
+
+    def fetch_quarterly_reports(self, symbol: str) -> List[QuarterlyReport]:
+        """Parse quarterly financial rows for one symbol."""
+        html = self._fetch_html(symbol)
+        if html is None:
+            return []
+
+        soup = BeautifulSoup(html, "lxml")
+        periods, quarter_rows = self._parse_table_with_headers(
+            soup, ("quarters", "quarterly-results")
+        )
+        if not periods:
+            return []
+
+        _, shareholding_rows = self._parse_table_with_headers(soup, ("shareholding",))
+        _, balance_sheet_rows = self._parse_table_with_headers(
+            soup, ("balance-sheet",)
+        )
+
+        reports: List[QuarterlyReport] = []
+        fetched_at = datetime.utcnow()
+        row_map = {
+            "revenue": quarter_rows.get("sales") or quarter_rows.get("revenue") or [],
+            "operating_profit": quarter_rows.get("operating profit") or [],
+            "opm_pct": quarter_rows.get("opm %") or [],
+            "net_profit": quarter_rows.get("net profit") or [],
+            "eps": quarter_rows.get("eps in rs") or [],
+            "interest": quarter_rows.get("interest") or [],
+            "borrowings": balance_sheet_rows.get("borrowings") or [],
+            "promoter_holding_pct": shareholding_rows.get("promoters") or [],
+            "promoter_pledge_pct": shareholding_rows.get("pledged") or [],
+        }
+
+        for index, period in enumerate(periods):
+            reports.append(
+                QuarterlyReport(
+                    symbol=symbol.upper(),
+                    fiscal_period=period,
+                    report_key=f"{symbol.upper()}:{period}",
+                    source="screener.in",
+                    fetched_at=fetched_at,
+                    period_end=self._period_end(period),
+                    revenue=row_map["revenue"][index] if index < len(row_map["revenue"]) else None,
+                    operating_profit=row_map["operating_profit"][index] if index < len(row_map["operating_profit"]) else None,
+                    opm_pct=row_map["opm_pct"][index] if index < len(row_map["opm_pct"]) else None,
+                    net_profit=row_map["net_profit"][index] if index < len(row_map["net_profit"]) else None,
+                    eps=row_map["eps"][index] if index < len(row_map["eps"]) else None,
+                    interest=row_map["interest"][index] if index < len(row_map["interest"]) else None,
+                    borrowings=row_map["borrowings"][index] if index < len(row_map["borrowings"]) else None,
+                    promoter_holding_pct=(
+                        row_map["promoter_holding_pct"][index]
+                        if index < len(row_map["promoter_holding_pct"])
+                        else None
+                    ),
+                    promoter_pledge_pct=(
+                        row_map["promoter_pledge_pct"][index]
+                        if index < len(row_map["promoter_pledge_pct"])
+                        else None
+                    ),
+                )
+            )
+        return reports
 
     def close(self) -> None:
         self._session.close()
