@@ -142,6 +142,9 @@ push() {
             "$INSTANCE:$REMOTE_DIR/data/" --zone "$ZONE" ||
             echo "  warning: cache copy failed; the first run will rebuild it" >&2
     fi
+
+    echo "Restarting dashboard service"
+    ssh_vm "sudo systemctl restart mutualfund-dashboard 2>/dev/null || true"
 }
 
 bootstrap() {
