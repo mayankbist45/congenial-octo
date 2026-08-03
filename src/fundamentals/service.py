@@ -19,8 +19,10 @@ from typing import Dict, Iterable, List, Optional
 
 from src.config import Config, get_config
 from src.fundamentals.screener import ScreenerClient
+from src.fundamentals.sector_models import apply_sector_context
 from src.logging_setup import get_logger
 from src.models import FundamentalSnapshot
+from src.universe import load_universe
 
 logger = get_logger(__name__)
 
@@ -57,6 +59,7 @@ class FundamentalsService:
 
     def __init__(self, config: Optional[Config] = None):
         self._config = config or get_config()
+        self._universe = load_universe(self._config)
         self._screener = ScreenerClient(
             request_delay=float(
                 self._config.get("fundamentals.request_delay_seconds", 0.5) or 0.5
@@ -150,6 +153,11 @@ class FundamentalsService:
                 snapshot = _merge(snapshot, yahoo.fetch(symbol))
             except Exception as exc:
                 logger.debug("Yahoo fetch error for %s: %s", symbol, exc)
+
+        if snapshot is not None:
+            snapshot = apply_sector_context(
+                snapshot, self._universe.sector_of(symbol)
+            )
 
         return snapshot
 

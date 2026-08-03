@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS quarterly_report_analyses (
     run_date TEXT NOT NULL,
     summary TEXT NOT NULL,
     thesis_impact TEXT NOT NULL,
+    sector_model TEXT,
     flags TEXT,
     highlights TEXT,
     metrics TEXT,
@@ -480,6 +481,7 @@ def _apply_schema(conn: Connection) -> None:
     # Migration must run before the full schema DDL because new indexes
     # reference persona_id which doesn't exist on old tables.
     _migrate_add_persona_id(conn)
+    _migrate_quarterly_analysis_sector_model(conn)
 
     statements = [s.strip() for s in schema_for(conn.dialect).split(";") if s.strip()]
     for statement in statements:
@@ -607,6 +609,16 @@ def _migrate_add_persona_id(conn: Connection) -> None:
 
     conn.commit()
     logger.info("Migration complete: persona_id added to all tables")
+
+
+def _migrate_quarterly_analysis_sector_model(conn: Connection) -> None:
+    if _has_column(conn, "quarterly_report_analyses", "sector_model"):
+        return
+    logger.info("Migrating journal: adding sector_model to quarterly_report_analyses")
+    conn.execute(
+        "ALTER TABLE quarterly_report_analyses ADD COLUMN sector_model TEXT"
+    )
+    conn.commit()
 
 
 @contextmanager

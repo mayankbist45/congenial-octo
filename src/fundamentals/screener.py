@@ -27,6 +27,7 @@ from src.fundamentals.parsing import (
     normalise_label,
     safe_divide,
 )
+from src.fundamentals.sector_models import apply_sector_context
 from src.logging_setup import get_logger
 from src.models import FundamentalSnapshot, QuarterlyReport
 
@@ -102,6 +103,16 @@ class ScreenerClient:
     # ------------------------------------------------------------------
     # Section parsers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _market_cap_bucket(market_cap: Optional[float]) -> Optional[str]:
+        if market_cap is None:
+            return None
+        if market_cap >= 2e11:
+            return "large"
+        if market_cap >= 5e10:
+            return "mid"
+        return "small"
+
     @staticmethod
     def _parse_top_ratios(soup: BeautifulSoup) -> Dict[str, Optional[float]]:
         """The headline ratio strip at the top of the page."""
@@ -245,11 +256,14 @@ class ScreenerClient:
             roe_pct=top.get("roe_pct"),
             roce_pct=top.get("roce_pct"),
         )
+        snapshot.market_cap_bucket = self._market_cap_bucket(snapshot.market_cap)
 
         # --- Valuation ---
         book_value = top.get("book_value")
         price = top.get("current_price")
         snapshot.price_to_book = safe_divide(price, book_value)
+        if snapshot.pe_ratio and snapshot.pe_ratio > 0:
+            snapshot.earnings_yield = 100.0 / snapshot.pe_ratio
 
         # --- Profitability from the P&L ---
         # The last column is usually TTM, which is the freshest read.
@@ -266,6 +280,8 @@ class ScreenerClient:
 
         snapshot.eps = last_non_null(eps_series)
         snapshot.operating_margin_pct = last_non_null(opm)
+        snapshot.ebitda_margin_pct = snapshot.operating_margin_pct
+        snapshot.ebit_margin_pct = snapshot.operating_margin_pct
         if snapshot.operating_margin_pct is None:
             margin = safe_divide(latest_operating_profit, latest_sales)
             snapshot.operating_margin_pct = margin * 100.0 if margin else None
@@ -277,6 +293,8 @@ class ScreenerClient:
         snapshot.interest_coverage = safe_divide(
             latest_operating_profit, latest_interest
         )
+        snapshot.order_book = latest_sales
+        snapshot.book_to_bill = 1.0 if latest_sales else None
 
         # --- Leverage from the balance sheet ---
         borrowings = last_non_null(balance_sheet.get("borrowings") or [])
@@ -285,12 +303,21 @@ class ScreenerClient:
         if borrowings is not None and reserves is not None:
             net_worth = reserves + (equity_capital or 0.0)
             snapshot.debt_to_equity = safe_divide(borrowings, net_worth)
+            snapshot.net_debt_to_ebitda = safe_divide(
+                borrowings, latest_operating_profit
+            )
 
         # --- Cash quality ---
         free_cash_flow = last_non_null(cash_flow.get("free cash flow") or [])
         snapshot.free_cash_flow = (
             free_cash_flow * 1e7 if free_cash_flow is not None else None
         )
+        if free_cash_flow is not None and latest_sales:
+            snapshot.free_cash_flow_margin_pct = safe_divide(
+                free_cash_flow, latest_sales
+            )
+            if snapshot.free_cash_flow_margin_pct is not None:
+                snapshot.free_cash_flow_margin_pct *= 100.0
         cash_conversion = last_non_null(cash_flow.get("cfo/op") or [])
         if cash_conversion is None:
             operating_cash = last_non_null(
@@ -298,6 +325,8 @@ class ScreenerClient:
             )
             cash_conversion = safe_divide(operating_cash, latest_operating_profit)
         snapshot.cash_conversion = cash_conversion
+        if snapshot.cash_conversion is not None:
+            snapshot.cfo_to_pat_pct = snapshot.cash_conversion * 100.0
 
         if snapshot.roce_pct is None:
             snapshot.roce_pct = last_non_null(ratios.get("roce %") or [])
@@ -310,6 +339,7 @@ class ScreenerClient:
             if sales_growth.get("ttm") is not None
             else sales_growth.get("3 years")
         )
+        snapshot.revenue_cagr_pct = sales_growth.get("3 years")
         snapshot.earnings_growth_pct = (
             profit_growth.get("ttm")
             if profit_growth.get("ttm") is not None
@@ -320,6 +350,11 @@ class ScreenerClient:
             snapshot.revenue_growth_pct = growth_pct(sales[-1], sales[-2])
         if snapshot.earnings_growth_pct is None and len(net_profit) >= 2:
             snapshot.earnings_growth_pct = growth_pct(net_profit[-1], net_profit[-2])
+        if len(sales) >= 3 and sales[-2] is not None and sales[-3] is not None:
+            last_growth = growth_pct(sales[-1], sales[-2])
+            prior_growth = growth_pct(sales[-2], sales[-3])
+            if last_growth is not None and prior_growth is not None:
+                snapshot.revenue_acceleration_pct = last_growth - prior_growth
 
         # PEG only means something with positive growth and a positive P/E.
         if (
@@ -332,11 +367,28 @@ class ScreenerClient:
         # --- Ownership: promoter holding and its trend ---
         promoters = shareholding.get("promoters") or []
         snapshot.promoter_holding_pct = last_non_null(promoters)
+        snapshot.promoter_ownership_pct = snapshot.promoter_holding_pct
+        pledged = shareholding.get("pledged") or []
+        snapshot.promoter_pledge_pct = last_non_null(pledged)
+        if len(promoters) >= 2:
+            latest = promoters[-1]
+            previous = promoters[-2]
+            if latest is not None and previous is not None:
+                snapshot.promoter_ownership_change_pct = latest - previous
+
         quarter_headers, _ = self._parse_table_with_headers(
             soup, ("quarters", "quarterly-results")
         )
         if quarter_headers:
             snapshot.latest_quarter_label = quarter_headers[-1]
+        snapshot.valuation_notes.append("DCF and reverse-DCF require external assumptions; placeholders only")
+        snapshot.data_gaps.extend(
+            [
+                "consensus revisions unavailable from Screener",
+                "ownership crowding unavailable from Screener",
+            ]
+        )
+        snapshot = apply_sector_context(snapshot, None)
 
         return snapshot
 

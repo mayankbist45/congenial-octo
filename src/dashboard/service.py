@@ -96,6 +96,46 @@ class DashboardService:
     def is_dry_run(self) -> bool:
         return bool(self._config.secrets.dry_run)
 
+    def mandate_summary(self) -> Dict[str, Any]:
+        mandate = self._config.mandate
+        liquidity = mandate.get("liquidity", {}) or {}
+        cash_bounds = mandate.get("cash_bounds_pct", {}) or {}
+        return {
+            "benchmark": mandate.get("benchmark_label", self.benchmark_label),
+            "horizon_years": mandate.get("investment_horizon_years"),
+            "target_excess_return_pct": mandate.get("target_excess_return_pct"),
+            "max_stock_weight_pct": mandate.get(
+                "max_stock_weight_pct", self._config.get("risk.max_position_pct")
+            ),
+            "max_sector_weight_pct": mandate.get(
+                "max_sector_weight_pct", self._config.get("risk.max_sector_pct")
+            ),
+            "max_tracking_error_pct": mandate.get("max_tracking_error_pct"),
+            "max_drawdown_pct": mandate.get("max_drawdown_pct"),
+            "turnover_budget_pct": mandate.get(
+                "turnover_budget_pct",
+                self._config.get("risk.annual_turnover_budget_pct"),
+            ),
+            "cash_min_pct": cash_bounds.get(
+                "min", self._config.get("fund.min_cash_buffer_pct")
+            ),
+            "cash_max_pct": cash_bounds.get("max"),
+            "market_caps": mandate.get("market_cap_limits", {}).get("allowed", []),
+            "liquidity_floor_inr": liquidity.get("min_avg_daily_turnover_inr"),
+            "adv_limit_pct": liquidity.get("max_position_pct_of_adv"),
+            "derivatives_allowed": bool(mandate.get("derivatives_allowed", False)),
+            "leverage_allowed": bool(mandate.get("leverage_allowed", False)),
+        }
+
+    def analytics_summary(self) -> Dict[str, Any]:
+        analytics = self._config.analytics
+        return {
+            "enabled": bool(analytics.get("enabled", True)),
+            "sector_models": analytics.get("sector_models", []) or [],
+            "preferred_sector_models": analytics.get("preferred_sector_models", []) or [],
+            "metric_weights": analytics.get("metric_weights", {}) or {},
+        }
+
     # ------------------------------------------------------------------
     # Overview
     # ------------------------------------------------------------------
@@ -520,6 +560,8 @@ class DashboardService:
                 "has_data": overview["has_data"],
                 "intraday": bool(pcfg.get("intraday.enabled", False)),
                 "intraday_summary": svc.intraday_summary(),
+                "mandate": svc.mandate_summary(),
+                "analytics": svc.analytics_summary(),
             })
         return results
 
@@ -597,6 +639,8 @@ class DashboardService:
                     "latest_quarter": holding.get("latest_quarter"),
                     "quarterly_summary": holding.get("quarterly_summary"),
                     "quarterly_thesis_impact": holding.get("quarterly_thesis_impact"),
+                    "quarterly_flags": holding.get("quarterly_flags", []),
+                    "quarterly_sector_model": holding.get("quarterly_sector_model"),
                     "revenue_series": self._align_series(periods, history, "revenue"),
                     "profit_series": self._align_series(periods, history, "net_profit"),
                     "opm_series": self._align_series(periods, history, "opm_pct"),
@@ -622,6 +666,7 @@ class DashboardService:
             "quarterly_summary": analysis["summary"] if analysis else "",
             "quarterly_thesis_impact": analysis["thesis_impact"] if analysis else "",
             "quarterly_flags": _loads(analysis["flags"], []) if analysis else [],
+            "quarterly_sector_model": analysis["sector_model"] if analysis else "",
         }
 
     def briefing(self, run_date: str) -> Optional[str]:

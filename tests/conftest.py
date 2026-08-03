@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import copy
 import os
+import tempfile
 from dataclasses import replace
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import pytest
@@ -29,7 +31,15 @@ TEST_DB_URL_ENV = "FUND_TEST_DB_URL"
 
 @pytest.fixture(scope="session")
 def config():
-    return get_config()
+    base = get_config()
+    raw = copy.deepcopy(base.raw)
+    database = raw.setdefault("database", {})
+    database["url"] = ""
+    session_root = Path(tempfile.mkdtemp(prefix="mfm-tests-"))
+    database["path"] = str(session_root / "fund.db")
+    raw["universe"]["file"] = str(base.path("universe.file"))
+    secrets = replace(base.secrets, database_url=None)
+    return Config(raw=raw, secrets=secrets, root=session_root)
 
 
 @pytest.fixture
@@ -121,10 +131,13 @@ def make_fundamental(
     roe: Optional[float] = 18.0,
     debt_to_equity: Optional[float] = 0.4,
     revenue_growth: Optional[float] = 12.0,
+    sector_model: Optional[str] = None,
+    sector_metrics: Optional[Dict[str, Optional[float]]] = None,
 ) -> FundamentalSnapshot:
     return FundamentalSnapshot(
         symbol=symbol,
         pe_ratio=pe,
+        forward_pe=pe - 2 if pe is not None else None,
         roe_pct=roe,
         roce_pct=22.0,
         debt_to_equity=debt_to_equity,
@@ -132,6 +145,19 @@ def make_fundamental(
         earnings_growth_pct=14.0,
         operating_margin_pct=20.0,
         market_cap=5e11,
+        market_cap_bucket="large",
+        ev_to_ebitda=12.0,
+        ev_to_sales=4.0,
+        promoter_holding_pct=52.0,
+        promoter_pledge_pct=0.0,
+        consensus_eps_revision_pct=1.5,
+        earnings_surprise_pct=2.0,
+        bear_case_return_pct=-8.0,
+        base_case_return_pct=12.0,
+        bull_case_return_pct=24.0,
+        sector_model=sector_model,
+        sector_metrics=sector_metrics or {},
+        macro_exposures={"rates": 0.2, "domestic_demand": 0.5},
     )
 
 

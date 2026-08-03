@@ -131,21 +131,34 @@ class BriefingBuilder:
 
     def _mandate(self) -> str:
         risk = self._config.risk
+        mandate = self._config.mandate
+        liquidity = mandate.get("liquidity", {}) or {}
+        cash_bounds = mandate.get("cash_bounds_pct", {}) or {}
+        sector_models = self._config.get("analytics.sector_models", []) or []
         return "\n".join(
             [
                 "--- MANDATE AND HARD LIMITS ---",
-                f"Universe            : Nifty 500 (NSE), delivery trades only",
-                f"Benchmark           : {self._config.get('fund.benchmark_label')}",
-                f"Max per position    : {risk.get('max_position_pct')}%",
-                f"Max per sector      : {risk.get('max_sector_pct')}%",
-                f"Min cash buffer     : {self._config.get('fund.min_cash_buffer_pct')}%",
+                f"Benchmark           : {mandate.get('benchmark_label') or self._config.get('fund.benchmark_label')}",
+                f"Horizon             : {mandate.get('investment_horizon_years', 'n/a')} years",
+                f"Target excess return: {_number(mandate.get('target_excess_return_pct'), '%')}",
+                f"Universe            : {', '.join(mandate.get('permitted_instruments', ['equity']))}",
+                f"Market-cap buckets  : {', '.join(mandate.get('market_cap_limits', {}).get('allowed', ['large', 'mid', 'small']))}",
+                f"Max per position    : {mandate.get('max_stock_weight_pct', risk.get('max_position_pct'))}%",
+                f"Max per sector      : {mandate.get('max_sector_weight_pct', risk.get('max_sector_pct'))}%",
+                f"Tracking error cap  : {_number(mandate.get('max_tracking_error_pct'), '%')}",
+                f"Max drawdown        : {_number(mandate.get('max_drawdown_pct'), '%')}",
+                f"Liquidity floor     : {_money(liquidity.get('min_avg_daily_turnover_inr'))} ADV | {_number(liquidity.get('max_position_pct_of_adv'), '%')} of ADV",
+                f"Cash bounds         : {_number(cash_bounds.get('min'), '%')} to {_number(cash_bounds.get('max'), '%')}",
                 f"Hard stop loss      : {risk.get('stop_loss_pct')}% from cost",
                 f"Profit review level : +{risk.get('profit_review_pct')}% from cost",
-                f"Annual turnover cap : {risk.get('annual_turnover_budget_pct')}%",
+                f"Annual turnover cap : {mandate.get('turnover_budget_pct', risk.get('annual_turnover_budget_pct'))}%",
+                f"Derivatives/leverage: {'allowed' if mandate.get('derivatives_allowed') else 'not allowed'} / {'allowed' if mandate.get('leverage_allowed') else 'not allowed'}",
+                f"Sector modules      : {', '.join(sector_models) if sector_models else 'none configured'}",
                 "",
                 "These limits are enforced mechanically after you respond. A "
                 "proposal that breaches one is discarded, so proposing it only "
-                "wastes the opportunity.",
+                "wastes the opportunity. Missing analytics are not a green "
+                "light: treat unsupported metrics as unknown, not favourable.",
             ]
         )
 
@@ -208,6 +221,16 @@ class BriefingBuilder:
                     f"trend {score.trend:+.2f}) | universe percentile "
                     f"{_number(score.percentile, '', 0)}"
                 )
+                lines.append(
+                    f"  analytics: sector model {score.sector_model or 'generic'} | "
+                    f"coverage {_number(score.metric_coverage_pct, '%')} | "
+                    f"supported metrics {', '.join(score.supported_metrics[:6]) if score.supported_metrics else 'none'}"
+                )
+                if score.unsupported_metrics:
+                    lines.append(
+                        "  unsupported/missing sector metrics: "
+                        + ", ".join(score.unsupported_metrics[:6])
+                    )
                 if not score.passes_gates:
                     lines.append(
                         f"  WARNING fails entry gates: {'; '.join(score.gate_failures)}"
@@ -221,6 +244,28 @@ class BriefingBuilder:
                     f"rev growth {_number(fundamental.revenue_growth_pct, '%')} | "
                     f"EPS growth {_number(fundamental.earnings_growth_pct, '%')}"
                 )
+                lines.append(
+                    f"  valuation: fwd P/E {_number(fundamental.forward_pe)} | "
+                    f"EV/EBITDA {_number(fundamental.ev_to_ebitda)} | "
+                    f"EV/Sales {_number(fundamental.ev_to_sales)} | "
+                    f"FCF yield {_number(fundamental.free_cash_flow_yield, '%')} | "
+                    f"expected return bear/base/bull "
+                    f"{_number(fundamental.bear_case_return_pct, '%')}/"
+                    f"{_number(fundamental.base_case_return_pct, '%')}/"
+                    f"{_number(fundamental.bull_case_return_pct, '%')}"
+                )
+                lines.append(
+                    f"  governance/revisions: promoter {_number(fundamental.promoter_holding_pct, '%')} | "
+                    f"pledge {_number(fundamental.promoter_pledge_pct, '%')} | "
+                    f"EPS revision {_number(fundamental.consensus_eps_revision_pct, '%')} | "
+                    f"surprise {_number(fundamental.earnings_surprise_pct, '%')} | "
+                    f"guidance {_number(fundamental.guidance_change_pct, '%')}"
+                )
+                if fundamental.macro_exposures:
+                    macro = ", ".join(
+                        f"{name} {value:+.1f}" for name, value in fundamental.macro_exposures.items()
+                    )
+                    lines.append(f"  macro exposures: {macro}")
                 if position.entry_pe and fundamental.pe_ratio:
                     lines.append(
                         f"  P/E at entry {position.entry_pe:.1f} -> now "
@@ -292,6 +337,8 @@ class BriefingBuilder:
                     )
             if analysis:
                 lines.append(f"  assessment ({analysis.thesis_impact}): {analysis.summary}")
+                if analysis.sector_model:
+                    lines.append(f"  sector model: {analysis.sector_model}")
                 for key, value in analysis.highlights.items():
                     lines.append(f"  {key.replace('_', ' ')}: {value}")
 
@@ -472,6 +519,19 @@ class BriefingBuilder:
                     f"rev growth {_number(fundamental.revenue_growth_pct, '%')} | "
                     f"mcap {_money(fundamental.market_cap)}"
                 )
+                lines.append(
+                    f"   sector model {score.sector_model or 'generic'} | "
+                    f"coverage {_number(score.metric_coverage_pct, '%')} | "
+                    f"valuation bear/base/bull "
+                    f"{_number(fundamental.bear_case_return_pct, '%')}/"
+                    f"{_number(fundamental.base_case_return_pct, '%')}/"
+                    f"{_number(fundamental.bull_case_return_pct, '%')}"
+                )
+                if fundamental.unsupported_metrics:
+                    lines.append(
+                        "   missing sector metrics: "
+                        + ", ".join(fundamental.unsupported_metrics[:5])
+                    )
             if technical:
                 lines.append(
                     f"   price {_number(technical.last_price, '', 2)} | "

@@ -880,7 +880,7 @@ class JournalRepository:
                     """
                     UPDATE quarterly_report_analyses
                        SET fiscal_period = ?, run_date = ?, summary = ?,
-                           thesis_impact = ?, flags = ?, highlights = ?,
+                           thesis_impact = ?, sector_model = ?, flags = ?, highlights = ?,
                            metrics = ?, source = ?, raw_error = ?, updated_at = ?
                      WHERE id = ?
                     """,
@@ -889,6 +889,7 @@ class JournalRepository:
                         analysis.run_date.isoformat(),
                         analysis.summary,
                         analysis.thesis_impact,
+                        analysis.sector_model,
                         json.dumps(analysis.flags),
                         json.dumps(analysis.highlights),
                         json.dumps(analysis.metrics),
@@ -904,9 +905,9 @@ class JournalRepository:
                 """
                 INSERT INTO quarterly_report_analyses (
                     persona_id, symbol, fiscal_period, report_key, run_date,
-                    summary, thesis_impact, flags, highlights, metrics, source,
-                    raw_error, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    summary, thesis_impact, sector_model, flags, highlights,
+                    metrics, source, raw_error, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     self._persona_id,
@@ -916,6 +917,7 @@ class JournalRepository:
                     analysis.run_date.isoformat(),
                     analysis.summary,
                     analysis.thesis_impact,
+                    analysis.sector_model,
                     json.dumps(analysis.flags),
                     json.dumps(analysis.highlights),
                     json.dumps(analysis.metrics),

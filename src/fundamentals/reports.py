@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Optional
 
 from src.config import Config, get_config
 from src.fundamentals.parsing import growth_pct
+from src.fundamentals.sector_models import infer_sector_model
 from src.fundamentals.screener import ScreenerClient
 from src.journal.repository import JournalRepository
 from src.logging_setup import get_logger
@@ -25,6 +26,9 @@ logger = get_logger(__name__)
 class QuarterlyReportAnalyzer:
     """Turns one latest quarter plus history into an investor-readable view."""
 
+    def __init__(self, config: Optional[Config] = None):
+        self._config = config or get_config()
+
     def analyze(
         self,
         symbol: str,
@@ -34,6 +38,8 @@ class QuarterlyReportAnalyzer:
         latest = history[0]
         prior = history[1] if len(history) > 1 else None
         year_ago = history[4] if len(history) > 4 else None
+        sector = self._config.raw.get("symbol_sectors", {}).get(symbol.upper())
+        sector_model = infer_sector_model(sector)
 
         latest = replace(
             latest,
@@ -82,6 +88,16 @@ class QuarterlyReportAnalyzer:
         ):
             flags.append("pledge_increase")
 
+        if sector_model == "banks":
+            if latest.opm_delta_pct is not None and latest.opm_delta_pct <= -1.0:
+                flags.append("spread_pressure")
+        elif sector_model == "saas":
+            if latest.revenue_yoy_pct is not None and latest.revenue_yoy_pct < 10:
+                flags.append("arr_slowdown")
+        elif sector_model == "real_estate":
+            if latest.revenue_yoy_pct is not None and latest.revenue_yoy_pct < 0:
+                flags.append("collection_risk")
+
         negative_flags = {
             "profit_decline",
             "eps_decline",
@@ -89,6 +105,9 @@ class QuarterlyReportAnalyzer:
             "debt_rise",
             "pledge_increase",
             "revenue_decline",
+            "spread_pressure",
+            "arr_slowdown",
+            "collection_risk",
         }
         positive = (
             latest.revenue_yoy_pct is not None
@@ -146,6 +165,7 @@ class QuarterlyReportAnalyzer:
                 "opm_delta_pct": latest.opm_delta_pct,
                 "debt_delta_pct": latest.debt_delta_pct,
             },
+            sector_model=sector_model,
             source="heuristic",
         )
 
@@ -183,7 +203,7 @@ class QuarterlyReportsService:
                 self._config.get("fundamentals.request_delay_seconds", 0.5) or 0.5
             )
         )
-        self._analyzer = analyzer or QuarterlyReportAnalyzer()
+        self._analyzer = analyzer or QuarterlyReportAnalyzer(self._config)
 
     def history(self, symbol: str, limit: int = 12) -> List[QuarterlyReport]:
         return [
@@ -229,6 +249,46 @@ class QuarterlyReportsService:
                 if existing:
                     context.analyses[symbol] = self._analysis_from_row(existing)
         return context
+
+    def backfill_symbols(
+        self,
+        symbols: Iterable[str],
+        as_of: date,
+        max_quarters: int = 4,
+    ) -> Dict[str, int]:
+        """Force-fetch and store recent quarterly history for symbols.
+
+        This bypasses the "new report only" gate and is meant for an initial
+        database warm-up. The latest available analysis is refreshed for every
+        symbol that yields enough history.
+        """
+        stored = 0
+        analysed = 0
+        errors = 0
+
+        for symbol in [s.upper() for s in dict.fromkeys(symbols)]:
+            try:
+                fetched = self._screener.fetch_quarterly_reports(symbol)
+            except Exception as exc:
+                errors += 1
+                logger.error("Quarterly backfill failed for %s: %s", symbol, exc)
+                continue
+
+            if not fetched:
+                continue
+
+            window = fetched[-max(max_quarters, 1) :] if max_quarters else fetched
+            self._populate_derived_metrics(window)
+            ids = self._repo.save_quarterly_reports(window)
+            stored += len(ids)
+
+            history = self.history(symbol, limit=max_quarters or 12)
+            if history:
+                analysis = self._analyzer.analyze(symbol, history, as_of)
+                self._repo.save_quarterly_report_analysis(analysis)
+                analysed += 1
+
+        return {"stored": stored, "analysed": analysed, "errors": errors}
 
     def close(self) -> None:
         self._screener.close()
@@ -288,6 +348,7 @@ class QuarterlyReportsService:
             fiscal_period=str(row["fiscal_period"]),
             summary=str(row["summary"]),
             thesis_impact=str(row.get("thesis_impact") or "unclear"),
+            sector_model=str(row.get("sector_model") or "") or None,
             flags=[] if not row.get("flags") else json.loads(str(row["flags"])),
             highlights=json.loads(str(row["highlights"])) if row.get("highlights") else {},
             metrics=json.loads(str(row["metrics"])) if row.get("metrics") else {},

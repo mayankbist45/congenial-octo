@@ -136,6 +136,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "proposals": svc.pending_proposals(),
                 "approved": svc.approved_proposals(),
                 "history": svc.recent_decisions(),
+                "mandate": svc.mandate_summary(),
+                "analytics": svc.analytics_summary(),
             },
             service=svc,
         )
@@ -153,6 +155,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             {
                 "page": "holdings",
                 "holdings": svc.holdings(),
+                "mandate": svc.mandate_summary(),
+                "analytics": svc.analytics_summary(),
                 "quarterly_cards": [
                     {
                         **card,

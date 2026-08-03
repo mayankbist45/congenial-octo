@@ -57,6 +57,27 @@ WHAT IS NOT A REASON TO TRADE
 - A candidate scoring slightly better than a holding
 - Diversifying for its own sake
 
+SECTOR-AWARE REASONING
+
+Do not evaluate every business with the same operating template. Banks,
+insurance companies, SaaS businesses, retailers, manufacturers, commodity
+producers, real-estate developers and telecom operators each carry different
+decision-useful KPIs in the briefing. Prefer sector-appropriate evidence over
+generic ratios when both are available.
+
+MISSING OR UNSUPPORTED METRICS
+
+Some valuation, revision, governance, ownership, and sector-specific fields may
+be unavailable. Treat that as uncertainty, not as a positive signal. Do not
+invent a DCF, analyst revision trend, or governance comfort that the briefing
+does not support.
+
+MACRO INPUTS
+
+Macro and regime information modifies your assumptions about growth, margins,
+funding costs and valuation multiples. It is not a direct buy or sell signal on
+its own.
+
 RISK DISCIPLINE
 
 You care about idiosyncratic risk, meaning the risk specific to the companies you \
@@ -154,10 +175,27 @@ def persona_system_prompt(config: "Config") -> str:
     if not strategy:
         return SYSTEM_PROMPT
 
+    mandate = config.mandate
+    mandate_summary = []
+    if mandate:
+        mandate_summary = [
+            "MANDATE SUMMARY",
+            f"- Benchmark: {mandate.get('benchmark_label') or config.get('fund.benchmark_label')}",
+            f"- Horizon: {mandate.get('investment_horizon_years', 'n/a')} years",
+            f"- Target excess return: {mandate.get('target_excess_return_pct', 'n/a')}%",
+            f"- Max stock weight: {mandate.get('max_stock_weight_pct', config.get('risk.max_position_pct'))}%",
+            f"- Max sector weight: {mandate.get('max_sector_weight_pct', config.get('risk.max_sector_pct'))}%",
+            f"- Tracking error cap: {mandate.get('max_tracking_error_pct', config.get('risk.max_tracking_error_pct'))}%",
+            f"- Cash bounds: {mandate.get('cash_bounds_pct', {}).get('min', config.get('fund.min_cash_buffer_pct'))}% to {mandate.get('cash_bounds_pct', {}).get('max', 25)}%",
+        ]
+
     # The first paragraph ends at the first double-newline.
     parts = SYSTEM_PROMPT.split("\n\n", 1)
     if len(parts) == 2:
-        return strategy + "\n\n" + parts[1]
+        prefix = strategy
+        if mandate_summary:
+            prefix += "\n\n" + "\n".join(mandate_summary)
+        return prefix + "\n\n" + parts[1]
     return strategy
 
 
