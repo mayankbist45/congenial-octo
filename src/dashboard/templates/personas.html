@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Personas &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Personas</h1>
+<p class="subtitle">
+  All enabled strategies grouped by market. India books use Angel One; US books route through Alpaca paper.
+</p>
+
+{% for region, rows in regions.items() %}
+  {% if rows %}
+  <div class="panel">
+    <div class="panel-head">
+      <h2>
+        <span class="region-badge region-{{ region | lower }}">{{ region_labels[region] }}</span>
+        {% if region == 'IN' %}NSE &middot; Angel One{% else %}NYSE/NASDAQ &middot; Alpaca{% endif %}
+      </h2>
+      <span class="note">{{ rows | length }} persona{{ 's' if rows | length != 1 }}</span>
+    </div>
+
+    <div class="persona-grid">
+      {% for p in rows %}
+      <article class="persona-card">
+        <div class="persona-card-head">
+          <h3>{{ p.persona_id }}</h3>
+          {% if p.intraday %}
+            <span class="tag tag-intraday">Intraday</span>
+          {% else %}
+            <span class="tag tag-swing">Swing</span>
+          {% endif %}
+        </div>
+        <p class="persona-desc">{{ p.description }}</p>
+        <dl class="persona-meta">
+          <div><dt>Broker</dt><dd>{{ p.broker_label }}</dd></div>
+          <div><dt>Capital</dt><dd>{{ p.capital | money_currency(p.currency) }}</dd></div>
+          {% if p.benchmark_label %}
+          <div><dt>Benchmark</dt><dd>{{ p.benchmark_label }}</dd></div>
+          {% endif %}
+        </dl>
+
+        {% if p.intraday %}
+          {% if p.intraday_has_results %}
+            {% set s = p.intraday_summary %}
+            <div class="persona-stats">
+              <span class="{{ s.total_net_pnl | sign }}">
+                {{ s.total_net_pnl | money_currency(p.currency) }} P&amp;L
+              </span>
+              <span>{{ s.total_trades }} trades</span>
+              <span>{{ s.win_rate_pct | pct(1) }} win</span>
+            </div>
+            <a class="persona-link" href="/intraday/{{ p.persona_id }}">View intraday &rarr;</a>
+          {% else %}
+            <p class="muted">No intraday paper run saved yet.</p>
+            <code class="cmd">python run_daily.py analyse --persona {{ p.persona_id }}</code>
+          {% endif %}
+        {% else %}
+          {% if p.has_data %}
+            <div class="persona-stats">
+              <span>{{ p.total_value | money_currency(p.currency) }}</span>
+              <span>{{ p.position_count }} positions</span>
+              {% if p.pending_count %}
+                <span class="warn-text">{{ p.pending_count }} pending</span>
+              {% endif %}
+            </div>
+          {% else %}
+            <p class="muted">No journal run yet for this swing book.</p>
+            <code class="cmd">python run_daily.py analyse --persona {{ p.persona_id }}</code>
+          {% endif %}
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endfor %}
+{% endblock %}

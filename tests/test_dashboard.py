@@ -26,8 +26,25 @@ from src.models import (
 )
 from tests.conftest import make_diversified_portfolio, make_scores
 
-PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/journal"]
-API = ["/api/overview", "/api/holdings", "/api/proposals", "/api/performance", "/api/risk"]
+PAGES = [
+    "/",
+    "/proposals",
+    "/holdings",
+    "/news",
+    "/performance",
+    "/personas",
+    "/intraday",
+    "/journal",
+]
+API = [
+    "/api/overview",
+    "/api/holdings",
+    "/api/proposals",
+    "/api/performance",
+    "/api/risk",
+    "/api/personas",
+    "/api/intraday",
+]
 
 
 @pytest.fixture
@@ -353,3 +370,65 @@ def test_briefing_is_served_when_it_exists(service, temp_config) -> None:
     assert "DAILY BRIEFING" in (service.briefing(today.isoformat()) or "")
     assert service.briefing("not-a-date") is None
     assert service.briefing("1999-01-01") is None
+
+
+def test_personas_page_groups_india_and_us(client) -> None:
+    body = client.get("/personas").text
+    assert "India" in body
+    assert "United States" in body
+    assert "calan_us" in body
+    assert "balanced_us" in body
+    assert "calan" in body
+
+
+def test_intraday_page_lists_regions(client) -> None:
+    body = client.get("/intraday").text
+    assert "Intraday" in body
+    assert "calan_us" in body
+    assert "revert" in body
+
+
+def test_intraday_detail_renders_saved_summary(client, temp_config) -> None:
+    intraday_dir = temp_config.root / "data" / "intraday"
+    intraday_dir.mkdir(parents=True, exist_ok=True)
+    (intraday_dir / "calan_us_latest.json").write_text(
+        """{
+          "persona_id": "calan_us",
+          "start_date": "2026-08-03",
+          "end_date": "2026-08-03",
+          "total_net_pnl": 102.93,
+          "total_return_pct": 0.21,
+          "total_trades": 3,
+          "win_rate_pct": 66.7,
+          "expectancy_r": 0.172,
+          "strategy_pnl": {"opening_range_breakout": 102.93},
+          "trades": [{
+            "symbol": "NVDA",
+            "strategy": "opening_range_breakout",
+            "side": "BUY",
+            "quantity": 49,
+            "entry_time": "2026-08-03 10:00:00",
+            "exit_time": "2026-08-03 10:15:00",
+            "entry_price": 202.4,
+            "exit_price": 205.08,
+            "net_pnl": 116.46,
+            "r_multiple": 0.582,
+            "exit_reason": "trailing_stop"
+          }]
+        }""",
+        encoding="utf-8",
+    )
+
+    response = client.get("/intraday/calan_us")
+    assert response.status_code == 200
+    body = response.text
+    assert "NVDA" in body
+    assert "trailing_stop" in body
+    assert "United States" in body or "region-us" in body
+
+
+def test_api_personas_returns_regions(client) -> None:
+    payload = client.get("/api/personas").json()
+    assert "IN" in payload
+    assert "US" in payload
+    assert any(row["persona_id"] == "calan_us" for row in payload["US"])

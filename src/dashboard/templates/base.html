@@ -296,6 +296,131 @@
 
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
+
+    .region-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      margin-right: 8px;
+    }
+    .region-in { background: #fef3c7; color: #92400e; }
+    .region-us { background: #dbeafe; color: #1e40af; }
+
+    .region-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .region-tabs a {
+      padding: 7px 14px;
+      border-radius: 8px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      color: var(--ink-soft);
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .region-tabs a.active {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: var(--accent);
+    }
+
+    .persona-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .persona-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+      background: #fafafa;
+    }
+    .persona-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .persona-card h3 {
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: -0.01em;
+    }
+    .persona-desc {
+      margin: 0 0 12px;
+      color: var(--ink-soft);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .persona-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 12px;
+      margin: 0 0 12px;
+      font-size: 12px;
+    }
+    .persona-meta dt {
+      margin: 0;
+      color: var(--ink-soft);
+      font-weight: 500;
+    }
+    .persona-meta dd { margin: 0; font-weight: 600; }
+    .persona-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+    .persona-link { font-size: 13px; font-weight: 600; }
+    .tag {
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .tag-swing { background: #ecfdf5; color: #047857; }
+    .tag-intraday { background: #eef2ff; color: #4338ca; }
+    .warn-text { color: var(--warn); font-weight: 600; }
+    code.cmd {
+      display: block;
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #111827;
+      color: #f9fafb;
+      font-size: 12px;
+      overflow-x: auto;
+    }
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .data-table th,
+    .data-table td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    .data-table th {
+      color: var(--ink-soft);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .small { font-size: 12px; }
   </style>
 </head>
 <body>
@@ -315,6 +440,8 @@
         <a href="/holdings" class="{{ 'active' if page == 'holdings' }}">Holdings</a>
         <a href="/news" class="{{ 'active' if page == 'news' }}">News</a>
         <a href="/performance" class="{{ 'active' if page == 'performance' }}">Performance</a>
+        <a href="/personas" class="{{ 'active' if page == 'personas' }}">Personas</a>
+        <a href="/intraday" class="{{ 'active' if page == 'intraday' }}">Intraday</a>
         <a href="/journal" class="{{ 'active' if page == 'journal' }}">Journal</a>
       </nav>
     </div>

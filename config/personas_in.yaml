@@ -351,3 +351,51 @@ personas:
       agent:
         enabled: true
 
+  xstat:
+    enabled: false
+    description: "Xstat — cross-asset beta-hedged stat-arb (ETF vs equity)"
+    strategy_description: >
+      Trades rolling beta-hedged residuals between Nifty/Bank ETF anchors and
+      liquid single names. Two-leg MIS execution. See docs/intraday/personas/xstat.md.
+    capital_inr: 500000
+    universe:
+      file: "data/nifty50.csv"
+      min_avg_daily_turnover_inr: 100000000
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - cross_zscore
+      cross_baskets:
+        - anchor: NIFTYBEES
+          leg: RELIANCE
+        - anchor: NIFTYBEES
+          leg: TCS
+        - anchor: BANKBEES
+          leg: HDFCBANK
+        - anchor: BANKBEES
+          leg: ICICIBANK
+      default_interval: "FIVE_MINUTE"
+      max_trades_per_day: 2
+      max_position_value_pct: 12.0
+      risk_per_trade_pct: 0.25
+      max_daily_loss_pct: 1.0
+      trade_window_start: "09:45"
+      trade_window_end: "14:00"
+      cross_entry_z: 2.0
+      cross_exit_z: 0.25
+      cross_min_bars: 25
+      cross_beta_lookback: 60
+      cross_max_widen_z: 0.35
+      cross_stop_buffer_pct: 0.30
+      watch_scan_size: 12
+      ranked_universe_size: 8
+      agent:
+        enabled: true
+        min_watch_confidence: 0.50
+        min_trade_confidence: 0.50
+

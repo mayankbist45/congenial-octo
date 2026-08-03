@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Intraday &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Intraday</h1>
+<p class="subtitle">
+  Paper and backtest results for intraday personas.
+  {% if active_region %}
+    Showing <strong>{{ region_labels[active_region] }}</strong> only.
+    <a href="/intraday">Show all regions</a>
+  {% endif %}
+</p>
+
+<div class="region-tabs">
+  <a href="/intraday" class="{{ 'active' if not active_region }}">All</a>
+  <a href="/intraday?region=IN" class="{{ 'active' if active_region == 'IN' }}">India</a>
+  <a href="/intraday?region=US" class="{{ 'active' if active_region == 'US' }}">United States</a>
+</div>
+
+{% if not personas %}
+<div class="panel">
+  <p class="empty">No intraday personas are enabled.</p>
+</div>
+{% else %}
+
+{% for region in ['IN', 'US'] %}
+  {% set rows = intraday_by_region[region] %}
+  {% if rows and (not active_region or active_region == region) %}
+  <div class="panel">
+    <div class="panel-head">
+      <h2>
+        <span class="region-badge region-{{ region | lower }}">{{ region_labels[region] }}</span>
+        Intraday
+      </h2>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Persona</th>
+          <th>Broker</th>
+          <th>Capital</th>
+          <th>Period</th>
+          <th>Net P&amp;L</th>
+          <th>Return</th>
+          <th>Trades</th>
+          <th>Win rate</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in rows %}
+        {% set s = p.intraday_summary %}
+        <tr>
+          <td>
+            <strong>{{ p.persona_id }}</strong>
+            <div class="muted small">{{ p.description }}</div>
+          </td>
+          <td>{{ p.broker_label }}</td>
+          <td>{{ p.capital | money_currency(p.currency) }}</td>
+          {% if s %}
+          <td>{{ s.start_date }} &rarr; {{ s.end_date }}</td>
+          <td class="{{ s.total_net_pnl | sign }}">{{ s.total_net_pnl | money_currency(p.currency) }}</td>
+          <td class="{{ s.total_return_pct | sign }}">{{ s.total_return_pct | pct(2, true) }}</td>
+          <td>{{ s.total_trades }}</td>
+          <td>{{ s.win_rate_pct | pct(1) }}</td>
+          <td><a href="/intraday/{{ p.persona_id }}">Details</a></td>
+          {% else %}
+          <td colspan="6" class="muted">No saved run</td>
+          <td><a href="/intraday/{{ p.persona_id }}">Setup</a></td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endfor %}
+
+{% endif %}
+{% endblock %}

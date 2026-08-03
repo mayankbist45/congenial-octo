@@ -34,15 +34,37 @@ def _loads(value: Any, default: Any) -> Any:
 
 def money(value: Optional[float]) -> str:
     """Indian-convention rupee formatting: crore and lakh, not millions."""
+    return format_money(value, "INR")
+
+
+def format_money(value: Optional[float], currency: str = "INR") -> str:
+    """Format a monetary amount in INR or USD."""
     if value is None:
         return "-"
     sign = "-" if value < 0 else ""
     magnitude = abs(value)
+    code = (currency or "INR").upper()
+    if code == "USD":
+        if magnitude >= 1e6:
+            return f"{sign}${magnitude / 1e6:,.2f}M"
+        if magnitude >= 1e3:
+            return f"{sign}${magnitude / 1e3:,.1f}K"
+        return f"{sign}${magnitude:,.2f}"
     if magnitude >= 1e7:
         return f"{sign}Rs {magnitude / 1e7:,.2f} cr"
     if magnitude >= 1e5:
         return f"{sign}Rs {magnitude / 1e5:,.2f} L"
     return f"{sign}Rs {magnitude:,.0f}"
+
+
+def region_label(region: str) -> str:
+    mapping = {"IN": "India", "US": "United States"}
+    return mapping.get((region or "IN").upper(), region)
+
+
+def broker_label(provider: str) -> str:
+    mapping = {"angelone": "Angel One", "alpaca": "Alpaca"}
+    return mapping.get((provider or "angelone").lower(), provider)
 
 
 def pct(value: Optional[float], places: int = 1, signed: bool = False) -> str:
@@ -489,14 +511,23 @@ class DashboardService:
         for pid, pdef in personas.items():
             if not isinstance(pdef, dict) or not pdef.get("enabled", True):
                 continue
-            meta_keys = {"enabled", "capital_inr", "description", "strategy_description"}
+            meta_keys = {
+                "enabled",
+                "capital_inr",
+                "capital_usd",
+                "description",
+                "strategy_description",
+            }
             overrides = {k: v for k, v in pdef.items() if k not in meta_keys}
             base_raw = {k: v for k, v in self._config.raw.items() if k != "personas"}
             merged = _deep_merge(base_raw, overrides)
             merged["personas"] = personas
             secrets = self._config.secrets
-            if pdef.get("capital_inr") is not None:
-                secrets = secrets.with_capital(float(pdef["capital_inr"]))
+            capital = pdef.get("capital_inr")
+            if capital is None:
+                capital = pdef.get("capital_usd")
+            if capital is not None:
+                secrets = secrets.with_capital(float(capital))
             pcfg = Config(
                 raw=merged,
                 secrets=secrets,
@@ -505,18 +536,51 @@ class DashboardService:
             )
             svc = DashboardService(config=pcfg)
             overview = svc.overview()
+            intraday_summary = svc.intraday_summary()
+            region = pcfg.market_region
+            currency = str(pcfg.get("fund.base_currency", "INR" if region == "IN" else "USD"))
             results.append({
                 "persona_id": pid,
                 "description": str(pdef.get("description", pid)),
+                "strategy_description": str(pdef.get("strategy_description", "")),
+                "region": region,
+                "region_label": region_label(region),
+                "currency": currency,
+                "broker": pcfg.broker_provider,
+                "broker_label": broker_label(pcfg.broker_provider),
+                "fund_name": str(pcfg.get("fund.name", pcfg.get("fund.benchmark_label", pid))),
+                "benchmark_label": str(pcfg.get("fund.benchmark_label", "")),
+                "capital": float(capital) if capital is not None else secrets.initial_capital,
                 "total_value": overview["total_value"],
                 "position_count": overview["position_count"],
                 "cash_pct": overview["cash_pct"],
                 "pending_count": overview["pending_count"],
                 "has_data": overview["has_data"],
                 "intraday": bool(pcfg.get("intraday.enabled", False)),
-                "intraday_summary": svc.intraday_summary(),
+                "intraday_summary": intraday_summary,
+                "intraday_has_results": intraday_summary is not None,
             })
         return results
+
+    def personas_by_region(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Group enabled personas by market region for the dashboard."""
+        grouped: Dict[str, List[Dict[str, Any]]] = {"IN": [], "US": []}
+        for row in self.all_personas_overview():
+            region = row.get("region", "IN")
+            grouped.setdefault(region, []).append(row)
+        for rows in grouped.values():
+            rows.sort(key=lambda r: (r.get("intraday", False), r.get("persona_id", "")))
+        return grouped
+
+    def intraday_personas(self, region: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Intraday personas, optionally filtered to one market region."""
+        rows = [
+            row for row in self.all_personas_overview()
+            if row.get("intraday")
+        ]
+        if region:
+            rows = [row for row in rows if row.get("region") == region.upper()]
+        return rows
 
     # ------------------------------------------------------------------
     # Journal

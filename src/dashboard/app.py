@@ -21,7 +21,16 @@ from fastapi.templating import Jinja2Templates
 
 from src.config import Config, get_config
 from src.dashboard import charts
-from src.dashboard.service import DashboardService, money, number, pct, sign_class
+from src.dashboard.service import (
+    DashboardService,
+    broker_label,
+    format_money,
+    money,
+    number,
+    pct,
+    region_label,
+    sign_class,
+)
 from src.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -36,9 +45,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app = FastAPI(title=service.fund_name, docs_url="/api/docs")
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
     templates.env.filters["money"] = money
+    templates.env.filters["money_currency"] = format_money
     templates.env.filters["pct"] = pct
     templates.env.filters["number"] = number
     templates.env.filters["sign"] = sign_class
+    templates.env.globals["region_label"] = region_label
+    templates.env.globals["broker_label"] = broker_label
 
     def render(
         request: Request, template: str, context: Dict[str, Any]
@@ -166,6 +178,82 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             },
         )
 
+    @app.get("/personas", response_class=HTMLResponse)
+    def personas_page(request: Request) -> HTMLResponse:
+        grouped = service.personas_by_region()
+        return render(
+            request,
+            "personas.html",
+            {
+                "page": "personas",
+                "regions": grouped,
+                "region_labels": {
+                    "IN": region_label("IN"),
+                    "US": region_label("US"),
+                },
+            },
+        )
+
+    @app.get("/intraday", response_class=HTMLResponse)
+    def intraday_page(request: Request, region: Optional[str] = None) -> HTMLResponse:
+        active = region.upper() if region else None
+        if active and active not in {"IN", "US"}:
+            raise HTTPException(status_code=400, detail="region must be IN or US")
+        personas = service.intraday_personas(active)
+        by_region = service.personas_by_region()
+        return render(
+            request,
+            "intraday.html",
+            {
+                "page": "intraday",
+                "personas": personas,
+                "intraday_by_region": {
+                    "IN": [p for p in by_region.get("IN", []) if p.get("intraday")],
+                    "US": [p for p in by_region.get("US", []) if p.get("intraday")],
+                },
+                "active_region": active,
+                "region_labels": {
+                    "IN": region_label("IN"),
+                    "US": region_label("US"),
+                },
+            },
+        )
+
+    @app.get("/intraday/{persona_id}", response_class=HTMLResponse)
+    def intraday_detail(request: Request, persona_id: str) -> HTMLResponse:
+        from src.config import get_persona_config, persona_description
+
+        try:
+            pcfg = get_persona_config(persona_id, base=config)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not pcfg.get("intraday.enabled", False):
+            raise HTTPException(status_code=404, detail="Not an intraday persona")
+
+        persona_svc = DashboardService(config=pcfg)
+        summary = persona_svc.intraday_summary()
+        region = pcfg.market_region
+        currency = str(pcfg.get("fund.base_currency", "INR" if region == "IN" else "USD"))
+        capital = pcfg.secrets.initial_capital
+        persona = {
+            "persona_id": persona_id,
+            "description": persona_description(persona_id),
+            "region": region,
+            "region_label": region_label(region),
+            "currency": currency,
+            "capital": capital,
+            "broker_label": broker_label(pcfg.broker_provider),
+        }
+        return render(
+            request,
+            "intraday_detail.html",
+            {
+                "page": "intraday",
+                "persona": persona,
+                "summary": summary,
+            },
+        )
+
     # ------------------------------------------------------------------
     # Approval actions
     # ------------------------------------------------------------------
@@ -226,6 +314,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     @app.get("/api/risk")
     def api_risk() -> JSONResponse:
         return JSONResponse(service.risk_profile() or {})
+
+    @app.get("/api/personas")
+    def api_personas() -> JSONResponse:
+        return JSONResponse(service.personas_by_region())
+
+    @app.get("/api/intraday")
+    def api_intraday(region: Optional[str] = None) -> JSONResponse:
+        active = region.upper() if region else None
+        return JSONResponse(service.intraday_personas(active))
 
     return app
 

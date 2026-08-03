@@ -355,9 +355,11 @@ def enabled_personas(settings_path: Optional[str] = None) -> List[str]:
 
 
 def get_persona_config(
-    persona_id: str, settings_path: Optional[str] = None
+    persona_id: str,
+    settings_path: Optional[str] = None,
+    base: Optional[Config] = None,
 ) -> Config:
-    base = get_config(settings_path)
+    base = base or get_config(settings_path)
     personas = base.raw.get("personas", {})
     if persona_id not in personas:
         available = ", ".join(personas.keys()) if personas else "(none defined)"
