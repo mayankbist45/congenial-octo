@@ -692,6 +692,9 @@ def scan_pair_signals(
     stop_z = _cfg_float(config, "pair_stop_z", 2.5)
     min_bars = _cfg_int(config, "pair_min_bars", 20)
     max_widen = _cfg_float(config, "pair_max_widen_z", 0.4)
+    stop_buffer = _cfg_float(config, "pair_stop_buffer_pct", 0.30) / 100.0
+    window_start = _parse_time(str(config.get("intraday.trade_window_start", "09:45")))
+    window_end = _parse_time(str(config.get("intraday.trade_window_end", "14:30")))
     out: Dict[str, List[IntradaySignal]] = {}
 
     for leg_a, leg_b in configured_pairs(config):
@@ -702,65 +705,61 @@ def scan_pair_signals(
         z_hist = spread_z_history(fa, fb, min_bars=min_bars)
         if z_hist.empty:
             continue
-        z_now = float(z_hist.iloc[-1])
-        if abs(z_now) < entry_z:
-            continue
-        if len(z_hist) >= 4 and abs(z_now - float(z_hist.iloc[-4])) > max_widen:
-            continue
 
-        ts = fa.index[-1].to_pydatetime()
-        close_a = float(fa["close"].iloc[-1])
-        close_b = float(fb["close"].iloc[-1])
-        pair_id = f"{leg_a}:{leg_b}"
-        stop_buffer = _cfg_float(config, "stop_buffer_pct", 0.05) / 100.0
-        force_exit = _force_exit_dt(ts, config)
+        for ts, z_now in z_hist.items():
+            bar_time = ts.time() if hasattr(ts, "time") else ts.to_pydatetime().time()
+            if bar_time < window_start or bar_time > window_end:
+                continue
+            if abs(z_now) < entry_z:
+                continue
+            idx = z_hist.index.get_loc(ts)
+            if idx >= 3 and abs(z_now - float(z_hist.iloc[idx - 3])) > max_widen:
+                continue
 
-        if z_now >= entry_z:
-            stop_a = close_a * (1.0 + stop_buffer)
-            stop_b = close_b * (1.0 - stop_buffer)
-            target_a = close_a * (1.0 - stop_buffer * 2)
-            target_b = close_b * (1.0 + stop_buffer * 2)
-            signal = IntradaySignal(
-                leg_a,
-                "pair_zscore",
-                "SELL",
-                ts,
-                close_a,
-                stop_a,
-                target_a,
-                f"Short spread z={z_now:.2f}",
-                force_exit,
-                pair_id=pair_id,
-                pair_leg=leg_b,
-                pair_side="BUY",
-                pair_entry_price=close_b,
-                pair_stop_price=stop_b,
-                pair_target_price=target_b,
-            )
+            close_a = float(fa.loc[ts, "close"])
+            close_b = float(fb.loc[ts, "close"])
+            pair_id = f"{leg_a}:{leg_b}"
+            force_exit = _force_exit_dt(ts.to_pydatetime(), config)
+            ts_dt = ts.to_pydatetime()
+
+            if z_now >= entry_z:
+                signal = IntradaySignal(
+                    leg_a,
+                    "pair_zscore",
+                    "SELL",
+                    ts_dt,
+                    close_a,
+                    close_a * (1.0 + stop_buffer),
+                    close_a * (1.0 - stop_buffer * 2),
+                    f"Short spread z={z_now:.2f}",
+                    force_exit,
+                    pair_id=pair_id,
+                    pair_leg=leg_b,
+                    pair_side="BUY",
+                    pair_entry_price=close_b,
+                    pair_stop_price=close_b * (1.0 - stop_buffer),
+                    pair_target_price=close_b * (1.0 + stop_buffer * 2),
+                )
+            else:
+                signal = IntradaySignal(
+                    leg_a,
+                    "pair_zscore",
+                    "BUY",
+                    ts_dt,
+                    close_a,
+                    close_a * (1.0 - stop_buffer),
+                    close_a * (1.0 + stop_buffer * 2),
+                    f"Long spread z={z_now:.2f}",
+                    force_exit,
+                    pair_id=pair_id,
+                    pair_leg=leg_b,
+                    pair_side="SELL",
+                    pair_entry_price=close_b,
+                    pair_stop_price=close_b * (1.0 + stop_buffer),
+                    pair_target_price=close_b * (1.0 - stop_buffer * 2),
+                )
             out.setdefault(leg_a, []).append(signal)
-        elif z_now <= -entry_z:
-            stop_a = close_a * (1.0 - stop_buffer)
-            stop_b = close_b * (1.0 + stop_buffer)
-            target_a = close_a * (1.0 + stop_buffer * 2)
-            target_b = close_b * (1.0 - stop_buffer * 2)
-            signal = IntradaySignal(
-                leg_a,
-                "pair_zscore",
-                "BUY",
-                ts,
-                close_a,
-                stop_a,
-                target_a,
-                f"Long spread z={z_now:.2f}",
-                force_exit,
-                pair_id=pair_id,
-                pair_leg=leg_b,
-                pair_side="SELL",
-                pair_entry_price=close_b,
-                pair_stop_price=stop_b,
-                pair_target_price=target_b,
-            )
-            out.setdefault(leg_a, []).append(signal)
+            break
         _ = stop_z
     return out
 

@@ -146,7 +146,8 @@ class SpreadRanker(IntradayRanker):
             fb = frames.get(leg_b)
             if fa is None or fb is None or fa.empty or fb.empty:
                 continue
-            z = spread_z_at(fa, fb)
+            min_bars = int(self._config.get("intraday.pair_min_bars", 20) or 20)
+            z = spread_z_at(fa, fb, min_bars=min_bars)
             if z is None:
                 continue
             turnover_a = float((fa["close"] * fa["volume"]).sum())

@@ -204,9 +204,36 @@ class IntradaySimulator:
         if signal.max_exit_time:
             future = future.loc[future.index <= pd.Timestamp(signal.max_exit_time)]
         if future.empty:
-            future = frame.loc[frame.index >= entry_ts]
-        if future.empty:
-            return None
+            bar = frame.loc[frame.index >= entry_ts]
+            if bar.empty:
+                return None
+            exit_time = bar.index[-1].to_pydatetime()
+            exit_price = float(bar["close"].iloc[-1])
+            gross = (
+                (exit_price - signal.entry_price) * quantity
+                if signal.side == "BUY"
+                else (signal.entry_price - exit_price) * quantity
+            )
+            costs = self._costs(signal.entry_price, exit_price, quantity)
+            net = gross - costs
+            r_multiple = net / risk_amount if risk_amount > 0 else 0.0
+            return IntradayTrade(
+                symbol=signal.symbol,
+                strategy=signal.strategy,
+                side=signal.side,
+                quantity=quantity,
+                entry_time=signal.entry_time,
+                exit_time=exit_time,
+                entry_price=signal.entry_price,
+                exit_price=exit_price,
+                stop_price=signal.stop_price,
+                target_price=signal.target_price,
+                exit_reason="session_end",
+                gross_pnl=gross,
+                costs=costs,
+                net_pnl=net,
+                r_multiple=r_multiple,
+            )
 
         exit_time = future.index[-1].to_pydatetime()
         exit_price = float(future["close"].iloc[-1])

@@ -204,6 +204,18 @@ angelone:
   # Watch mode skips API when cache is this fresh (defaults to bar size + 1 min).
   candle_cache_stale_minutes: 6
 
+alpaca:
+  # US equities via Alpaca Markets (paper-api.alpaca.markets by default).
+  min_call_interval_seconds: 0.25
+
+# Default broker for top-level config; US personas override with broker.provider.
+broker:
+  provider: angelone
+
+market:
+  region: IN
+  currency: INR
+
 dashboard:
   host: "127.0.0.1"
   port: 8000
@@ -446,7 +458,6 @@ personas:
       strategies:
         - vwap_fade
         - opening_gap_fade
-        - range_revert
       trade_window_start: "09:45"
       trade_window_end: "13:00"
       max_trades_per_day: 4
@@ -495,6 +506,12 @@ personas:
       max_daily_loss_pct: 0.8
       trade_window_start: "09:45"
       trade_window_end: "14:00"
+      min_avg_volume: 15000
+      min_avg_turnover_inr: 50000000
+      stocks_in_play:
+        min_gap_pct: 0.0
+        min_rvol: 0.0
+        min_trend_cleanliness: 0.0
       ofi_lookback_bars: 3
       ofi_z_lookback: 30
       ofi_z_entry: 1.5
@@ -533,15 +550,18 @@ personas:
         - [HDFCBANK, ICICIBANK]
         - [TCS, INFY]
         - [RELIANCE, ONGC]
-        - [MARUTI, TATAMOTORS]
-      max_trades_per_day: 3
+        - [MARUTI, M&M]
+      max_trades_per_day: 2
       max_position_value_pct: 15.0
       risk_per_trade_pct: 0.30
-      pair_entry_z: 1.5
+      trade_window_start: "09:45"
+      trade_window_end: "14:00"
+      pair_entry_z: 2.0
       pair_exit_z: 0.20
       pair_stop_z: 2.5
       pair_min_bars: 20
-      pair_max_widen_z: 0.4
+      pair_max_widen_z: 0.3
+      pair_stop_buffer_pct: 0.30
       watch_scan_size: 16
       ranked_universe_size: 12
       agent:
@@ -571,3 +591,32 @@ personas:
       parent_orders: []
       agent:
         enabled: true
+
+  balanced_us:
+    enabled: true
+    description: "Balanced US — S&P 500 GARP via Alpaca paper"
+    strategy_description: >
+      US equity book on the S&P 500, mirroring the balanced GARP mandate.
+      Orders route to Alpaca paper trading; Yahoo Finance supplies daily history
+      for scoring. Run with: python run_daily.py status --persona balanced_us
+    capital_usd: 100000
+    market:
+      region: US
+      currency: USD
+    broker:
+      provider: alpaca
+    fund:
+      name: "AI Managed US Equity Fund"
+      benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
+      base_currency: USD
+      target_positions: 25
+      max_positions: 30
+      min_cash_buffer_pct: 5.0
+    universe:
+      file: "data/sp500.csv"
+    execution:
+      product_type: "CASH"
+      order_type: "LIMIT"
+      exchange: "US"
+      auto_approve: false

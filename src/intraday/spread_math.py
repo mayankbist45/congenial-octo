@@ -19,6 +19,21 @@ def configured_pairs(config: Config) -> List[Tuple[str, str]]:
     return pairs
 
 
+def scan_symbols(
+    config: Config,
+    universe_symbols: List[str],
+    max_symbols: Optional[int] = None,
+) -> List[str]:
+    """Universe slice for intraday fetch; spread always includes configured pair legs."""
+    base = list(universe_symbols)
+    if max_symbols is not None:
+        base = base[:max_symbols]
+    if config.persona_id != "spread":
+        return base
+    legs = [s for pair in configured_pairs(config) for s in pair]
+    return list(dict.fromkeys(legs + base))
+
+
 def spread_series(fa: pd.DataFrame, fb: pd.DataFrame) -> pd.Series:
     n = min(len(fa), len(fb))
     if n < 2:

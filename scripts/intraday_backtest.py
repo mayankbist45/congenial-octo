@@ -15,6 +15,7 @@ from src.config import get_persona_config
 from src.intraday.data import IntradayDataService
 from src.intraday.reporting import save_summary, summarize_result
 from src.intraday.simulator import IntradaySimulator
+from src.intraday.spread_math import scan_symbols
 from src.logging_setup import setup_logging
 from src.universe import load_universe
 
@@ -42,8 +43,9 @@ def main() -> int:
     try:
         data = IntradayDataService(config, broker=broker)
         universe = load_universe(config)
+        symbols = scan_symbols(config, universe.symbols, args.max_symbols)
         frames = {}
-        for symbol in universe.symbols[: args.max_symbols]:
+        for symbol in symbols:
             frame = data.candles_range(symbol, start, end, interval=args.interval.upper())
             if not frame.empty:
                 frames[symbol] = frame
