@@ -1,4 +1,4 @@
-"""Intraday stock scanner that maps candidates to playbooks."""
+"""Map ranked symbols to available playbooks."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from src.config import Config
-from src.intraday.strategies import DEFAULT_STRATEGIES
+from src.intraday.strategies import load_strategies
 
 
 @dataclass
@@ -23,6 +23,7 @@ class IntradayCandidate:
 class IntradayScanner:
     def __init__(self, config: Config):
         self._config = config
+        self._strategies = load_strategies(config)
 
     def scan(
         self,
@@ -47,7 +48,9 @@ class IntradayScanner:
         if frame.empty or len(frame) < 6:
             return None
         min_volume = float(self._config.get("intraday.min_avg_volume", 100000) or 100000)
-        min_turnover = float(self._config.get("intraday.min_avg_turnover_inr", 1e8) or 1e8)
+        min_turnover = float(
+            self._config.get("intraday.min_avg_turnover_inr", 1e8) or 1e8
+        )
         min_atr_pct = float(self._config.get("intraday.min_atr_pct", 0.6) or 0.6)
 
         avg_volume = float(frame["volume"].mean())
@@ -59,12 +62,16 @@ class IntradayScanner:
 
         strategies: List[str] = []
         reasons = [f"turnover Rs {turnover:,.0f}", f"intraday range {atr_pct:.2f}%"]
-        for strategy in DEFAULT_STRATEGIES:
-            if strategy.name == "previous_day_break" and not previous_day:
-                continue
+        for strategy in self._strategies:
             if strategy.signals(symbol, frame, self._config, previous_day):
                 strategies.append(strategy.name)
-        return IntradayCandidate(symbol=symbol, strategies=strategies, reasons=reasons, turnover=turnover, atr_pct=atr_pct)
+        return IntradayCandidate(
+            symbol=symbol,
+            strategies=strategies,
+            reasons=reasons,
+            turnover=turnover,
+            atr_pct=atr_pct,
+        )
 
     @staticmethod
     def _intraday_range_pct(frame: pd.DataFrame) -> float:

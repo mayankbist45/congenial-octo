@@ -5,7 +5,7 @@ from __future__ import annotations
 import pickle
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
@@ -65,73 +65,67 @@ class IntradayDataService:
         day: date,
         interval: str = "FIVE_MINUTE",
         use_cache: bool = True,
+        refresh: bool = False,
     ) -> pd.DataFrame:
         interval = interval.upper()
         if interval not in SUPPORTED_INTERVALS:
             raise ValueError(f"Unsupported intraday interval {interval!r}")
 
         key = self._key(symbol, day, interval)
+        cached: Optional[pd.DataFrame] = None
         if use_cache:
             self._load_cache()
             if key in self._cache:
-                return _strip_index_timezone(self._cache[key]).copy()
+                cached = _strip_index_timezone(self._cache[key]).copy()
+                if not refresh:
+                    return cached
+                if self._cache_is_fresh(cached, interval):
+                    return cached
 
-        broker = self._broker
-        if broker is not None and not hasattr(broker, "get_candles") and hasattr(broker, "inner"):
-            broker = getattr(broker, "inner")
-        if broker is None or not hasattr(broker, "get_candles"):
+        broker = self._resolve_broker()
+        if broker is None:
+            if cached is not None and not cached.empty:
+                return cached
             logger.warning("No broker candle source available for %s", symbol)
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
         window = self._request_window(day)
         if window is None:
+            if cached is not None and not cached.empty:
+                return cached
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         from_dt, to_dt = window
-        raw = getattr(broker, "get_candles")(symbol, from_dt, to_dt, interval)
+
+        if refresh and cached is not None and not cached.empty:
+            overlap = timedelta(minutes=self._interval_minutes(interval))
+            from_dt = max(from_dt, cached.index.max().to_pydatetime() - overlap)
+
+        if to_dt <= from_dt:
+            return cached if cached is not None else pd.DataFrame(
+                columns=["open", "high", "low", "close", "volume"]
+            )
+
+        raw = broker.get_candles(symbol, from_dt, to_dt, interval)
         frame = normalize_candles(raw)
+        if cached is not None and not cached.empty and not frame.empty:
+            frame = _merge_candles(cached, frame)
+        elif cached is not None and not cached.empty and frame.empty:
+            return cached
+
         if use_cache and not frame.empty:
             self._cache[key] = frame
             self._save_cache()
         return _strip_index_timezone(frame).copy()
 
-    def candles_range(
-        self,
-        symbol: str,
-        start: date,
-        end: date,
-        interval: str = "FIVE_MINUTE",
-    ) -> pd.DataFrame:
-        """Load intraday candles for a date range with one broker request.
-
-        Angel One can return multiple trading days in a single historical
-        request. Using this for backtests avoids the slow symbol/day nested loop
-        that quickly feels hung under historical-data throttles.
-        """
-        interval = interval.upper()
-        if interval not in SUPPORTED_INTERVALS:
-            raise ValueError(f"Unsupported intraday interval {interval!r}")
-
+    def _resolve_broker(self) -> Optional[BrokerClient]:
         broker = self._broker
         if broker is not None and not hasattr(broker, "get_candles") and hasattr(broker, "inner"):
             broker = getattr(broker, "inner")
-        if broker is None or not hasattr(broker, "get_candles"):
-            logger.warning("No broker candle source available for %s", symbol)
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-
-        window = self._range_request_window(start, end)
-        if window is None:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        from_dt, to_dt = window
-        raw = getattr(broker, "get_candles")(symbol, from_dt, to_dt, interval)
-        return _strip_index_timezone(normalize_candles(raw))
+        if broker is not None and hasattr(broker, "get_candles"):
+            return broker
+        return None
 
     def _request_window(self, day: date) -> Optional[tuple[datetime, datetime]]:
-        """Return the legal broker request window, or None when no bars can exist.
-
-        Angel One rejects requests whose ``fromdate`` is greater than the
-        current timestamp. That matters before the market opens and whenever a
-        backtest range includes today or future dates.
-        """
         if day.weekday() >= 5:
             return None
         now = self._now()
@@ -148,49 +142,112 @@ class IntradayDataService:
             return None
         return from_dt, to_dt
 
+    def _interval_minutes(self, interval: str) -> int:
+        return {"ONE_MINUTE": 1, "FIVE_MINUTE": 5, "FIFTEEN_MINUTE": 15}.get(
+            interval.upper(), 5
+        )
+
+    def _cache_is_fresh(self, frame: pd.DataFrame, interval: str) -> bool:
+        """Skip API calls when the cache already has the latest completed bar."""
+        if frame.empty:
+            return False
+        stale_minutes = float(
+            self._config.get("angelone.candle_cache_stale_minutes", 0) or 0
+        )
+        if stale_minutes <= 0:
+            stale_minutes = float(self._interval_minutes(interval)) + 1.0
+        age = self._now() - frame.index.max().to_pydatetime()
+        return age.total_seconds() <= stale_minutes * 60.0
+
+    def candles_range(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "FIVE_MINUTE",
+    ) -> pd.DataFrame:
+        """Load intraday candles for a date range (one broker request when possible)."""
+        interval = interval.upper()
+        if interval not in SUPPORTED_INTERVALS:
+            raise ValueError(f"Unsupported intraday interval {interval!r}")
+
+        broker = self._resolve_broker()
+        if broker is None:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        window = self._range_request_window(start, end)
+        if window is None:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        from_dt, to_dt = window
+        raw = broker.get_candles(symbol, from_dt, to_dt, interval)
+        return _strip_index_timezone(normalize_candles(raw))
+
     def _range_request_window(
         self, start: date, end: date
     ) -> Optional[tuple[datetime, datetime]]:
         now = self._now()
-        if end < start:
+        if end < start or start > now.date():
             return None
-        if start > now.date():
-            return None
-
         end = min(end, now.date())
-        cursor = start
         first_day: Optional[date] = None
         last_day: Optional[date] = None
+        cursor = start
         while cursor <= end:
             if cursor.weekday() < 5:
                 first_day = first_day or cursor
                 last_day = cursor
             cursor += timedelta(days=1)
-
         if first_day is None or last_day is None:
             return None
-
         from_dt = datetime.combine(first_day, time(9, 15))
         to_dt = datetime.combine(last_day, time(15, 30))
         if last_day == now.date():
-            if now < datetime.combine(last_day, time(9, 15)):
-                if first_day == last_day:
-                    return None
-                previous = last_day - timedelta(days=1)
-                while previous >= first_day and previous.weekday() >= 5:
-                    previous -= timedelta(days=1)
-                if previous < first_day:
-                    return None
-                to_dt = datetime.combine(previous, time(15, 30))
-            else:
-                to_dt = min(to_dt, now)
+            to_dt = min(to_dt, now)
         if to_dt <= from_dt:
             return None
         return from_dt, to_dt
 
+    def previous_day_stats(
+        self,
+        symbol: str,
+        day: date,
+        interval: str = "FIVE_MINUTE",
+    ) -> Optional[Dict[str, float]]:
+        """Prior session OHLC for gap and prior-level distance."""
+        prior = day - timedelta(days=1)
+        for _ in range(7):
+            if prior.weekday() < 5:
+                break
+            prior -= timedelta(days=1)
+        else:
+            return None
+
+        frame = self.candles(symbol, prior, interval=interval, use_cache=True)
+        if frame.empty:
+            frame = self.candles(symbol, prior, interval=interval, use_cache=False)
+        if frame.empty:
+            return None
+        return {
+            "close": float(frame["close"].iloc[-1]),
+            "high": float(frame["high"].max()),
+            "low": float(frame["low"].min()),
+        }
+
+    def previous_day_stats_batch(
+        self,
+        symbols: List[str],
+        day: date,
+        interval: str = "FIVE_MINUTE",
+    ) -> Dict[str, Dict[str, float]]:
+        out: Dict[str, Dict[str, float]] = {}
+        for symbol in symbols:
+            stats = self.previous_day_stats(symbol, day, interval=interval)
+            if stats:
+                out[symbol.upper()] = stats
+        return out
+
 
 def normalize_candles(rows: Any) -> pd.DataFrame:
-    """Normalize broker candle payloads to an indexed OHLCV frame."""
     if rows is None:
         rows = []
     frame = pd.DataFrame(rows)
@@ -207,11 +264,8 @@ def normalize_candles(rows: Any) -> pd.DataFrame:
         if frame["timestamp"].dt.tz is not None:
             frame["timestamp"] = frame["timestamp"].dt.tz_localize(None)
     except AttributeError:
-        frame["timestamp"] = frame["timestamp"].apply(
-            lambda value: value.tz_localize(None)
-            if isinstance(value, pd.Timestamp) and value.tzinfo is not None
-            else value
-        )
+        pass
+
     for col in ("open", "high", "low", "close", "volume"):
         if col not in frame.columns:
             raise ValueError(f"Intraday candles missing {col!r}")
@@ -220,6 +274,12 @@ def normalize_candles(rows: Any) -> pd.DataFrame:
     frame = frame.dropna(subset=["timestamp", "open", "high", "low", "close"])
     frame = frame.sort_values("timestamp").set_index("timestamp")
     return _strip_index_timezone(frame[["open", "high", "low", "close", "volume"]])
+
+
+def _merge_candles(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    combined = pd.concat([existing, new])
+    combined = combined[~combined.index.duplicated(keep="last")]
+    return combined.sort_index()
 
 
 def _strip_index_timezone(frame: pd.DataFrame) -> pd.DataFrame:

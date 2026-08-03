@@ -57,18 +57,39 @@ def build_market_data_broker(
     is true, because paper books still need live intraday market data. Orders
     placed through this client must not be used for live trading in paper mode;
     Calan's watch/simulator keep fills in their own paper state.
+
+    When ``ANGELONE_DATA2_*`` credentials are set, a dual-key candle pool
+    spreads ``getCandleData`` quota across two SmartAPI apps.
     """
     config = config or get_config()
-    if not force_simulated and config.secrets.has_broker_credentials:
-        from src.broker.angelone import AngelOneClient
+    secrets = config.secrets
 
+    if force_simulated or not secrets.has_broker_credentials:
+        from src.broker.simulated import SimulatedBroker
+        from src.market_data.prices import PriceService
+
+        logger.info("Using simulated broker for intraday market data")
+        return SimulatedBroker(config, price_lookup=PriceService(config))
+
+    from src.broker.angelone import AngelOneClient
+    from src.broker.candle_pool import AngelOneCandlePool
+
+    primary = AngelOneClient(config)
+    secondary_creds = secrets.secondary_candle_credentials()
+    if secondary_creds and secondary_creds.is_complete:
+        secondary = AngelOneClient(config, credentials=secondary_creds)
         logger.info(
-            "Using Angel One for market data"
-            + (
-                " (paper trading; orders not routed here)"
-                if config.secrets.dry_run
-                else ""
-            )
+            "Using Angel One candle pool (primary + data2 API keys) for intraday data"
+            + (" (paper trading; orders not routed here)" if secrets.dry_run else "")
         )
-        return AngelOneClient(config)
-    return build_broker(config, force_simulated=True)
+        return AngelOneCandlePool([primary, secondary], config=config)
+
+    logger.info(
+        "Using Angel One for market data"
+        + (
+            " (paper trading; orders not routed here)"
+            if secrets.dry_run
+            else ""
+        )
+    )
+    return primary
