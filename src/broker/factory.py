@@ -50,3 +50,34 @@ def build_broker(
 
     logger.info("Using simulated broker (no Angel One credentials configured)")
     return SimulatedBroker(config, price_lookup=PriceService(config))
+
+
+def build_market_data_broker(
+    config: Optional[Config] = None,
+    force_simulated: bool = False,
+) -> BrokerClient:
+    """Broker for candle fetches; uses dual API keys when configured."""
+    config = config or get_config()
+    secrets = config.secrets
+
+    if force_simulated or not secrets.has_broker_credentials:
+        from src.broker.simulated import SimulatedBroker
+        from src.market_data.prices import PriceService
+
+        logger.info("Using simulated broker for intraday market data")
+        return SimulatedBroker(config, price_lookup=PriceService(config))
+
+    from src.broker.angelone import AngelOneClient
+    from src.broker.candle_pool import AngelOneCandlePool
+
+    primary = AngelOneClient(config)
+    secondary_creds = secrets.secondary_candle_credentials()
+    if secondary_creds and secondary_creds.is_complete:
+        secondary = AngelOneClient(config, credentials=secondary_creds)
+        logger.info(
+            "Using Angel One candle pool (primary + data2 API keys) for intraday data"
+        )
+        return AngelOneCandlePool([primary, secondary], config=config)
+
+    logger.info("Using single Angel One API key for intraday market data")
+    return primary
