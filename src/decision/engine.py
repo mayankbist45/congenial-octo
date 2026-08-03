@@ -39,6 +39,7 @@ from src.models import (
     NewsDigest,
     PortfolioRiskProfile,
     PortfolioState,
+    QuarterlyReportContext,
     Severity,
     TechnicalSnapshot,
     TradeProposal,
@@ -96,6 +97,7 @@ class DecisionEngine:
         candidates: List[FactorScores],
         digest: Optional[NewsDigest] = None,
         risk_profile: Optional[PortfolioRiskProfile] = None,
+        quarterly_context: Optional[QuarterlyReportContext] = None,
         as_of: Optional[date] = None,
     ) -> DailyDecision:
         """Run one full decision cycle."""
@@ -116,6 +118,7 @@ class DecisionEngine:
             candidates=candidates,
             digest=digest,
             risk_profile=risk_profile,
+            quarterly_context=quarterly_context,
             turnover=turnover,
             is_deep_review=deep_review,
             as_of=as_of,

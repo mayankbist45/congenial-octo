@@ -43,6 +43,9 @@ alone is noise. You act only when something changed in the *business* or in the 
 4. A materially better opportunity exists and capital must be rotated, which \
    requires the candidate to be clearly superior, not marginally.
 5. The fund is holding excess idle cash and needs to be invested per its mandate.
+6. A newly released quarterly report materially changes the evidence on a
+   holding or candidate. Fresh quarterly-report analysis in the briefing is
+   authoritative new information for that symbol and must be addressed.
 
 WHAT IS NOT A REASON TO TRADE
 
@@ -134,7 +137,9 @@ CLOSING_NORMAL = """--- YOUR DECISION ---
 
 Review the above as the fund's portfolio manager. Remember that no trades is the \
 expected answer unless something in the business fundamentals, the news, or the \
-portfolio's risk profile genuinely demands action.
+portfolio's risk profile genuinely demands action. When the briefing includes a \
+fresh quarterly report, explicitly address what changed and whether it changes \
+the thesis.
 
 Respond with the JSON object described in your instructions."""
 

@@ -169,7 +169,7 @@ class DashboardService:
     def holdings(self) -> List[Dict[str, Any]]:
         rows = self._repo.latest_position_snapshot()
         if rows:
-            return [
+            views = [
                 {
                     "symbol": row["symbol"],
                     "company_name": row["company_name"] or row["symbol"],
@@ -190,6 +190,9 @@ class DashboardService:
                 }
                 for row in rows
             ]
+            for view in views:
+                view.update(self._quarterly_summary(view["symbol"]))
+            return views
 
         # Fills can land before the next snapshot refresh. Reconstruct from the
         # trade journal so Overview/Holdings are not stuck on an empty cash book.
@@ -224,6 +227,8 @@ class DashboardService:
                 }
             )
         views.sort(key=lambda row: row["market_value"], reverse=True)
+        for view in views:
+            view.update(self._quarterly_summary(view["symbol"]))
         return views
 
     def sector_weights(self) -> List[Dict[str, Any]]:
@@ -551,8 +556,73 @@ class DashboardService:
                 view["proposals"] = [
                     self._proposal_view(p) for p in self._repo.proposals_for_run(run_id)
                 ]
+                view["quarterly_updates"] = self.quarterly_updates_for_run(run["run_date"])
                 return view
         return None
+
+    def quarterly_updates_for_run(self, run_date: str) -> List[Dict[str, Any]]:
+        try:
+            parsed = datetime.fromisoformat(run_date).date()
+        except (TypeError, ValueError):
+            return []
+        rows = self._repo.quarterly_report_analyses_for_run(parsed)
+        updates: List[Dict[str, Any]] = []
+        for row in rows:
+            updates.append(
+                {
+                    "symbol": row["symbol"],
+                    "fiscal_period": row["fiscal_period"],
+                    "summary": row["summary"] or "",
+                    "thesis_impact": row["thesis_impact"] or "unclear",
+                    "flags": _loads(row["flags"], []),
+                    "highlights": _loads(row["highlights"], {}),
+                }
+            )
+        return updates
+
+    def quarterly_report_cards(self) -> List[Dict[str, Any]]:
+        cards: List[Dict[str, Any]] = []
+        for holding in self.holdings():
+            history = self._repo.quarterly_history(holding["symbol"], limit=8)
+            if not history:
+                continue
+            periods = [row["fiscal_period"] for row in reversed(history)]
+            revenue = [float(row["revenue"]) for row in reversed(history) if row["revenue"] is not None]
+            net_profit = [float(row["net_profit"]) for row in reversed(history) if row["net_profit"] is not None]
+            opm = [float(row["opm_pct"]) for row in reversed(history) if row["opm_pct"] is not None]
+            cards.append(
+                {
+                    "symbol": holding["symbol"],
+                    "company_name": holding["company_name"],
+                    "latest_quarter": holding.get("latest_quarter"),
+                    "quarterly_summary": holding.get("quarterly_summary"),
+                    "quarterly_thesis_impact": holding.get("quarterly_thesis_impact"),
+                    "revenue_series": self._align_series(periods, history, "revenue"),
+                    "profit_series": self._align_series(periods, history, "net_profit"),
+                    "opm_series": self._align_series(periods, history, "opm_pct"),
+                }
+            )
+        return cards
+
+    @staticmethod
+    def _align_series(periods: List[str], history: List[Dict[str, Any]], field: str) -> Dict[str, List[Any]]:
+        ordered = list(reversed(history))
+        values = [row.get(field) for row in ordered]
+        return {
+            "dates": [row["fiscal_period"] for row in ordered],
+            "values": [float(v) if v is not None else 0.0 for v in values],
+            "has_values": any(v is not None for v in values),
+        }
+
+    def _quarterly_summary(self, symbol: str) -> Dict[str, Any]:
+        latest = self._repo.latest_quarterly_report(symbol)
+        analysis = self._repo.latest_quarterly_report_analysis(symbol)
+        return {
+            "latest_quarter": latest["fiscal_period"] if latest else None,
+            "quarterly_summary": analysis["summary"] if analysis else "",
+            "quarterly_thesis_impact": analysis["thesis_impact"] if analysis else "",
+            "quarterly_flags": _loads(analysis["flags"], []) if analysis else [],
+        }
 
     def briefing(self, run_date: str) -> Optional[str]:
         """The exact briefing text the decision layer was given that day."""

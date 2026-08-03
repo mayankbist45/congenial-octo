@@ -38,6 +38,9 @@
         <td>
           <div class="sym">{{ h.symbol }}</div>
           <div class="sub-line">{{ h.sector }}</div>
+          {% if h.latest_quarter %}
+          <div class="sub-line">Latest quarter: {{ h.latest_quarter }}</div>
+          {% endif %}
         </td>
         <td class="num">{{ h.quantity }}</td>
         <td class="num">{{ h.avg_cost | number }}</td>
@@ -54,6 +57,14 @@
         <td class="num">{{ h.idiosyncratic_vol | pct(1) }}</td>
         <td class="num">{{ h.risk_contribution_pct | pct(1) }}</td>
       </tr>
+      {% if h.quarterly_summary %}
+      <tr>
+        <td colspan="13">
+          <strong>Quarterly read{% if h.quarterly_thesis_impact %} ({{ h.quarterly_thesis_impact }}){% endif %}:</strong>
+          {{ h.quarterly_summary }}
+        </td>
+      </tr>
+      {% endif %}
       {% endfor %}
     </tbody>
   </table>
@@ -74,6 +85,35 @@
 </div>
 
 {% if holdings %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Quarterly trends</h2>
+    <span class="note">Stored report history from previous runs plus the latest fresh analysis</span>
+  </div>
+  {% if quarterly_cards %}
+    {% for card in quarterly_cards %}
+    <div class="proposal-card">
+      <h3>{{ card.symbol }}{% if card.latest_quarter %} · {{ card.latest_quarter }}{% endif %}</h3>
+      <p class="note">{{ card.quarterly_summary or 'No quarterly summary recorded yet.' }}</p>
+      {% if card.revenue_chart %}
+      <h4>Revenue by quarter</h4>
+      {{ card.revenue_chart | safe }}
+      {% endif %}
+      {% if card.profit_chart %}
+      <h4>Net profit by quarter</h4>
+      {{ card.profit_chart | safe }}
+      {% endif %}
+      {% if card.opm_chart %}
+      <h4>Operating margin trend</h4>
+      {{ card.opm_chart | safe }}
+      {% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="empty">No quarterly report history has been stored yet.</p>
+  {% endif %}
+</div>
+
 <div class="panel">
   <h2>Why the fund owns these</h2>
   <table>

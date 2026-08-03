@@ -199,6 +199,50 @@ CREATE TABLE IF NOT EXISTS liquid_positions (
     PRIMARY KEY (persona_id, run_date)
 );
 
+CREATE TABLE IF NOT EXISTS quarterly_reports (
+    id {ID_PK},
+    symbol TEXT NOT NULL,
+    fiscal_period TEXT NOT NULL,
+    report_key TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'screener.in',
+    fetched_at TEXT NOT NULL,
+    period_end TEXT,
+    revenue {REAL},
+    operating_profit {REAL},
+    opm_pct {REAL},
+    net_profit {REAL},
+    eps {REAL},
+    interest {REAL},
+    borrowings {REAL},
+    promoter_holding_pct {REAL},
+    promoter_pledge_pct {REAL},
+    revenue_yoy_pct {REAL},
+    profit_yoy_pct {REAL},
+    eps_yoy_pct {REAL},
+    opm_delta_pct {REAL},
+    debt_delta_pct {REAL},
+    UNIQUE (symbol, fiscal_period, source)
+);
+
+CREATE TABLE IF NOT EXISTS quarterly_report_analyses (
+    id {ID_PK},
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    symbol TEXT NOT NULL,
+    fiscal_period TEXT NOT NULL,
+    report_key TEXT NOT NULL,
+    run_date TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    thesis_impact TEXT NOT NULL,
+    flags TEXT,
+    highlights TEXT,
+    metrics TEXT,
+    source TEXT,
+    raw_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (persona_id, symbol, report_key)
+);
+
 CREATE TABLE IF NOT EXISTS decision_reviews (
     id {ID_PK},
     proposal_id INTEGER NOT NULL REFERENCES proposals(id),
@@ -251,6 +295,10 @@ CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(run_date);
 CREATE INDEX IF NOT EXISTS idx_runs_persona ON runs(persona_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_date ON position_snapshots(run_date);
 CREATE INDEX IF NOT EXISTS idx_snapshots_persona ON position_snapshots(persona_id);
+CREATE INDEX IF NOT EXISTS idx_quarterly_reports_symbol ON quarterly_reports(symbol);
+CREATE INDEX IF NOT EXISTS idx_quarterly_reports_key ON quarterly_reports(report_key);
+CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_persona ON quarterly_report_analyses(persona_id);
+CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_run_date ON quarterly_report_analyses(run_date);
 CREATE INDEX IF NOT EXISTS idx_decision_reviews_persona ON decision_reviews(persona_id);
 CREATE INDEX IF NOT EXISTS idx_decision_reviews_label ON decision_reviews(label);
 CREATE INDEX IF NOT EXISTS idx_learning_lessons_persona ON learning_lessons(persona_id);
@@ -267,13 +315,23 @@ TABLES = (
     "risk_history",
     "news_digests",
     "liquid_positions",
+    "quarterly_reports",
+    "quarterly_report_analyses",
     "decision_reviews",
     "learning_lessons",
 )
 
 # Tables whose primary key is a generated integer, so a migration that carries
 # ids across has to move the sequence past them.
-SEQUENCE_TABLES = ("runs", "proposals", "trades", "decision_reviews", "learning_lessons")
+SEQUENCE_TABLES = (
+    "runs",
+    "proposals",
+    "trades",
+    "quarterly_reports",
+    "quarterly_report_analyses",
+    "decision_reviews",
+    "learning_lessons",
+)
 
 DbTarget = Union[None, str, Path, Config]
 
@@ -595,7 +653,8 @@ def truncate_all(target: DbTarget = None) -> None:
             # database, as TRUNCATE ... RESTART IDENTITY does on Postgres.
             conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name IN "
-                "('runs','proposals','trades','decision_reviews','learning_lessons')"
+                "('runs','proposals','trades','quarterly_reports',"
+                "'quarterly_report_analyses','decision_reviews','learning_lessons')"
             )
 
 

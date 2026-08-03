@@ -22,6 +22,8 @@ from src.models import (
     NewsDigest,
     PortfolioRiskProfile,
     PortfolioState,
+    QuarterlyReport,
+    QuarterlyReportAnalysis,
     TradeProposal,
 )
 
@@ -30,6 +32,10 @@ logger = get_logger(__name__)
 
 def _iso(value: Optional[date]) -> Optional[str]:
     return value.isoformat() if value else None
+
+
+def _iso_dt(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat(timespec="seconds") if value else None
 
 
 class JournalRepository:
@@ -738,6 +744,214 @@ class JournalRepository:
                 (self._persona_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Quarterly report history
+    # ------------------------------------------------------------------
+    def save_quarterly_reports(self, reports: List[QuarterlyReport]) -> List[int]:
+        ids: List[int] = []
+        with session(self._config) as conn:
+            for report in reports:
+                existing = conn.execute(
+                    """
+                    SELECT id FROM quarterly_reports
+                     WHERE symbol = ? AND fiscal_period = ? AND source = ?
+                    """,
+                    (report.symbol.upper(), report.fiscal_period, report.source),
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        """
+                        UPDATE quarterly_reports
+                           SET report_key = ?, fetched_at = ?, period_end = ?,
+                               revenue = ?, operating_profit = ?, opm_pct = ?,
+                               net_profit = ?, eps = ?, interest = ?, borrowings = ?,
+                               promoter_holding_pct = ?, promoter_pledge_pct = ?,
+                               revenue_yoy_pct = ?, profit_yoy_pct = ?,
+                               eps_yoy_pct = ?, opm_delta_pct = ?, debt_delta_pct = ?
+                         WHERE id = ?
+                        """,
+                        (
+                            report.report_key,
+                            _iso_dt(report.fetched_at) or datetime.now().isoformat(timespec="seconds"),
+                            _iso(report.period_end),
+                            report.revenue,
+                            report.operating_profit,
+                            report.opm_pct,
+                            report.net_profit,
+                            report.eps,
+                            report.interest,
+                            report.borrowings,
+                            report.promoter_holding_pct,
+                            report.promoter_pledge_pct,
+                            report.revenue_yoy_pct,
+                            report.profit_yoy_pct,
+                            report.eps_yoy_pct,
+                            report.opm_delta_pct,
+                            report.debt_delta_pct,
+                            existing["id"],
+                        ),
+                    )
+                    ids.append(int(existing["id"]))
+                    continue
+
+                report_id = conn.insert_returning_id(
+                    """
+                    INSERT INTO quarterly_reports (
+                        symbol, fiscal_period, report_key, source, fetched_at,
+                        period_end, revenue, operating_profit, opm_pct, net_profit,
+                        eps, interest, borrowings, promoter_holding_pct,
+                        promoter_pledge_pct, revenue_yoy_pct, profit_yoy_pct,
+                        eps_yoy_pct, opm_delta_pct, debt_delta_pct
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        report.symbol.upper(),
+                        report.fiscal_period,
+                        report.report_key,
+                        report.source,
+                        _iso_dt(report.fetched_at) or datetime.now().isoformat(timespec="seconds"),
+                        _iso(report.period_end),
+                        report.revenue,
+                        report.operating_profit,
+                        report.opm_pct,
+                        report.net_profit,
+                        report.eps,
+                        report.interest,
+                        report.borrowings,
+                        report.promoter_holding_pct,
+                        report.promoter_pledge_pct,
+                        report.revenue_yoy_pct,
+                        report.profit_yoy_pct,
+                        report.eps_yoy_pct,
+                        report.opm_delta_pct,
+                        report.debt_delta_pct,
+                    ),
+                )
+                ids.append(report_id)
+        return ids
+
+    def latest_report_key(self, symbol: str) -> Optional[str]:
+        with session(self._config) as conn:
+            row = conn.execute(
+                """
+                SELECT report_key
+                  FROM quarterly_reports
+                 WHERE symbol = ?
+                 ORDER BY period_end DESC, fetched_at DESC, id DESC
+                 LIMIT 1
+                """,
+                (symbol.upper(),),
+            ).fetchone()
+            return str(row["report_key"]) if row and row["report_key"] else None
+
+    def quarterly_history(self, symbol: str, limit: int = 12) -> List[Dict[str, Any]]:
+        with session(self._config) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM quarterly_reports
+                 WHERE symbol = ?
+                 ORDER BY period_end DESC, fetched_at DESC, id DESC
+                 LIMIT ?
+                """,
+                (symbol.upper(), limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def latest_quarterly_report(self, symbol: str) -> Optional[Dict[str, Any]]:
+        rows = self.quarterly_history(symbol, limit=1)
+        return rows[0] if rows else None
+
+    def save_quarterly_report_analysis(
+        self, analysis: QuarterlyReportAnalysis
+    ) -> int:
+        now = datetime.now().isoformat(timespec="seconds")
+        with session(self._config) as conn:
+            existing = conn.execute(
+                """
+                SELECT id FROM quarterly_report_analyses
+                 WHERE persona_id = ? AND symbol = ? AND report_key = ?
+                """,
+                (self._persona_id, analysis.symbol.upper(), analysis.report_key),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE quarterly_report_analyses
+                       SET fiscal_period = ?, run_date = ?, summary = ?,
+                           thesis_impact = ?, flags = ?, highlights = ?,
+                           metrics = ?, source = ?, raw_error = ?, updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        analysis.fiscal_period,
+                        analysis.run_date.isoformat(),
+                        analysis.summary,
+                        analysis.thesis_impact,
+                        json.dumps(analysis.flags),
+                        json.dumps(analysis.highlights),
+                        json.dumps(analysis.metrics),
+                        analysis.source,
+                        analysis.raw_error,
+                        now,
+                        existing["id"],
+                    ),
+                )
+                return int(existing["id"])
+
+            return conn.insert_returning_id(
+                """
+                INSERT INTO quarterly_report_analyses (
+                    persona_id, symbol, fiscal_period, report_key, run_date,
+                    summary, thesis_impact, flags, highlights, metrics, source,
+                    raw_error, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    self._persona_id,
+                    analysis.symbol.upper(),
+                    analysis.fiscal_period,
+                    analysis.report_key,
+                    analysis.run_date.isoformat(),
+                    analysis.summary,
+                    analysis.thesis_impact,
+                    json.dumps(analysis.flags),
+                    json.dumps(analysis.highlights),
+                    json.dumps(analysis.metrics),
+                    analysis.source,
+                    analysis.raw_error,
+                    now,
+                    now,
+                ),
+            )
+
+    def latest_quarterly_report_analysis(self, symbol: str) -> Optional[Dict[str, Any]]:
+        with session(self._config) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM quarterly_report_analyses
+                 WHERE persona_id = ? AND symbol = ?
+                 ORDER BY run_date DESC, updated_at DESC
+                 LIMIT 1
+                """,
+                (self._persona_id, symbol.upper()),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def quarterly_report_analyses_for_run(self, run_date: date) -> List[Dict[str, Any]]:
+        with session(self._config) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM quarterly_report_analyses
+                 WHERE persona_id = ? AND run_date = ?
+                 ORDER BY symbol
+                """,
+                (self._persona_id, run_date.isoformat()),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Liquid fund positions

@@ -11,8 +11,9 @@ companies that report only standalone numbers.
 from __future__ import annotations
 
 import time
-from datetime import datetime
-from typing import Dict, List, Optional
+import calendar
+from datetime import date, datetime
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -27,7 +28,7 @@ from src.fundamentals.parsing import (
     safe_divide,
 )
 from src.logging_setup import get_logger
-from src.models import FundamentalSnapshot
+from src.models import FundamentalSnapshot, QuarterlyReport
 
 logger = get_logger(__name__)
 
@@ -154,6 +155,48 @@ class ScreenerClient:
             if label not in out:
                 out[label] = values
         return out
+
+    @staticmethod
+    def _parse_table_with_headers(
+        soup: BeautifulSoup, section_ids: Sequence[str]
+    ) -> Tuple[List[str], Dict[str, List[Optional[float]]]]:
+        """Parse a table preserving its column headers."""
+        section = None
+        for section_id in section_ids:
+            section = soup.select_one(f"#{section_id}")
+            if section is not None:
+                break
+        if section is None:
+            return [], {}
+
+        headers = []
+        for cell in section.select("thead th")[1:]:
+            label = " ".join(cell.get_text().split())
+            if label:
+                headers.append(label)
+
+        rows: Dict[str, List[Optional[float]]] = {}
+        for row in section.select("tbody tr"):
+            cells = row.select("td")
+            if len(cells) < 2:
+                continue
+            label = normalise_label(cells[0].get_text())
+            if not label:
+                continue
+            rows[label] = [clean_number(cell.get_text()) for cell in cells[1:]]
+        return headers, rows
+
+    @staticmethod
+    def _period_end(label: str) -> Optional[date]:
+        cleaned = " ".join(label.replace("'", "").split())
+        for fmt in ("%b %Y", "%B %Y"):
+            try:
+                parsed = datetime.strptime(cleaned, fmt)
+                last_day = calendar.monthrange(parsed.year, parsed.month)[1]
+                return date(parsed.year, parsed.month, last_day)
+            except ValueError:
+                continue
+        return None
 
     @staticmethod
     def _parse_growth_ranges(soup: BeautifulSoup) -> Dict[str, Dict[str, Optional[float]]]:
@@ -289,8 +332,75 @@ class ScreenerClient:
         # --- Ownership: promoter holding and its trend ---
         promoters = shareholding.get("promoters") or []
         snapshot.promoter_holding_pct = last_non_null(promoters)
+        quarter_headers, _ = self._parse_table_with_headers(
+            soup, ("quarters", "quarterly-results")
+        )
+        if quarter_headers:
+            snapshot.latest_quarter_label = quarter_headers[-1]
 
         return snapshot
+
+    def fetch_quarterly_reports(self, symbol: str) -> List[QuarterlyReport]:
+        """Parse quarterly financial rows for one symbol."""
+        html = self._fetch_html(symbol)
+        if html is None:
+            return []
+
+        soup = BeautifulSoup(html, "lxml")
+        periods, quarter_rows = self._parse_table_with_headers(
+            soup, ("quarters", "quarterly-results")
+        )
+        if not periods:
+            return []
+
+        _, shareholding_rows = self._parse_table_with_headers(soup, ("shareholding",))
+        _, balance_sheet_rows = self._parse_table_with_headers(
+            soup, ("balance-sheet",)
+        )
+
+        reports: List[QuarterlyReport] = []
+        fetched_at = datetime.utcnow()
+        row_map = {
+            "revenue": quarter_rows.get("sales") or quarter_rows.get("revenue") or [],
+            "operating_profit": quarter_rows.get("operating profit") or [],
+            "opm_pct": quarter_rows.get("opm %") or [],
+            "net_profit": quarter_rows.get("net profit") or [],
+            "eps": quarter_rows.get("eps in rs") or [],
+            "interest": quarter_rows.get("interest") or [],
+            "borrowings": balance_sheet_rows.get("borrowings") or [],
+            "promoter_holding_pct": shareholding_rows.get("promoters") or [],
+            "promoter_pledge_pct": shareholding_rows.get("pledged") or [],
+        }
+
+        for index, period in enumerate(periods):
+            reports.append(
+                QuarterlyReport(
+                    symbol=symbol.upper(),
+                    fiscal_period=period,
+                    report_key=f"{symbol.upper()}:{period}",
+                    source="screener.in",
+                    fetched_at=fetched_at,
+                    period_end=self._period_end(period),
+                    revenue=row_map["revenue"][index] if index < len(row_map["revenue"]) else None,
+                    operating_profit=row_map["operating_profit"][index] if index < len(row_map["operating_profit"]) else None,
+                    opm_pct=row_map["opm_pct"][index] if index < len(row_map["opm_pct"]) else None,
+                    net_profit=row_map["net_profit"][index] if index < len(row_map["net_profit"]) else None,
+                    eps=row_map["eps"][index] if index < len(row_map["eps"]) else None,
+                    interest=row_map["interest"][index] if index < len(row_map["interest"]) else None,
+                    borrowings=row_map["borrowings"][index] if index < len(row_map["borrowings"]) else None,
+                    promoter_holding_pct=(
+                        row_map["promoter_holding_pct"][index]
+                        if index < len(row_map["promoter_holding_pct"])
+                        else None
+                    ),
+                    promoter_pledge_pct=(
+                        row_map["promoter_pledge_pct"][index]
+                        if index < len(row_map["promoter_pledge_pct"])
+                        else None
+                    ),
+                )
+            )
+        return reports
 
     def close(self) -> None:
         self._session.close()

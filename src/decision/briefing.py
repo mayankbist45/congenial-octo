@@ -24,6 +24,7 @@ from src.models import (
     NewsDigest,
     PortfolioRiskProfile,
     PortfolioState,
+    QuarterlyReportContext,
     Severity,
     TechnicalSnapshot,
     Trigger,
@@ -65,6 +66,7 @@ class BriefingBuilder:
         candidates: List[FactorScores],
         digest: Optional[NewsDigest],
         risk_profile: Optional[PortfolioRiskProfile],
+        quarterly_context: Optional[QuarterlyReportContext],
         turnover: TurnoverStatus,
         is_deep_review: bool,
         as_of: Optional[date] = None,
@@ -74,7 +76,17 @@ class BriefingBuilder:
 
         sections.append(self._header(as_of, is_deep_review, portfolio, turnover))
         sections.append(self._mandate())
-        sections.append(self._holdings(portfolio, scores, fundamentals, technicals, risk_profile))
+        sections.append(
+            self._holdings(
+                portfolio,
+                scores,
+                fundamentals,
+                technicals,
+                risk_profile,
+                quarterly_context,
+            )
+        )
+        sections.append(self._quarterly_updates(quarterly_context))
         sections.append(self._market_regime(risk_profile))
         sections.append(self._risk(risk_profile))
         sections.append(self._triggers(triggers))
@@ -144,6 +156,7 @@ class BriefingBuilder:
         fundamentals: Dict[str, FundamentalSnapshot],
         technicals: Dict[str, TechnicalSnapshot],
         risk_profile: Optional[PortfolioRiskProfile],
+        quarterly_context: Optional[QuarterlyReportContext] = None,
     ) -> str:
         if not portfolio.positions:
             return (
@@ -213,6 +226,10 @@ class BriefingBuilder:
                         f"  P/E at entry {position.entry_pe:.1f} -> now "
                         f"{fundamental.pe_ratio:.1f}"
                     )
+                if fundamental.latest_quarter_label:
+                    lines.append(
+                        f"  latest quarter reported: {fundamental.latest_quarter_label}"
+                    )
             if technical:
                 trend = (
                     "above 200-DMA" if technical.above_sma_200 else "below 200-DMA"
@@ -230,6 +247,12 @@ class BriefingBuilder:
                     f"contributes {_number(metrics.risk_contribution_pct, '%')} "
                     f"of portfolio risk"
                 )
+            if quarterly_context and symbol in quarterly_context.analyses:
+                analysis = quarterly_context.analyses[symbol]
+                lines.append(
+                    f"  quarterly read ({analysis.fiscal_period}, "
+                    f"{analysis.thesis_impact}): {analysis.summary}"
+                )
 
         lines.append("")
         lines.append("Sector exposure:")
@@ -238,6 +261,45 @@ class BriefingBuilder:
         ):
             lines.append(f"  {sector}: {weight:.1f}%")
 
+        return "\n".join(lines)
+
+    def _quarterly_updates(
+        self, quarterly_context: Optional[QuarterlyReportContext]
+    ) -> str:
+        if quarterly_context is None:
+            return ""
+        if not quarterly_context.new_symbols and not quarterly_context.errors:
+            return "--- QUARTERLY REPORT UPDATES ---\nNo fresh quarterly report detected today."
+
+        lines = ["--- QUARTERLY REPORT UPDATES ---"]
+        for symbol in quarterly_context.new_symbols:
+            analysis = quarterly_context.analyses.get(symbol)
+            history = quarterly_context.histories.get(symbol) or []
+            latest = history[0] if history else None
+            lines.append("")
+            lines.append(f"{symbol}: fresh quarterly report analysed.")
+            if latest:
+                lines.append(
+                    f"  {latest.fiscal_period} | revenue {_number(latest.revenue)} | "
+                    f"net profit {_number(latest.net_profit)} | "
+                    f"EPS {_number(latest.eps)} | OPM {_number(latest.opm_pct, '%')}"
+                )
+                if latest.revenue_yoy_pct is not None or latest.profit_yoy_pct is not None:
+                    lines.append(
+                        f"  YoY: revenue {_number(latest.revenue_yoy_pct, '%')} | "
+                        f"profit {_number(latest.profit_yoy_pct, '%')} | "
+                        f"EPS {_number(latest.eps_yoy_pct, '%')}"
+                    )
+            if analysis:
+                lines.append(f"  assessment ({analysis.thesis_impact}): {analysis.summary}")
+                for key, value in analysis.highlights.items():
+                    lines.append(f"  {key.replace('_', ' ')}: {value}")
+
+        for symbol, error in quarterly_context.errors.items():
+            lines.append("")
+            lines.append(
+                f"{symbol}: fresh quarterly report could not be analysed fully ({error[:250]})."
+            )
         return "\n".join(lines)
 
     def _market_regime(self, profile: Optional[PortfolioRiskProfile]) -> str:

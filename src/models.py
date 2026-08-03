@@ -36,6 +36,7 @@ class TriggerType(str, Enum):
     POSITION_CAP = "position_cap"
     RISK_LIMIT = "risk_limit"
     NEWS_EVENT = "news_event"
+    QUARTERLY_REPORT_REVIEW = "quarterly_report_review"
     UNDERWEIGHT_DEPLOY = "underweight_deploy"
     INITIAL_BUILD = "initial_build"
 
@@ -121,6 +122,7 @@ class FundamentalSnapshot:
     promoter_pledge_pct: Optional[float] = None
     analyst_target_price: Optional[float] = None
     analyst_recommendation: Optional[str] = None
+    latest_quarter_label: Optional[str] = None
 
     @property
     def is_usable(self) -> bool:
@@ -321,6 +323,59 @@ class PortfolioState:
     @property
     def symbols(self) -> List[str]:
         return [p.symbol for p in self.positions]
+
+
+@dataclass
+class QuarterlyReport:
+    """One quarterly results row-set normalized into key metrics."""
+
+    symbol: str
+    fiscal_period: str
+    report_key: str
+    source: str = "screener.in"
+    fetched_at: Optional[datetime] = None
+    period_end: Optional[date] = None
+    revenue: Optional[float] = None
+    operating_profit: Optional[float] = None
+    opm_pct: Optional[float] = None
+    net_profit: Optional[float] = None
+    eps: Optional[float] = None
+    interest: Optional[float] = None
+    borrowings: Optional[float] = None
+    promoter_holding_pct: Optional[float] = None
+    promoter_pledge_pct: Optional[float] = None
+    revenue_yoy_pct: Optional[float] = None
+    profit_yoy_pct: Optional[float] = None
+    eps_yoy_pct: Optional[float] = None
+    opm_delta_pct: Optional[float] = None
+    debt_delta_pct: Optional[float] = None
+
+
+@dataclass
+class QuarterlyReportAnalysis:
+    """Persona-specific interpretation of a newly seen quarterly report."""
+
+    symbol: str
+    report_key: str
+    run_date: date
+    fiscal_period: str
+    summary: str
+    thesis_impact: str = "unclear"
+    flags: List[str] = field(default_factory=list)
+    highlights: Dict[str, str] = field(default_factory=dict)
+    metrics: Dict[str, Optional[float]] = field(default_factory=dict)
+    source: str = "heuristic"
+    raw_error: str = ""
+
+
+@dataclass
+class QuarterlyReportContext:
+    """Quarterly report state assembled for one run."""
+
+    histories: Dict[str, List[QuarterlyReport]] = field(default_factory=dict)
+    analyses: Dict[str, QuarterlyReportAnalysis] = field(default_factory=dict)
+    new_symbols: List[str] = field(default_factory=list)
+    errors: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

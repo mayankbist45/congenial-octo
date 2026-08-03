@@ -25,6 +25,7 @@ from src.config import Config, get_config
 from src.decision.engine import DecisionEngine, is_deep_review_day
 from src.execution.executor import ExecutionSummary, OrderExecutor
 from src.fundamentals.service import FundamentalsService
+from src.fundamentals.reports import QuarterlyReportsService
 from src.journal.db import init_db
 from src.journal.performance import PerformanceCalculator
 from src.journal.portfolio import PortfolioBuilder
@@ -39,6 +40,7 @@ from src.models import (
     NewsDigest,
     PortfolioRiskProfile,
     PortfolioState,
+    QuarterlyReportContext,
     TechnicalSnapshot,
     Trigger,
 )
@@ -73,6 +75,7 @@ class RunResult:
     triggers: List[Trigger] = field(default_factory=list)
     risk_profile: Optional[PortfolioRiskProfile] = None
     digest: Optional[NewsDigest] = None
+    quarterly_context: Optional[QuarterlyReportContext] = None
 
     @property
     def proposal_count(self) -> int:
@@ -96,6 +99,7 @@ class FundManager:
         self._universe = load_universe(self._config)
         self._prices = PriceService(self._config)
         self._fundamentals = FundamentalsService(self._config)
+        self._quarterly_reports = QuarterlyReportsService(self._config)
         self._scoring = ScoringEngine(self._config, self._universe)
         self._risk_analytics = RiskAnalyzer(self._config, self._prices, self._universe)
         self._triggers = TriggerEngine(self._config)
@@ -134,39 +138,44 @@ class FundManager:
 
         logger.info("=" * 66)
         logger.info("PERSONA: %s", self._persona_id)
-        logger.info("STAGE 1/8  Price history and technical indicators")
+        logger.info("STAGE 1/9  Price history and technical indicators")
         technicals = self._load_technicals()
 
-        logger.info("STAGE 2/8  Portfolio state")
+        logger.info("STAGE 2/9  Portfolio state")
         portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
         as_of = as_of or self._prices.latest_data_date() or date.today()
         portfolio.as_of = as_of
         deep_review = is_deep_review_day(self._config, as_of)
 
-        logger.info("STAGE 3/8  Fundamentals")
+        logger.info("STAGE 3/9  Fundamentals")
         fundamentals = self._load_fundamentals(
             technicals, portfolio, refresh_fundamentals, max_candidates
         )
 
-        logger.info("STAGE 4/8  Factor scoring")
+        logger.info("STAGE 4/9  Factor scoring")
         scores = self._scoring.score(fundamentals, technicals)
         candidates = self._scoring.buy_candidates(
             scores, exclude=portfolio.symbols, limit=20
         )
 
-        logger.info("STAGE 5/8  Risk analytics")
-        risk_profile = self._analyse_risk(portfolio, fundamentals, technicals)
-
-        logger.info("STAGE 6/8  News")
-        digest = None if skip_news else self._build_digest(portfolio, candidates, as_of)
-
-        logger.info("STAGE 7/8  Sell triggers and portfolio limits")
-        triggers = self._evaluate_triggers(
-            portfolio, scores, fundamentals, technicals, digest, risk_profile,
-            candidates, deep_review,
+        logger.info("STAGE 5/9  Quarterly reports")
+        quarterly_context = self._load_quarterly_reports(
+            portfolio, candidates, fundamentals, as_of
         )
 
-        logger.info("STAGE 8/8  Decision")
+        logger.info("STAGE 6/9  Risk analytics")
+        risk_profile = self._analyse_risk(portfolio, fundamentals, technicals)
+
+        logger.info("STAGE 7/9  News")
+        digest = None if skip_news else self._build_digest(portfolio, candidates, as_of)
+
+        logger.info("STAGE 8/9  Sell triggers and portfolio limits")
+        triggers = self._evaluate_triggers(
+            portfolio, scores, fundamentals, technicals, digest, risk_profile,
+            candidates, deep_review, quarterly_context,
+        )
+
+        logger.info("STAGE 9/9  Decision")
         decision = self._decision.decide(
             portfolio=portfolio,
             scores=scores,
@@ -176,6 +185,7 @@ class FundManager:
             candidates=candidates,
             digest=digest,
             risk_profile=risk_profile,
+            quarterly_context=quarterly_context,
             as_of=as_of,
         )
 
@@ -203,6 +213,7 @@ class FundManager:
             triggers=triggers,
             risk_profile=risk_profile,
             digest=digest,
+            quarterly_context=quarterly_context,
         )
 
     # ------------------------------------------------------------------
@@ -273,6 +284,26 @@ class FundManager:
         self._fundamentals.close()
         return fundamentals
 
+    def _load_quarterly_reports(
+        self,
+        portfolio: PortfolioState,
+        candidates: List[FactorScores],
+        fundamentals: Dict[str, FundamentalSnapshot],
+        as_of: date,
+    ) -> QuarterlyReportContext:
+        try:
+            symbols = list(
+                dict.fromkeys(portfolio.symbols + [candidate.symbol for candidate in candidates])
+            )
+            context = self._quarterly_reports.detect_new_reports(symbols, as_of)
+            for symbol, history in context.histories.items():
+                if symbol in fundamentals and history:
+                    fundamentals[symbol].latest_quarter_label = history[0].fiscal_period
+            return context
+        except Exception as exc:
+            logger.error("Quarterly report stage failed: %s", exc, exc_info=True)
+            return QuarterlyReportContext(errors={"__global__": str(exc)})
+
     def _analyse_risk(
         self,
         portfolio: PortfolioState,
@@ -339,6 +370,7 @@ class FundManager:
         risk_profile: Optional[PortfolioRiskProfile],
         candidates: List[FactorScores],
         deep_review: bool,
+        quarterly_context: Optional[QuarterlyReportContext],
     ) -> List[Trigger]:
         triggers = self._triggers.evaluate(
             portfolio=portfolio,
@@ -349,6 +381,7 @@ class FundManager:
             risk_profile=risk_profile,
             best_candidate=candidates[0] if candidates else None,
             is_deep_review=deep_review,
+            quarterly_context=quarterly_context,
         )
         triggers.extend(self._risk.cash_deployment_triggers(portfolio, candidates))
         return triggers
