@@ -1,0 +1,31 @@
+# Curated liquid US equities (not S&P 500 index membership).
+# Used by *_us personas routed through Alpaca paper/live.
+symbol,company_name,gics_sector
+AAPL,Apple Inc,Information Technology
+MSFT,Microsoft Corp,Information Technology
+GOOGL,Alphabet Inc Class A,Communication Services
+AMZN,Amazon.com Inc,Consumer Discretionary
+NVDA,NVIDIA Corp,Information Technology
+META,Meta Platforms Inc,Communication Services
+TSLA,Tesla Inc,Consumer Discretionary
+JPM,JPMorgan Chase & Co,Financials
+BAC,Bank of America Corp,Financials
+WFC,Wells Fargo & Co,Financials
+XOM,Exxon Mobil Corp,Energy
+CVX,Chevron Corp,Energy
+JNJ,Johnson & Johnson,Health Care
+UNH,UnitedHealth Group Inc,Health Care
+PFE,Pfizer Inc,Health Care
+HD,Home Depot Inc,Consumer Discretionary
+WMT,Walmart Inc,Consumer Staples
+COST,Costco Wholesale Corp,Consumer Staples
+DIS,Walt Disney Co,Communication Services
+NFLX,Netflix Inc,Communication Services
+AMD,Advanced Micro Devices Inc,Information Technology
+INTC,Intel Corp,Information Technology
+CRM,Salesforce Inc,Information Technology
+ORCL,Oracle Corp,Information Technology
+V,Visa Inc Class A,Financials
+MA,Mastercard Inc Class A,Financials
+SPY,SPDR S&P 500 ETF Trust,ETF
+QQQ,Invesco QQQ Trust,ETF

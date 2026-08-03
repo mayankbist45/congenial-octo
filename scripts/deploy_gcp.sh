@@ -110,14 +110,14 @@ push() {
         die "could not archive the working tree"
 
     echo "Pushing code to $INSTANCE:$REMOTE_DIR"
-    gc compute scp "$tarball" "$INSTANCE:/tmp/fund-src.tar.gz" --zone "$ZONE" ||
+    gc compute scp "$tarball" "$INSTANCE:~/fund-src.tar.gz" --zone "$ZONE" ||
         die "scp of the source archive failed"
     rm -f "$tarball"
 
     ssh_vm "sudo mkdir -p '$REMOTE_DIR' &&
             sudo chown \$(id -un):\$(id -gn) '$REMOTE_DIR' &&
-            tar -xzf /tmp/fund-src.tar.gz -C '$REMOTE_DIR' &&
-            rm -f /tmp/fund-src.tar.gz &&
+            tar -xzf ~/fund-src.tar.gz -C '$REMOTE_DIR' &&
+            rm -f ~/fund-src.tar.gz &&
             chmod +x '$REMOTE_DIR'/scripts/*.sh &&
             mkdir -p '$REMOTE_DIR/data'" || die "unpacking on the VM failed"
 

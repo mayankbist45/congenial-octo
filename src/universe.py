@@ -25,16 +25,44 @@ NSE_NIFTY500_URL = (
 def _read_csv(path: Path) -> List[UniverseEntry]:
     entries: List[UniverseEntry] = []
     with open(path, "r", encoding="utf-8-sig") as handle:
-        for row in csv.DictReader(handle):
-            symbol = (row.get("Symbol") or "").strip().upper()
+        reader = csv.DictReader(
+            line for line in handle if line.strip() and not line.lstrip().startswith("#")
+        )
+        if not reader.fieldnames:
+            return entries
+        fields = {name.strip().lower(): name for name in reader.fieldnames if name}
+
+        for row in reader:
+            symbol = (
+                row.get(fields.get("symbol", "Symbol"))
+                or row.get("Symbol")
+                or ""
+            ).strip().upper()
             if not symbol:
                 continue
+            company = (
+                row.get(fields.get("company_name", "company_name"))
+                or row.get("Company Name")
+                or row.get("name")
+                or ""
+            ).strip()
+            sector = (
+                row.get(fields.get("gics_sector", "gics_sector"))
+                or row.get("Industry")
+                or row.get("sector")
+                or "Unknown"
+            ).strip() or "Unknown"
+            isin = (
+                row.get(fields.get("isin", "isin"))
+                or row.get("ISIN Code")
+                or ""
+            ).strip()
             entries.append(
                 UniverseEntry(
                     symbol=symbol,
-                    company_name=(row.get("Company Name") or "").strip(),
-                    sector=(row.get("Industry") or "Unknown").strip() or "Unknown",
-                    isin=(row.get("ISIN Code") or "").strip(),
+                    company_name=company or symbol,
+                    sector=sector,
+                    isin=isin,
                 )
             )
     return entries

@@ -126,11 +126,12 @@ class PriceService:
 
         return out
 
-    @staticmethod
-    def _to_yahoo(symbol: str) -> str:
+    def _to_yahoo(self, symbol: str) -> str:
         symbol = symbol.upper()
-        # Index symbols (^NSEI, ^CRSLDX) are already in Yahoo form.
+        # Index symbols (^NSEI, ^CRSLDX, ^GSPC) are already in Yahoo form.
         if symbol.startswith("^") or "." in symbol:
+            return symbol
+        if self._config.market_region == "US":
             return symbol
         return f"{symbol}.NS"
 
