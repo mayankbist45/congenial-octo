@@ -16,6 +16,8 @@
 #   ./scripts/deploy_gcp.sh logs        follow data/scheduled.log on the VM
 #   ./scripts/deploy_gcp.sh cloudlogs   read what the Ops Agent shipped to Cloud Logging
 #   ./scripts/deploy_gcp.sh dashboard   start the dashboard and tunnel :8000 here
+#   ./scripts/deploy_gcp.sh calan-watch [start|stop|status|logs]
+#                                       manage the Calan market-hours paper watch
 #   ./scripts/deploy_gcp.sh ssh         shell on the VM
 #   ./scripts/deploy_gcp.sh snapshots   nightly disk snapshots, 7 kept
 #   ./scripts/deploy_gcp.sh stop|start  pause billing for compute, keep the disk
@@ -239,9 +241,11 @@ deploy)
     bootstrap
     echo
     echo "Deployed. The VM now runs weekdays on IST:"
-    echo "  08:15  cycle    research, self-approve, place simulated orders"
-    echo "  18:00  close    mark the book and record NAV"
-    echo "  19:30  backup   pg_dump of the journal"
+    echo "  08:15  cycle         research, self-approve, place simulated orders"
+    echo "  09:20  calan-watch   start Calan intraday paper watch"
+    echo "  15:25  stop watch    stop Calan watch if still running"
+    echo "  18:00  close         mark the book and record NAV"
+    echo "  19:30  backup        pg_dump of the journal"
     echo
     echo "Check it:  $0 status"
     echo "Watch it:  $0 logs"
@@ -311,6 +315,33 @@ backup)
 dashboard)
     require_gcloud
     dashboard
+    ;;
+
+calan-watch)
+    require_gcloud
+    action="${2:-start}"
+    case "$action" in
+    start)
+        ssh_vm "sudo systemctl start mutualfund-calan-watch &&
+                sleep 2 &&
+                systemctl is-active mutualfund-calan-watch &&
+                echo 'Calan watch started. Tail with: $0 calan-watch logs'"
+        ;;
+    stop)
+        ssh_vm "sudo systemctl stop mutualfund-calan-watch && echo 'Calan watch stopped'"
+        ;;
+    status)
+        ssh_vm "systemctl status mutualfund-calan-watch --no-pager -l | head -30;
+                echo;
+                tail -20 '$REMOTE_DIR/data/calan_watch.log' 2>/dev/null || true"
+        ;;
+    logs)
+        ssh_vm "tail -f -n 80 '$REMOTE_DIR/data/calan_watch.log'"
+        ;;
+    *)
+        die "usage: $0 calan-watch [start|stop|status|logs]"
+        ;;
+    esac
     ;;
 
 ssh)

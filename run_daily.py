@@ -222,7 +222,7 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
         print(f"  expectancy    {summary['expectancy_r']:+.3f}R")
         return 0
 
-    from src.broker.factory import build_broker
+    from src.broker.factory import build_market_data_broker
     from src.intraday.data import IntradayDataService
     from src.intraday.reporting import save_summary, summarize_result
     from src.intraday.scanner import IntradayScanner
@@ -233,7 +233,9 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
     as_of = _parse_date(args.as_of) or date.today()
     max_symbols = args.max_candidates
     interval = str(config.get("intraday.default_interval", "FIVE_MINUTE")).upper()
-    broker = build_broker(config, force_simulated=args.simulated_broker)
+    # Paper Calan still needs live Angel One candles; portfolio fills stay in
+    # the intraday paper state, not in the equity journal broker.
+    broker = build_market_data_broker(config, force_simulated=args.simulated_broker)
 
     try:
         broker.connect()

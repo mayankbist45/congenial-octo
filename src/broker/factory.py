@@ -1,8 +1,9 @@
 """Broker selection.
 
-The fund uses the live Angel One client when credentials exist and ``DRY_RUN``
-is off; otherwise it falls back to the simulated broker. That fallback is what
-lets the whole pipeline run in read-only mode during Phase 1.
+Live Angel One is used only when credentials exist and ``DRY_RUN`` is off.
+In paper mode the book of record is the journal (per persona), so the simulated
+broker is used even if Angel One credentials are present. Angel One can still
+be used elsewhere for market data; it must not define the paper portfolio.
 """
 
 from __future__ import annotations
@@ -33,20 +34,41 @@ def build_broker(
         logger.info("Using live Angel One broker (real orders enabled)")
         return AngelOneClient(config)
 
-    # Read-only Angel One access is still valuable in dry-run mode: real
-    # holdings and real cash, but orders are simulated.
-    if not force_simulated and secrets.has_broker_credentials and secrets.dry_run:
-        from src.broker.angelone import AngelOneClient
-        from src.broker.dry_run import DryRunBroker
-
-        logger.info(
-            "Using Angel One for read-only data with order placement disabled "
-            "(DRY_RUN=true)"
-        )
-        return DryRunBroker(AngelOneClient(config))
-
     from src.broker.simulated import SimulatedBroker
     from src.market_data.prices import PriceService
 
-    logger.info("Using simulated broker (no Angel One credentials configured)")
+    if secrets.has_broker_credentials and secrets.dry_run:
+        logger.info(
+            "Using simulated broker for the paper book "
+            "(DRY_RUN=true; Angel One credentials ignored for holdings/cash)"
+        )
+    else:
+        logger.info("Using simulated broker (no live Angel One session)")
     return SimulatedBroker(config, price_lookup=PriceService(config))
+
+
+def build_market_data_broker(
+    config: Optional[Config] = None,
+    force_simulated: bool = False,
+) -> BrokerClient:
+    """Broker used for candles/quotes.
+
+    Unlike :func:`build_broker`, this may open Angel One even when ``DRY_RUN``
+    is true, because paper books still need live intraday market data. Orders
+    placed through this client must not be used for live trading in paper mode;
+    Calan's watch/simulator keep fills in their own paper state.
+    """
+    config = config or get_config()
+    if not force_simulated and config.secrets.has_broker_credentials:
+        from src.broker.angelone import AngelOneClient
+
+        logger.info(
+            "Using Angel One for market data"
+            + (
+                " (paper trading; orders not routed here)"
+                if config.secrets.dry_run
+                else ""
+            )
+        )
+        return AngelOneClient(config)
+    return build_broker(config, force_simulated=True)

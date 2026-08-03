@@ -62,7 +62,8 @@ class IntradayWatchEngine:
         state.active = self._is_market_watch_time(now)
         state.last_scan_at = now.isoformat(timespec="seconds")
 
-        frames = self._load_frames(now)
+        symbols = self._symbols_for_poll(state, now)
+        frames = self._load_frames(now, symbols)
         self._close_positions(state, frames, now)
         ranked = self._ranker.rank(frames)
         limit = int(self._config.get("intraday.ranked_universe_size", 40) or 40)
@@ -76,11 +77,41 @@ class IntradayWatchEngine:
         self._save(state)
         return state
 
-    def _load_frames(self, now: datetime) -> Dict[str, pd.DataFrame]:
+    def _symbols_for_poll(self, state: PaperState, now: datetime) -> List[str]:
+        """Open positions always; scan a small rotating slice of the universe.
+
+        Angel One historical candles rate-limit hard, so a full Nifty 50 pull
+        every poll is still too much after a burst. Rotate through the list so
+        coverage stays broad across the session without hammering one poll.
+        """
+        scan_size = int(self._config.get("intraday.watch_scan_size", 12) or 12)
+        must = [p.symbol for p in state.open_positions]
+        if not self._symbols:
+            return list(dict.fromkeys(must))
+
+        poll = max(int(self._config.get("intraday.watch_poll_seconds", 300) or 300), 1)
+        offset = int(now.timestamp() // poll) % len(self._symbols)
+        rotated = self._symbols[offset:] + self._symbols[:offset]
+        selected: List[str] = []
+        must_set = set(must)
+        for symbol in rotated:
+            if symbol in must_set:
+                continue
+            selected.append(symbol)
+            if len(selected) >= scan_size:
+                break
+        return list(dict.fromkeys(must + selected))
+
+    def _load_frames(self, now: datetime, symbols: Iterable[str]) -> Dict[str, pd.DataFrame]:
         interval = str(self._config.get("intraday.default_interval", "FIVE_MINUTE")).upper()
         frames: Dict[str, pd.DataFrame] = {}
-        for symbol in self._symbols:
-            frame = self._data.candles(symbol, now.date(), interval=interval, use_cache=False)
+        for symbol in symbols:
+            try:
+                frame = self._data.candles(
+                    symbol, now.date(), interval=interval, use_cache=False
+                )
+            except Exception:
+                continue
             if not frame.empty:
                 frames[symbol] = frame.loc[frame.index <= pd.Timestamp(now)]
         return frames

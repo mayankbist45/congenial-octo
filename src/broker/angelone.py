@@ -29,8 +29,12 @@ from src.logging_setup import get_logger
 logger = get_logger(__name__)
 
 # SmartAPI documents 10 orders/second for some endpoints; historical candle
-# data is tighter in practice, so keep calls deliberately spaced out.
-_MIN_CALL_INTERVAL = 0.75
+# data is far tighter in practice and returns a non-JSON "Access denied
+# because of exceeding access rate" body when pushed. Space candle calls out
+# aggressively and back off hard when that message appears.
+_MIN_CALL_INTERVAL = 1.0
+_CANDLE_CALL_INTERVAL = 2.0
+_RATE_LIMIT_BACKOFF_SECONDS = 45.0
 _MAX_RETRIES = 3
 
 _INTERVAL_MAP = {
@@ -129,10 +133,25 @@ class AngelOneClient(BrokerClient):
             raise BrokerError("Angel One client is not connected")
         return self._api
 
-    def _throttle(self) -> None:
+    @staticmethod
+    def _is_rate_limited(message: str) -> bool:
+        text = message.lower()
+        return (
+            "access rate" in text
+            or "exceeding access" in text
+            or "rate limit" in text
+            or "too many requests" in text
+        )
+
+    def _throttle(self, method_name: str = "") -> None:
+        interval = (
+            _CANDLE_CALL_INTERVAL
+            if method_name == "getCandleData"
+            else _MIN_CALL_INTERVAL
+        )
         elapsed = time.time() - self._last_call_at
-        if elapsed < _MIN_CALL_INTERVAL:
-            time.sleep(_MIN_CALL_INTERVAL - elapsed)
+        if elapsed < interval:
+            time.sleep(interval - elapsed)
         self._last_call_at = time.time()
 
     def _call(self, method_name: str, *args, **kwargs) -> Dict[str, Any]:
@@ -142,7 +161,7 @@ class AngelOneClient(BrokerClient):
 
         last_error: Optional[str] = None
         for attempt in range(1, _MAX_RETRIES + 1):
-            self._throttle()
+            self._throttle(method_name)
             try:
                 response = method(*args, **kwargs)
             except Exception as exc:
@@ -154,7 +173,16 @@ class AngelOneClient(BrokerClient):
                     _MAX_RETRIES,
                     exc,
                 )
-                time.sleep(min(2**attempt, 8))
+                if self._is_rate_limited(last_error):
+                    logger.warning(
+                        "Angel One rate limited on %s; sleeping %.0fs before retry",
+                        method_name,
+                        _RATE_LIMIT_BACKOFF_SECONDS,
+                    )
+                    time.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
+                    self._last_call_at = time.time()
+                else:
+                    time.sleep(min(2**attempt, 8))
                 continue
 
             if isinstance(response, dict):
@@ -165,6 +193,15 @@ class AngelOneClient(BrokerClient):
                     or response.get("errorcode")
                     or str(response)
                 )
+                if self._is_rate_limited(str(last_error)):
+                    logger.warning(
+                        "Angel One rate limited on %s; sleeping %.0fs before retry",
+                        method_name,
+                        _RATE_LIMIT_BACKOFF_SECONDS,
+                    )
+                    time.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
+                    self._last_call_at = time.time()
+                    continue
                 # Auth expiry mid-run: re-login once and retry.
                 if "token" in str(last_error).lower() and attempt < _MAX_RETRIES:
                     logger.info("Session appears expired; re-authenticating")

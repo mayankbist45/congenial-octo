@@ -567,7 +567,41 @@ class FundManager:
                 outcome.symbol,
                 f" - {outcome.error}" if outcome.error else "",
             )
+
+        # Dashboard overview/holdings read position_snapshots and nav_history.
+        # Refresh them here so fills show up immediately, not only at close.
+        if summary.placed:
+            try:
+                self._refresh_book(
+                    as_of=self._prices.latest_data_date() or date.today(),
+                    technicals=technicals,
+                )
+            except Exception as exc:
+                logger.error("Post-execution book refresh failed: %s", exc, exc_info=True)
+
         return summary
+
+    def _refresh_book(
+        self,
+        as_of: Optional[date] = None,
+        technicals: Optional[Dict[str, TechnicalSnapshot]] = None,
+    ) -> PortfolioState:
+        """Rebuild the portfolio from the broker/journal and journal the marks."""
+        holdings = [p["symbol"] for p in self._repo.reconstruct_positions()]
+        if technicals is None or any(symbol not in (technicals or {}) for symbol in holdings):
+            technicals = self._prices.snapshots(holdings) if holdings else {}
+        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
+        as_of = as_of or self._prices.latest_data_date() or date.today()
+        portfolio.as_of = as_of
+        self._repo.record_position_snapshot(as_of, portfolio)
+        self._record_nav(as_of, portfolio)
+        logger.info(
+            "Book refreshed for %s: %d position(s), total Rs %s",
+            as_of.isoformat(),
+            len(portfolio.positions),
+            f"{portfolio.total_value:,.0f}",
+        )
+        return portfolio
 
     # ------------------------------------------------------------------
     # Post-market
@@ -582,14 +616,8 @@ class FundManager:
         self._connect()
         self._prices.clear_cache()
 
-        holdings = [p["symbol"] for p in self._repo.reconstruct_positions()]
-        technicals = self._prices.snapshots(holdings) if holdings else {}
-        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
         as_of = as_of or self._prices.latest_data_date() or date.today()
-        portfolio.as_of = as_of
-
-        self._repo.record_position_snapshot(as_of, portfolio)
-        self._record_nav(as_of, portfolio)
+        portfolio = self._refresh_book(as_of=as_of)
 
         self._record_liquid_position(as_of, portfolio)
 

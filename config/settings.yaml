@@ -350,7 +350,9 @@ personas:
       before the closing auction. Version 1 is paper/backtest only.
     capital_inr: 500000
     universe:
-      file: "data/nifty500.csv"
+      # Nifty 50 only for now — Angel One candle history rate-limits hard on
+      # the full Nifty 500 every poll. Revisit once we have a thinner scan path.
+      file: "data/nifty50.csv"
       min_avg_daily_turnover_inr: 100000000
     execution:
       product_type: "INTRADAY"
@@ -365,7 +367,11 @@ personas:
       trade_window_end: "14:45"
       force_exit_time: "15:15"
       watch_poll_seconds: 300
-      ranked_universe_size: 40
+      # Candle fetches per poll (plus any open positions). Keep small — Angel
+      # One historical data rate-limits around ~1 call / 1-2s and hard-blocks
+      # after bursts.
+      watch_scan_size: 12
+      ranked_universe_size: 12
       max_trades_per_day: 5
       max_open_positions: 2
       risk_per_trade_pct: 0.4

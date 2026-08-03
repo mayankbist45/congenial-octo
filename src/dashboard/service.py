@@ -116,18 +116,33 @@ class DashboardService:
 
         total_value = float(latest["total_value"]) if latest else 0.0
         cash = float(latest["cash"]) if latest else 0.0
+        invested_value = float(latest["invested_value"]) if latest else 0.0
+        unrealised_pnl = float(latest["unrealised_pnl"] or 0.0) if latest else 0.0
+
+        # If NAV still reflects a cash-only book but fills exist, prefer the
+        # reconstructed book so Overview matches Holdings.
+        holdings_invested = sum(float(h["market_value"] or 0.0) for h in holdings)
+        if invested_value <= 0 and holdings:
+            capital = float(self._config.secrets.initial_capital)
+            net_deployed = self._repo.net_cash_deployed()
+            realised = self._repo.total_realised_pnl()
+            cash = max(capital - net_deployed + realised, 0.0)
+            invested_value = holdings_invested
+            unrealised_pnl = sum(float(h["unrealised_pnl"] or 0.0) for h in holdings)
+            total_value = cash + invested_value
+            daily_change_pct = None
 
         return {
-            "has_data": bool(run),
+            "has_data": bool(run) or bool(holdings),
             "run": self._run_view(run) if run else None,
             "total_value": total_value,
             "cash": cash,
             "cash_pct": (cash / total_value * 100.0) if total_value > 0 else 0.0,
-            "invested_value": float(latest["invested_value"]) if latest else 0.0,
+            "invested_value": invested_value,
             "position_count": len(holdings),
             "daily_change_pct": daily_change_pct,
             "realised_pnl": float(latest["realised_pnl"] or 0.0) if latest else 0.0,
-            "unrealised_pnl": float(latest["unrealised_pnl"] or 0.0) if latest else 0.0,
+            "unrealised_pnl": unrealised_pnl,
             "pending_count": len(pending),
             "top_holdings": holdings[:5],
             "sector_weights": self.sector_weights(),
@@ -153,27 +168,63 @@ class DashboardService:
     # ------------------------------------------------------------------
     def holdings(self) -> List[Dict[str, Any]]:
         rows = self._repo.latest_position_snapshot()
-        return [
-            {
-                "symbol": row["symbol"],
-                "company_name": row["company_name"] or row["symbol"],
-                "sector": row["sector"] or "Unknown",
-                "quantity": row["quantity"],
-                "avg_cost": row["avg_cost"],
-                "last_price": row["last_price"],
-                "market_value": row["market_value"],
-                "weight_pct": row["weight_pct"],
-                "return_pct": row["return_pct"],
-                "unrealised_pnl": row["unrealised_pnl"],
-                "holding_days": row["holding_days"],
-                "composite_score": row["composite_score"],
-                "beta": row["beta"],
-                "idiosyncratic_vol": row["idiosyncratic_vol"],
-                "risk_contribution_pct": row["risk_contribution_pct"],
-                "thesis": row["thesis"] or "",
-            }
-            for row in rows
-        ]
+        if rows:
+            return [
+                {
+                    "symbol": row["symbol"],
+                    "company_name": row["company_name"] or row["symbol"],
+                    "sector": row["sector"] or "Unknown",
+                    "quantity": row["quantity"],
+                    "avg_cost": row["avg_cost"],
+                    "last_price": row["last_price"],
+                    "market_value": row["market_value"],
+                    "weight_pct": row["weight_pct"],
+                    "return_pct": row["return_pct"],
+                    "unrealised_pnl": row["unrealised_pnl"],
+                    "holding_days": row["holding_days"],
+                    "composite_score": row["composite_score"],
+                    "beta": row["beta"],
+                    "idiosyncratic_vol": row["idiosyncratic_vol"],
+                    "risk_contribution_pct": row["risk_contribution_pct"],
+                    "thesis": row["thesis"] or "",
+                }
+                for row in rows
+            ]
+
+        # Fills can land before the next snapshot refresh. Reconstruct from the
+        # trade journal so Overview/Holdings are not stuck on an empty cash book.
+        lots = self._repo.reconstruct_positions()
+        if not lots:
+            return []
+
+        invested = sum(float(lot["quantity"]) * float(lot["avg_cost"]) for lot in lots)
+        views: List[Dict[str, Any]] = []
+        for lot in lots:
+            qty = int(lot["quantity"])
+            avg_cost = float(lot["avg_cost"])
+            market_value = qty * avg_cost
+            views.append(
+                {
+                    "symbol": lot["symbol"],
+                    "company_name": lot["symbol"],
+                    "sector": "Unknown",
+                    "quantity": qty,
+                    "avg_cost": avg_cost,
+                    "last_price": avg_cost,
+                    "market_value": market_value,
+                    "weight_pct": (market_value / invested * 100.0) if invested else 0.0,
+                    "return_pct": 0.0,
+                    "unrealised_pnl": 0.0,
+                    "holding_days": None,
+                    "composite_score": None,
+                    "beta": None,
+                    "idiosyncratic_vol": None,
+                    "risk_contribution_pct": None,
+                    "thesis": "",
+                }
+            )
+        views.sort(key=lambda row: row["market_value"], reverse=True)
+        return views
 
     def sector_weights(self) -> List[Dict[str, Any]]:
         buckets: Dict[str, float] = {}

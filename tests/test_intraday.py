@@ -13,6 +13,7 @@ from src.intraday.data import IntradayDataService, normalize_candles
 from src.intraday.reporting import summarize_result
 from src.intraday.ranking import IntradayRanker
 from src.intraday.simulator import IntradaySimulator
+from src.intraday.models import PaperPosition
 from src.intraday.state import PaperStateStore
 from src.intraday.strategies import (
     OpeningRangeBreakoutStrategy,
@@ -344,6 +345,39 @@ class FakeIntradayData:
 
     def candles(self, symbol, day, interval="FIVE_MINUTE", use_cache=True):
         return self.frames.get(symbol, frame([]))
+
+
+def test_watch_poll_scans_small_rotating_slice(temp_config, tmp_path) -> None:
+    config = calan_config(temp_config)
+    config.raw.setdefault("intraday", {})
+    config.raw["intraday"]["watch_scan_size"] = 3
+    config.raw["intraday"]["watch_poll_seconds"] = 60
+    store = PaperStateStore(config, path=tmp_path / "state.json")
+    engine = IntradayWatchEngine(
+        config,
+        FakeIntradayData({}),
+        ["AAA", "BBB", "CCC", "DDD", "EEE"],
+        state_store=store,
+    )
+    state = store.load(date(2026, 1, 2))
+    state.open_positions = [
+        PaperPosition(
+            symbol="EEE",
+            strategy="orb",
+            side="BUY",
+            quantity=1,
+            entry_time=datetime(2026, 1, 2, 10, 0),
+            entry_price=100.0,
+            stop_price=99.0,
+            target_price=102.0,
+        )
+    ]
+
+    symbols = engine._symbols_for_poll(state, datetime(2026, 1, 2, 10, 5))
+
+    assert symbols[0] == "EEE"
+    assert len(symbols) == 4  # open position + 3 scan names
+    assert len(set(symbols)) == 4
 
 
 def test_watch_loop_does_not_enter_before_trade_window(temp_config, tmp_path) -> None:
