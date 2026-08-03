@@ -2,10 +2,15 @@
 
 Policy lives in ``config/settings.yaml``; secrets live in ``.env``. Code reads
 both through :func:`get_config` so that no module hardcodes a risk limit.
+
+Each named persona is an overlay on the top-level defaults: it can override any
+section (fund, risk, quant, universe, etc.) and its own starting capital. The
+existing single-fund behaviour is preserved as the ``balanced`` persona.
 """
 
 from __future__ import annotations
 
+import copy
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -18,11 +23,27 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.yaml"
 
+DEFAULT_PERSONA = "balanced"
+
 
 def _as_bool(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge *override* into *base*, returning a new dict.
+
+    Scalar values in override replace base; nested dicts are merged recursively.
+    """
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
 
 
 @dataclass(frozen=True)
@@ -37,8 +58,21 @@ class Secrets:
     openai_base_url: Optional[str] = None
     dry_run: bool = True
     initial_capital: float = 1_000_000.0
-    # Kept with the secrets because a production DSN carries a password.
     database_url: Optional[str] = None
+
+    def with_capital(self, capital: float) -> "Secrets":
+        """Return a copy with a different starting capital."""
+        return Secrets(
+            angelone_api_key=self.angelone_api_key,
+            angelone_client_code=self.angelone_client_code,
+            angelone_pin=self.angelone_pin,
+            angelone_totp_secret=self.angelone_totp_secret,
+            openai_api_key=self.openai_api_key,
+            openai_base_url=self.openai_base_url,
+            dry_run=self.dry_run,
+            initial_capital=capital,
+            database_url=self.database_url,
+        )
 
     @property
     def has_broker_credentials(self) -> bool:
@@ -63,6 +97,7 @@ class Config:
     raw: Dict[str, Any]
     secrets: Secrets
     root: Path = field(default=PROJECT_ROOT)
+    persona_id: str = field(default=DEFAULT_PERSONA)
 
     def section(self, name: str) -> Dict[str, Any]:
         value = self.raw.get(name)
@@ -224,3 +259,78 @@ def get_config(settings_path: Optional[str] = None) -> Config:
     with open(path, "r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     return Config(raw=raw, secrets=load_secrets())
+
+
+def list_personas(settings_path: Optional[str] = None) -> List[str]:
+    """Return the ids of every persona defined in settings, in order."""
+    config = get_config(settings_path)
+    personas = config.raw.get("personas", {})
+    if not isinstance(personas, dict):
+        return [DEFAULT_PERSONA]
+    return list(personas.keys()) or [DEFAULT_PERSONA]
+
+
+def enabled_personas(settings_path: Optional[str] = None) -> List[str]:
+    """Return persona ids that are not explicitly disabled."""
+    config = get_config(settings_path)
+    personas = config.raw.get("personas", {})
+    if not isinstance(personas, dict):
+        return [DEFAULT_PERSONA]
+    return [
+        pid for pid, pdef in personas.items()
+        if isinstance(pdef, dict) and pdef.get("enabled", True)
+    ] or [DEFAULT_PERSONA]
+
+
+def get_persona_config(
+    persona_id: str, settings_path: Optional[str] = None
+) -> Config:
+    """Build a Config that deep-merges a persona's overrides onto the defaults.
+
+    Top-level sections (fund, risk, quant, ...) are merged; the persona can
+    override any key at any depth.  ``capital_inr`` in the persona definition
+    replaces :pyattr:`Secrets.initial_capital` for that persona.
+    """
+    base = get_config(settings_path)
+    personas = base.raw.get("personas", {})
+
+    if persona_id not in personas:
+        available = ", ".join(personas.keys()) if personas else "(none defined)"
+        raise ValueError(
+            f"Unknown persona {persona_id!r}; available: {available}"
+        )
+
+    persona_def = personas[persona_id]
+    if not isinstance(persona_def, dict):
+        raise ValueError(f"Persona {persona_id!r} must be a mapping, got {type(persona_def).__name__}")
+
+    # Strip persona-level meta keys that are not policy overrides.
+    meta_keys = {"enabled", "capital_inr", "description", "strategy_description"}
+    overrides = {k: v for k, v in persona_def.items() if k not in meta_keys}
+
+    # Deep-merge onto the base (without the personas block itself).
+    base_raw = {k: v for k, v in base.raw.items() if k != "personas"}
+    merged = _deep_merge(base_raw, overrides)
+
+    # Preserve the full personas block so callers can introspect.
+    merged["personas"] = base.raw["personas"]
+
+    secrets = base.secrets
+    capital = persona_def.get("capital_inr")
+    if capital is not None:
+        secrets = secrets.with_capital(float(capital))
+
+    return Config(
+        raw=merged,
+        secrets=secrets,
+        root=base.root,
+        persona_id=persona_id,
+    )
+
+
+def persona_description(persona_id: str, settings_path: Optional[str] = None) -> str:
+    """The human-readable description of a persona, for logs and the dashboard."""
+    base = get_config(settings_path)
+    personas = base.raw.get("personas", {})
+    pdef = personas.get(persona_id, {})
+    return str(pdef.get("description", persona_id))

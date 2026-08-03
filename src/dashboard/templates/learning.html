@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Learning &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Learning</h1>
+<p class="subtitle">
+  Advisory reviews of past decisions. These lessons do not change live rules.
+</p>
+
+<div class="stats">
+  <div class="stat">
+    <div class="label">Reviewed decisions</div>
+    <div class="value">{{ summary.reviewed_decisions }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Actionable lessons</div>
+    <div class="value">{{ summary.actionable_lessons }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Watch lessons</div>
+    <div class="value">{{ summary.watch_lessons }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Latest review</div>
+    <div class="value">{{ summary.latest_review_date or '-' }}</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Common labels</h2>
+    <span class="note">Most frequent review outcomes</span>
+  </div>
+  {% if summary.common_labels %}
+    <div class="bars">
+      {% for row in summary.common_labels %}
+      <div class="bar-row">
+        <div class="bar-label">{{ row.label }}</div>
+        <div class="bar-track">
+          <span class="bar-fill pos" style="width: {{ (row.count / summary.reviewed_decisions * 100) if summary.reviewed_decisions else 0 }}%"></span>
+        </div>
+        <div class="bar-value">{{ row.count }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="empty">No reviews yet. Run close or learn after enough decisions age into a review window.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Lessons</h2>
+    <span class="note">Advisory only</span>
+  </div>
+  {% if lessons %}
+  <table>
+    <thead>
+      <tr>
+        <th>Pattern</th><th>Status</th><th class="num">Evidence</th>
+        <th class="num">Avg excess</th><th class="num">Confidence</th><th>Recommendation</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lesson in lessons %}
+      <tr>
+        <td><span class="sym">{{ lesson.label }}</span></td>
+        <td><span class="tag {{ 'buy' if lesson.status == 'actionable' else '' }}">{{ lesson.status }}</span></td>
+        <td class="num">{{ lesson.evidence_count }}</td>
+        <td class="num {{ lesson.avg_excess_return_pct | sign }}">{{ lesson.avg_excess_return_pct | pct(2, true) }}</td>
+        <td class="num">{{ lesson.confidence | number(2) }}</td>
+        <td>{{ lesson.recommendation }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No lessons have enough evidence yet.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Decision reviews</h2>
+    <span class="note">30 / 90 / 180 / 365 day windows</span>
+  </div>
+  {% if reviews %}
+  <table>
+    <thead>
+      <tr>
+        <th>Review</th><th>Stock</th><th>Action</th><th>Label</th>
+        <th class="num">Stock</th><th class="num">Benchmark</th>
+        <th class="num">Excess</th><th class="num">Drawdown</th><th>Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for review in reviews %}
+      <tr>
+        <td>
+          {{ review.review_date }}
+          <div class="sub-line">{{ review.review_window_days }} days</div>
+        </td>
+        <td><span class="sym">{{ review.symbol }}</span></td>
+        <td><span class="tag {{ 'sell' if review.action in ['SELL','TRIM'] else 'buy' }}">{{ review.action }}</span></td>
+        <td>{{ review.label }}</td>
+        <td class="num {{ review.stock_return_pct | sign }}">{{ review.stock_return_pct | pct(2, true) }}</td>
+        <td class="num {{ review.benchmark_return_pct | sign }}">{{ review.benchmark_return_pct | pct(2, true) }}</td>
+        <td class="num {{ review.excess_return_pct | sign }}">{{ review.excess_return_pct | pct(2, true) }}</td>
+        <td class="num {{ review.max_drawdown_pct | sign }}">{{ review.max_drawdown_pct | pct(2, true) }}</td>
+        <td class="sub-line">{{ review.recommendation }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No decision reviews recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

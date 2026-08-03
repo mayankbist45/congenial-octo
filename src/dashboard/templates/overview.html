@@ -59,7 +59,40 @@
     <div class="value">{{ overview.run.turnover_used_pct | pct(1) if overview.run else '-' }}</div>
     <div class="sub">of the annual budget</div>
   </div>
+  <div class="stat">
+    <div class="label">Market regime</div>
+    {% if overview.market_regime %}
+      <div class="value">{{ overview.market_regime.regime | title }}</div>
+      <div class="sub">
+        {% if overview.market_regime.score is not none %}
+          {{ overview.market_regime.score | number(1) }} / 100
+        {% else %}
+          score unavailable
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="value">Unknown</div>
+      <div class="sub">not enough risk history</div>
+    {% endif %}
+  </div>
 </div>
+
+{% if overview.market_regime and overview.market_regime.evidence %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Market regime</h2>
+    <span class="note">{{ overview.market_regime.regime | title }}</span>
+  </div>
+  <p class="muted" style="margin:0 0 10px">
+    Advisory only: this does not block trades or resize positions.
+  </p>
+  <ul style="margin:0;padding-left:18px">
+    {% for item in overview.market_regime.evidence[:4] %}
+      <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
 
 {% if proposals %}
 <div class="panel">

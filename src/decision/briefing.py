@@ -75,6 +75,7 @@ class BriefingBuilder:
         sections.append(self._header(as_of, is_deep_review, portfolio, turnover))
         sections.append(self._mandate())
         sections.append(self._holdings(portfolio, scores, fundamentals, technicals, risk_profile))
+        sections.append(self._market_regime(risk_profile))
         sections.append(self._risk(risk_profile))
         sections.append(self._triggers(triggers))
         sections.append(self._candidates(candidates, fundamentals, technicals))
@@ -236,6 +237,28 @@ class BriefingBuilder:
             portfolio.sector_weights().items(), key=lambda kv: kv[1], reverse=True
         ):
             lines.append(f"  {sector}: {weight:.1f}%")
+
+        return "\n".join(lines)
+
+    def _market_regime(self, profile: Optional[PortfolioRiskProfile]) -> str:
+        if profile is None or profile.market_regime is None:
+            return ""
+
+        regime = profile.market_regime
+        score = "n/a" if regime.score is None else f"{regime.score:.1f}/100"
+        lines = [
+            "--- MARKET REGIME ---",
+            f"Regime                 : {regime.regime.upper()} ({score})",
+        ]
+
+        for detail in regime.evidence[:4]:
+            lines.append(f"  - {detail}")
+
+        if regime.warnings:
+            lines.append("")
+            lines.append("Regime advisory:")
+            for warning in regime.warnings:
+                lines.append(f"  - {warning}")
 
         return "\n".join(lines)
 

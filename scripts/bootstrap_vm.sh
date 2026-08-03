@@ -127,11 +127,14 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
 
 15 8 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/run_scheduled.sh cycle
+# Calan market-hours paper watch: systemd service, started after the open.
+20 9 * * 1-5 root systemctl start mutualfund-calan-watch
+25 15 * * 1-5 root systemctl stop mutualfund-calan-watch
 0 18 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/run_scheduled.sh close
 30 19 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/backup_journal.sh >> data/backup.log 2>&1
 CRON
 chmod 644 /etc/cron.d/mutualfund
-echo "  cron installed: 08:15 cycle, 18:00 close, 19:30 backup (weekdays IST)"
+echo "  cron installed: 08:15 cycle, 09:20 calan-watch, 15:25 stop watch, 18:00 close, 19:30 backup"
 
 cat >/etc/logrotate.d/mutualfund <<ROTATE
 $PROJECT_DIR/data/*.log {
@@ -173,6 +176,33 @@ systemctl enable --now mutualfund-dashboard >/dev/null 2>&1 &&
     echo "  dashboard service up on 127.0.0.1:8000 (reach it via the SSH tunnel)" ||
     echo "  note: dashboard service failed; check journalctl -u mutualfund-dashboard"
 
+# --- Calan intraday watch (market hours only) -------------------------------
+# Long-running paper loop; cron starts it at 09:20 IST and stops it at 15:25.
+# Not enabled on boot — weekends and overnight should not leave it running.
+chmod +x "$PROJECT_DIR/scripts/run_calan_watch.sh"
+cat >/etc/systemd/system/mutualfund-calan-watch.service <<UNIT
+[Unit]
+Description=Calan intraday paper watch (market hours)
+After=network.target
+
+[Service]
+Type=simple
+User=$APP_USER
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$PROJECT_DIR/scripts/run_calan_watch.sh
+Restart=no
+TimeoutStopSec=60
+KillMode=mixed
+StandardOutput=append:$PROJECT_DIR/data/calan_watch.log
+StandardError=append:$PROJECT_DIR/data/calan_watch.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl disable mutualfund-calan-watch >/dev/null 2>&1 || true
+echo "  calan-watch service installed (cron starts it weekdays 09:20 IST)"
+
 # --- Cloud Logging ----------------------------------------------------------
 # The fund runs unattended, so the record of why a trade fired must outlive the
 # machine. Google's Ops Agent tails the app's log files and ships them to Cloud
@@ -205,10 +235,13 @@ logging:
     fund_backup:
       type: files
       include_paths: [$PROJECT_DIR/data/backup.log]
+    fund_calan:
+      type: files
+      include_paths: [$PROJECT_DIR/data/calan_watch.log]
   service:
     pipelines:
       fund:
-        receivers: [fund_scheduled, fund_app, fund_backup]
+        receivers: [fund_scheduled, fund_app, fund_backup, fund_calan]
 OPS
         systemctl restart google-cloud-ops-agent >/dev/null 2>&1 &&
             echo "  Cloud Logging: Ops Agent shipping data/*.log (free at this volume)" ||

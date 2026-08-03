@@ -19,6 +19,7 @@ from src.dashboard.service import DashboardService
 from src.journal.repository import JournalRepository
 from src.models import (
     Action,
+    MarketRegimeSnapshot,
     PortfolioRiskProfile,
     RiskMetrics,
     NewsDigest,
@@ -26,8 +27,16 @@ from src.models import (
 )
 from tests.conftest import make_diversified_portfolio, make_scores
 
-PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/journal"]
-API = ["/api/overview", "/api/holdings", "/api/proposals", "/api/performance", "/api/risk"]
+PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/intraday", "/learning", "/journal"]
+API = [
+    "/api/overview",
+    "/api/holdings",
+    "/api/proposals",
+    "/api/performance",
+    "/api/risk",
+    "/api/intraday",
+    "/api/learning",
+]
 
 
 @pytest.fixture
@@ -90,33 +99,84 @@ def seed_history(repo: JournalRepository, days: int = 40) -> None:
             daily_return_pct=0.06,
             benchmark_return_pct=0.04,
         )
+    risk_profile = PortfolioRiskProfile(
+        as_of=date.today(),
+        portfolio_beta=0.98,
+        portfolio_vol_annualised=16.4,
+        tracking_error_pct=6.2,
+        active_share_pct=71.0,
+        active_factor_share_pct=38.0,
+        active_selection_share_pct=62.0,
+        concentration_top5_pct=32.0,
+        effective_positions=12.4,
+        avg_pairwise_correlation=0.41,
+        market_regime=MarketRegimeSnapshot(
+            as_of=date.today(),
+            regime="elevated",
+            score=48.2,
+            components={"volatility": 60.0, "drawdown": 20.0, "breadth": 55.0},
+            evidence=[
+                "21-day benchmark volatility is 18.0% annualised",
+                "55% of priced universe names are above their 200-DMA",
+            ],
+            warnings=["Market regime is elevated"],
+        ),
+        per_position={
+            p.symbol: RiskMetrics(
+                symbol=p.symbol,
+                beta=1.02,
+                idiosyncratic_vol=19.0,
+                risk_contribution_pct=7.1,
+                pct_of_adv=0.4,
+            )
+            for p in portfolio.positions
+        },
+        warnings=["Tracking error 6.2% is within the limit"],
+    )
     repo.record_position_snapshot(
         date.today(),
         portfolio,
         scores={p.symbol: make_scores(p.symbol) for p in portfolio.positions},
-        risk_profile=PortfolioRiskProfile(
-            as_of=date.today(),
-            portfolio_beta=0.98,
-            portfolio_vol_annualised=16.4,
-            tracking_error_pct=6.2,
-            active_share_pct=71.0,
-            active_factor_share_pct=38.0,
-            active_selection_share_pct=62.0,
-            concentration_top5_pct=32.0,
-            effective_positions=12.4,
-            avg_pairwise_correlation=0.41,
-            per_position={
-                p.symbol: RiskMetrics(
-                    symbol=p.symbol,
-                    beta=1.02,
-                    idiosyncratic_vol=19.0,
-                    risk_contribution_pct=7.1,
-                    pct_of_adv=0.4,
-                )
-                for p in portfolio.positions
-            },
-            warnings=["Tracking error 6.2% is within the limit"],
-        ),
+        risk_profile=risk_profile,
+    )
+    repo.record_risk_profile(date.today(), risk_profile)
+
+
+def seed_learning(repo: JournalRepository) -> None:
+    run_id = seed_run(repo)
+    [proposal_row] = repo.proposals_for_run(run_id)
+    review = {
+        "proposal_id": proposal_row["id"],
+        "trade_id": None,
+        "review_window_days": 90,
+        "proposal_date": date.today().isoformat(),
+        "review_date": date.today().isoformat(),
+        "symbol": "WIPRO",
+        "action": "BUY",
+        "status": "executed",
+        "label": "bad_decision_bad_outcome",
+        "stock_return_pct": -6.0,
+        "benchmark_return_pct": 1.0,
+        "excess_return_pct": -7.0,
+        "max_drawdown_pct": -9.0,
+        "realised_pnl": None,
+        "evidence": {"source": "test"},
+        "recommendation": "Research this pattern before repeating it.",
+    }
+    repo.upsert_decision_review(review)
+    repo.upsert_learning_lesson(
+        {
+            "label": "bad_decision_bad_outcome",
+            "status": "watch",
+            "evidence_count": 1,
+            "symbol_count": 1,
+            "review_date_count": 1,
+            "avg_excess_return_pct": -7.0,
+            "avg_stock_return_pct": -6.0,
+            "confidence": 0.43,
+            "recommendation": "Research this pattern before repeating it.",
+            "evidence": {"symbols": ["WIPRO"]},
+        }
     )
 
 
@@ -139,6 +199,12 @@ def test_empty_overview_tells_the_user_what_to_do(client) -> None:
     body = client.get("/").text
     assert "has not run yet" in body
     assert "run_daily.py" in body
+
+
+def test_personas_page_lists_calan_as_intraday(client) -> None:
+    body = client.get("/personas").text
+    assert "Calan" in body
+    assert "Paper/backtest" in body
 
 
 # ----------------------------------------------------------------------
@@ -196,6 +262,24 @@ def test_performance_page_reports_excess_return(client, repo) -> None:
     assert "Excess return" in body
     assert "Sharpe" in body
     assert "<svg" in body
+
+
+def test_learning_page_shows_lessons_and_reviews(client, repo) -> None:
+    seed_learning(repo)
+
+    body = client.get("/learning").text
+    assert "bad_decision_bad_outcome" in body
+    assert "Research this pattern" in body
+    assert "WIPRO" in body
+
+
+def test_learning_api_returns_summary_lessons_and_reviews(client, repo) -> None:
+    seed_learning(repo)
+
+    payload = client.get("/api/learning").json()
+    assert payload["summary"]["reviewed_decisions"] == 1
+    assert payload["lessons"][0]["label"] == "bad_decision_bad_outcome"
+    assert payload["reviews"][0]["symbol"] == "WIPRO"
 
 
 def test_news_page_shows_the_digest(client, repo, temp_config) -> None:
@@ -343,6 +427,26 @@ def test_sector_weights_sum_to_the_invested_share(service, repo) -> None:
     invested_pct = 100.0 - service.overview()["cash_pct"]
 
     assert abs(total - invested_pct) < 0.5
+
+
+def test_overview_exposes_market_regime(service, repo) -> None:
+    seed_run(repo)
+    seed_history(repo)
+
+    overview = service.overview()
+
+    assert overview["market_regime"]["regime"] == "elevated"
+    assert overview["market_regime"]["score"] == 48.2
+
+
+def test_risk_profile_exposes_market_regime(service, repo) -> None:
+    seed_history(repo)
+
+    risk = service.risk_profile()
+
+    assert risk is not None
+    assert risk["market_regime"]["regime"] == "elevated"
+    assert risk["market_regime"]["evidence"]
 
 
 def test_briefing_is_served_when_it_exists(service, temp_config) -> None:
