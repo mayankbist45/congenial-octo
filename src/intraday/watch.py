@@ -1,4 +1,4 @@
-"""Live market-hours paper trading loop for Calan."""
+"""Live market-hours paper loop for calan (SIP-ORB-VWAP + LLM gates)."""
 
 from __future__ import annotations
 
@@ -10,12 +10,14 @@ from typing import Callable, Dict, Iterable, List, Optional
 import pandas as pd
 
 from src.config import Config
+from src.intraday.agent import IntradayAgent
 from src.intraday.data import IntradayDataService
+from src.intraday.engine_helpers import collect_signals
 from src.intraday.models import IntradaySignal, IntradayTrade, PaperPosition, PaperState, RankedStock
-from src.intraday.ranking import IntradayRanker
+from src.intraday.persona_rankers import filter_ranked_for_persona, load_ranker
 from src.intraday.reporting import save_summary, summarize_state
 from src.intraday.state import PaperStateStore
-from src.intraday.strategies import DEFAULT_STRATEGIES
+from src.intraday.strategies import load_strategies
 
 
 def parse_hhmm(value: str) -> time:
@@ -24,14 +26,13 @@ def parse_hhmm(value: str) -> time:
 
 
 class IntradayWatchEngine:
-    """Refresh live candles and manage paper orders for one intraday persona."""
-
     def __init__(
         self,
         config: Config,
         data_service: IntradayDataService,
         symbols: Iterable[str],
         state_store: Optional[PaperStateStore] = None,
+        agent: Optional[IntradayAgent] = None,
         now: Optional[Callable[[], datetime]] = None,
         sleep: Optional[Callable[[float], None]] = None,
     ):
@@ -39,13 +40,14 @@ class IntradayWatchEngine:
         self._data = data_service
         self._symbols = list(symbols)
         self._state_store = state_store or PaperStateStore(config)
+        self._agent = agent or IntradayAgent(config)
         self._now = now or datetime.now
         self._sleep = sleep or time_module.sleep
-        self._ranker = IntradayRanker(config)
-        self._strategies = DEFAULT_STRATEGIES
+        self._ranker = load_ranker(config)
+        self._strategies = load_strategies(config)
+        self._catalyst_scanned = False
 
     def run_until_close(self) -> PaperState:
-        """Run every configured cadence until square-off time."""
         poll_seconds = int(self._config.get("intraday.watch_poll_seconds", 300) or 300)
         while True:
             now = self._now()
@@ -66,11 +68,22 @@ class IntradayWatchEngine:
         frames = self._load_frames(now, symbols)
         self._close_positions(state, frames, now)
         ranked = self._ranker.rank(frames)
-        limit = int(self._config.get("intraday.ranked_universe_size", 40) or 40)
+        limit = int(self._config.get("intraday.ranked_universe_size", 8) or 8)
         ranked = ranked[:limit]
         state.top_candidates = [asdict(item) for item in ranked]
 
+        if not self._catalyst_scanned and now.time() >= time(9, 20):
+            pool = filter_ranked_for_persona(self._config, ranked)
+            if not pool:
+                pool = ranked
+            catalyst = self._agent.catalyst_scan(pool or ranked, frames, now, state.daily_pnl)
+            state.watchlist = list(catalyst.get("watchlist") or [])
+            self._catalyst_scanned = True
+
         if self._can_enter_new_trades(state, now):
+            watch_symbols = {str(w["symbol"]).upper() for w in state.watchlist if w.get("in_play")}
+            if watch_symbols and self._config.persona_id != "spread":
+                ranked = [r for r in ranked if r.symbol in watch_symbols]
             self._open_new_positions(state, frames, ranked, now)
 
         self._apply_daily_lockout(state)
@@ -78,17 +91,10 @@ class IntradayWatchEngine:
         return state
 
     def _symbols_for_poll(self, state: PaperState, now: datetime) -> List[str]:
-        """Open positions always; scan a small rotating slice of the universe.
-
-        Angel One historical candles rate-limit hard, so a full Nifty 50 pull
-        every poll is still too much after a burst. Rotate through the list so
-        coverage stays broad across the session without hammering one poll.
-        """
         scan_size = int(self._config.get("intraday.watch_scan_size", 12) or 12)
         must = [p.symbol for p in state.open_positions]
         if not self._symbols:
             return list(dict.fromkeys(must))
-
         poll = max(int(self._config.get("intraday.watch_poll_seconds", 300) or 300), 1)
         offset = int(now.timestamp() // poll) % len(self._symbols)
         rotated = self._symbols[offset:] + self._symbols[:offset]
@@ -108,7 +114,7 @@ class IntradayWatchEngine:
         for symbol in symbols:
             try:
                 frame = self._data.candles(
-                    symbol, now.date(), interval=interval, use_cache=False
+                    symbol, now.date(), interval=interval, use_cache=True, refresh=True
                 )
             except Exception:
                 continue
@@ -124,26 +130,68 @@ class IntradayWatchEngine:
         now: datetime,
     ) -> None:
         signals = self._rank_signals(frames, ranked, state)
-        max_trades = int(self._config.get("intraday.max_trades_per_day", 5) or 5)
+        max_trades = int(self._config.get("intraday.max_trades_per_day", 3) or 3)
         max_open = int(self._config.get("intraday.max_open_positions", 2) or 2)
+        watch_map = {
+            str(w["symbol"]).upper(): w for w in state.watchlist if w.get("in_play")
+        }
+        ranked_map = {r.symbol: r for r in ranked}
+
         for _, signal in signals:
             if state.trade_count >= max_trades:
                 self._skip(state, signal, "max trades reached")
                 continue
-            if len(state.open_positions) >= max_open:
+            needed = 2 if signal.is_pair else 1
+            if len(state.open_positions) + needed > max_open:
                 self._skip(state, signal, "max open positions reached")
                 continue
-            if any(p.symbol == signal.symbol for p in state.open_positions):
+            symbols = [signal.symbol]
+            if signal.pair_leg:
+                symbols.append(signal.pair_leg)
+            if any(p.symbol in symbols for p in state.open_positions):
                 self._skip(state, signal, "symbol already has an open paper position")
                 continue
-            if any(t.symbol == signal.symbol for t in state.completed_trades):
+            if any(t.symbol in symbols for t in state.completed_trades):
                 self._skip(state, signal, "symbol already traded today")
                 continue
-            position = self._paper_fill(signal, state)
+
+            item = ranked_map.get(signal.symbol)
+            frame = frames.get(signal.symbol)
+            if item is None or frame is None:
+                self._skip(state, signal, "missing rank or candles")
+                continue
+
+            est_costs = self._estimate_costs(signal, state)
+            gate = self._agent.gate_trade(
+                signal,
+                item,
+                frame,
+                now,
+                state.daily_pnl,
+                watch_map.get(signal.symbol),
+                est_costs,
+            )
+            if gate.get("decision") != "approve":
+                self._skip(state, signal, gate.get("rationale", "agent veto"))
+                continue
+            if gate.get("adjusted_stop"):
+                signal.stop_price = float(gate["adjusted_stop"])
+            if gate.get("adjusted_target"):
+                signal.target_price = float(gate["adjusted_target"])
+
+            position = self._paper_fill(signal, state, gate)
             if position is None:
                 self._skip(state, signal, "position size rounded to zero")
                 continue
             state.open_positions.append(position)
+            if signal.is_pair and signal.pair_leg:
+                pair_position = self._paper_fill_pair_leg(signal, state, gate)
+                if pair_position:
+                    state.open_positions.append(pair_position)
+                else:
+                    state.open_positions.pop()
+                    self._skip(state, signal, "pair leg size rounded to zero")
+                    continue
 
     def _rank_signals(
         self,
@@ -151,63 +199,38 @@ class IntradayWatchEngine:
         ranked: List[RankedStock],
         state: PaperState,
     ) -> List[tuple[float, IntradaySignal]]:
-        by_symbol = {item.symbol: item for item in ranked}
-        out: List[tuple[float, IntradaySignal]] = []
-        for item in ranked:
-            frame = frames.get(item.symbol)
-            if frame is None or frame.empty:
-                continue
-            best: Optional[tuple[float, IntradaySignal]] = None
-            for strategy in self._strategies:
-                for signal in strategy.signals(item.symbol, frame, self._config):
-                    score = self._signal_score(signal, item, frame)
-                    if best is None or score > best[0]:
-                        best = (score, signal)
-            if best:
-                out.append(best)
-            elif item.symbol not in by_symbol:
-                state.skipped_signals.append({"symbol": item.symbol, "reason": "no valid strategy signal"})
-        out.sort(key=lambda row: row[0], reverse=True)
-        return out
+        if state.watchlist and self._config.persona_id != "spread":
+            watch_symbols = {str(w["symbol"]).upper() for w in state.watchlist if w.get("in_play")}
+            if watch_symbols:
+                ranked = [r for r in ranked if r.symbol in watch_symbols]
+        collected = collect_signals(self._config, frames, ranked)
+        return [(score, signal) for score, signal, _ in collected]
 
-    def _signal_score(self, signal: IntradaySignal, ranked: RankedStock, frame: pd.DataFrame) -> float:
-        risk = signal.risk_per_share
-        reward = abs(signal.target_price - signal.entry_price)
-        expected_r = reward / risk if risk > 0 else 0.0
-        latest_volume = float(frame["volume"].iloc[-1])
-        avg_volume = float(frame["volume"].tail(12).mean())
-        volume_confirm = latest_volume / avg_volume if avg_volume > 0 else 1.0
-        strategy_priority = {
-            "opening_range_breakout": 4.0,
-            "vwap_pullback": 3.0,
-            "previous_day_break": 2.0,
-            "scalping": 1.0,
-        }.get(signal.strategy, 0.0)
-        scalp_penalty = 0.0
-        if signal.strategy == "scalping":
-            target_pct = abs(signal.target_price / signal.entry_price - 1.0) * 100.0
-            min_edge = float(self._config.get("intraday.scalping_min_net_edge_bps", 8.0) or 8.0) / 100.0
-            scalp_penalty = 20.0 if target_pct < min_edge else 0.0
-        return (
-            ranked.score
-            + expected_r * 18.0
-            + min(volume_confirm, 4.0) * 5.0
-            + strategy_priority
-            - scalp_penalty
-        )
-
-    def _paper_fill(self, signal: IntradaySignal, state: PaperState) -> Optional[PaperPosition]:
+    def _paper_fill(
+        self, signal: IntradaySignal, state: PaperState, gate: dict
+    ) -> Optional[PaperPosition]:
         equity = self._equity(state)
-        risk_amount = equity * float(self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4) / 100.0
-        max_value = equity * float(self._config.get("intraday.max_position_value_pct", 35.0) or 35.0) / 100.0
+        risk_amount = equity * float(
+            self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4
+        ) / 100.0
+        max_value = equity * float(
+            self._config.get("intraday.max_position_value_pct", 20.0) or 20.0
+        ) / 100.0
         slippage = float(self._config.get("intraday.slippage_bps_per_side", 2.0) or 2.0) / 10000.0
-        entry_price = signal.entry_price * (1.0 + slippage if signal.side == "BUY" else 1.0 - slippage)
+        entry_price = signal.entry_price * (
+            1.0 + slippage if signal.side == "BUY" else 1.0 - slippage
+        )
         risk_per_share = abs(entry_price - signal.stop_price)
         if entry_price <= 0 or risk_per_share <= 0:
             return None
         quantity = int(min(risk_amount / risk_per_share, max_value / entry_price))
         if quantity < 1:
             return None
+        trailing = (
+            float(gate["trailing_stop_pct"])
+            if gate.get("use_trailing_stop") and gate.get("trailing_stop_pct")
+            else float(self._config.get("intraday.trailing_stop_pct", 0.25) or 0.25)
+        )
         return PaperPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
@@ -219,6 +242,51 @@ class IntradayWatchEngine:
             target_price=signal.target_price,
             max_exit_time=signal.max_exit_time,
             reason=signal.reason,
+            trailing_stop_pct=trailing,
+            peak_price=round(entry_price, 2),
+        )
+
+    def _paper_fill_pair_leg(
+        self, signal: IntradaySignal, state: PaperState, gate: dict
+    ) -> Optional[PaperPosition]:
+        if not signal.pair_leg or not signal.pair_side:
+            return None
+        equity = self._equity(state)
+        risk_amount = equity * float(
+            self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4
+        ) / 100.0
+        max_value = equity * float(
+            self._config.get("intraday.max_position_value_pct", 20.0) or 20.0
+        ) / 100.0
+        slippage = float(self._config.get("intraday.slippage_bps_per_side", 2.0) or 2.0) / 10000.0
+        entry_price = float(signal.pair_entry_price or signal.entry_price)
+        entry_price = entry_price * (
+            1.0 + slippage if signal.pair_side == "BUY" else 1.0 - slippage
+        )
+        stop = float(signal.pair_stop_price or entry_price * 0.995)
+        target = float(signal.pair_target_price or entry_price * 1.005)
+        risk_per_share = abs(entry_price - stop)
+        if entry_price <= 0 or risk_per_share <= 0:
+            return None
+        quantity = int(min(risk_amount / risk_per_share, max_value / entry_price))
+        if quantity < 1:
+            return None
+        trailing = float(
+            self._config.get("intraday.trailing_stop_pct", 0.25) or 0.25
+        )
+        return PaperPosition(
+            symbol=signal.pair_leg,
+            strategy=signal.strategy,
+            side=signal.pair_side,
+            quantity=quantity,
+            entry_time=signal.entry_time,
+            entry_price=round(entry_price, 2),
+            stop_price=stop,
+            target_price=target,
+            max_exit_time=signal.max_exit_time,
+            reason=f"{signal.reason} (pair leg)",
+            trailing_stop_pct=trailing,
+            peak_price=round(entry_price, 2),
         )
 
     def _close_positions(
@@ -242,11 +310,17 @@ class IntradayWatchEngine:
         frame: Optional[pd.DataFrame],
         now: datetime,
     ) -> Optional[Dict[str, object]]:
-        force_exit = now.time() >= parse_hhmm(str(self._config.get("intraday.force_exit_time", "15:15")))
+        force_exit = now.time() >= parse_hhmm(
+            str(self._config.get("intraday.force_exit_time", "15:15"))
+        )
         max_hold_exit = position.max_exit_time is not None and now >= position.max_exit_time
         if frame is None or frame.empty:
             if force_exit or max_hold_exit:
-                return {"exit_time": now, "exit_price": position.entry_price, "exit_reason": "paper_time_exit_no_candle"}
+                return {
+                    "exit_time": now,
+                    "exit_price": position.entry_price,
+                    "exit_reason": "paper_time_exit_no_candle",
+                }
             return None
         future = frame.loc[frame.index >= pd.Timestamp(position.entry_time)]
         if future.empty:
@@ -255,23 +329,75 @@ class IntradayWatchEngine:
             future = future.loc[future.index <= pd.Timestamp(now)]
         if future.empty:
             return None
+
+        trailing_pct = (position.trailing_stop_pct or 0.25) / 100.0
+        peak = position.peak_price or position.entry_price
+        half_r = position.entry_price + abs(position.entry_price - position.stop_price) * 0.5 * (
+            1 if position.side == "BUY" else -1
+        )
+
         for ts, row in future.iterrows():
             high = float(row["high"])
             low = float(row["low"])
+            close = float(row["close"])
             if position.side == "BUY":
+                peak = max(peak, high)
+                position.peak_price = peak
+                if close >= half_r:
+                    trail = peak * (1.0 - trailing_pct)
+                    if low <= max(trail, position.stop_price):
+                        return {
+                            "exit_time": ts.to_pydatetime(),
+                            "exit_price": max(trail, position.stop_price),
+                            "exit_reason": "trailing_stop",
+                        }
                 if low <= position.stop_price:
-                    return {"exit_time": ts.to_pydatetime(), "exit_price": position.stop_price, "exit_reason": "stop_loss"}
+                    return {
+                        "exit_time": ts.to_pydatetime(),
+                        "exit_price": position.stop_price,
+                        "exit_reason": "stop_loss",
+                    }
                 if high >= position.target_price:
-                    return {"exit_time": ts.to_pydatetime(), "exit_price": position.target_price, "exit_reason": "target"}
+                    return {
+                        "exit_time": ts.to_pydatetime(),
+                        "exit_price": position.target_price,
+                        "exit_reason": "target",
+                    }
             else:
+                peak = min(peak, low)
+                position.peak_price = peak
+                if close <= half_r:
+                    trail = peak * (1.0 + trailing_pct)
+                    if high >= min(trail, position.stop_price):
+                        return {
+                            "exit_time": ts.to_pydatetime(),
+                            "exit_price": min(trail, position.stop_price),
+                            "exit_reason": "trailing_stop",
+                        }
                 if high >= position.stop_price:
-                    return {"exit_time": ts.to_pydatetime(), "exit_price": position.stop_price, "exit_reason": "stop_loss"}
+                    return {
+                        "exit_time": ts.to_pydatetime(),
+                        "exit_price": position.stop_price,
+                        "exit_reason": "stop_loss",
+                    }
                 if low <= position.target_price:
-                    return {"exit_time": ts.to_pydatetime(), "exit_price": position.target_price, "exit_reason": "target"}
+                    return {
+                        "exit_time": ts.to_pydatetime(),
+                        "exit_price": position.target_price,
+                        "exit_reason": "target",
+                    }
         if force_exit:
-            return {"exit_time": now, "exit_price": float(future["close"].iloc[-1]), "exit_reason": "force_squareoff"}
+            return {
+                "exit_time": now,
+                "exit_price": float(future["close"].iloc[-1]),
+                "exit_reason": "force_squareoff",
+            }
         if max_hold_exit:
-            return {"exit_time": now, "exit_price": float(future["close"].iloc[-1]), "exit_reason": "max_hold"}
+            return {
+                "exit_time": now,
+                "exit_price": float(future["close"].iloc[-1]),
+                "exit_reason": "max_hold",
+            }
         return None
 
     def _trade_from_position(
@@ -282,7 +408,9 @@ class IntradayWatchEngine:
         exit_reason: str,
     ) -> IntradayTrade:
         slippage = float(self._config.get("intraday.slippage_bps_per_side", 2.0) or 2.0) / 10000.0
-        paper_exit = exit_price * (1.0 - slippage if position.side == "BUY" else 1.0 + slippage)
+        paper_exit = exit_price * (
+            1.0 - slippage if position.side == "BUY" else 1.0 + slippage
+        )
         gross = (
             (paper_exit - position.entry_price) * position.quantity
             if position.side == "BUY"
@@ -290,7 +418,9 @@ class IntradayWatchEngine:
         )
         costs = self._costs(position.entry_price, paper_exit, position.quantity)
         net = gross - costs
-        risk_amount = self._equity_from_completed() * float(self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4) / 100.0
+        risk_amount = self._equity_from_completed() * float(
+            self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4
+        ) / 100.0
         return IntradayTrade(
             symbol=position.symbol,
             strategy=position.strategy,
@@ -313,31 +443,63 @@ class IntradayWatchEngine:
         buy_value = entry * quantity
         sell_value = exit * quantity
         turnover = buy_value + sell_value
-        brokerage_pct = float(self._config.get("intraday.costs.brokerage_pct", 0.03) or 0.03) / 100.0
+        brokerage_pct = float(
+            self._config.get("intraday.costs.brokerage_pct", 0.03) or 0.03
+        ) / 100.0
         cap = float(self._config.get("intraday.costs.brokerage_cap_per_order", 20.0) or 20.0)
         brokerage = min(cap, buy_value * brokerage_pct) + min(cap, sell_value * brokerage_pct)
-        stt = sell_value * float(self._config.get("intraday.costs.stt_sell_pct", 0.025) or 0.025) / 100.0
-        exchange = turnover * float(self._config.get("intraday.costs.exchange_txn_pct", 0.00325) or 0.00325) / 100.0
-        sebi = turnover * float(self._config.get("intraday.costs.sebi_pct", 0.0001) or 0.0001) / 100.0
-        stamp = buy_value * float(self._config.get("intraday.costs.stamp_buy_pct", 0.003) or 0.003) / 100.0
-        gst = (brokerage + exchange + sebi) * float(self._config.get("intraday.costs.gst_pct", 18.0) or 18.0) / 100.0
-        slippage = turnover * float(self._config.get("intraday.slippage_bps_per_side", 2.0) or 2.0) / 10000.0
+        stt = sell_value * float(
+            self._config.get("intraday.costs.stt_sell_pct", 0.025) or 0.025
+        ) / 100.0
+        exchange = turnover * float(
+            self._config.get("intraday.costs.exchange_txn_pct", 0.00325) or 0.00325
+        ) / 100.0
+        sebi = turnover * float(
+            self._config.get("intraday.costs.sebi_pct", 0.0001) or 0.0001
+        ) / 100.0
+        stamp = buy_value * float(
+            self._config.get("intraday.costs.stamp_buy_pct", 0.003) or 0.003
+        ) / 100.0
+        gst = (brokerage + exchange + sebi) * float(
+            self._config.get("intraday.costs.gst_pct", 18.0) or 18.0
+        ) / 100.0
+        slippage = turnover * float(
+            self._config.get("intraday.slippage_bps_per_side", 2.0) or 2.0
+        ) / 10000.0
         return brokerage + stt + exchange + sebi + stamp + gst + slippage
+
+    def _estimate_costs(self, signal: IntradaySignal, state: PaperState) -> float:
+        equity = self._equity(state)
+        qty = int(
+            min(
+                equity
+                * float(self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4)
+                / 100.0
+                / max(signal.risk_per_share, 0.01),
+                equity
+                * float(self._config.get("intraday.max_position_value_pct", 20.0) or 20.0)
+                / 100.0
+                / signal.entry_price,
+            )
+        )
+        return self._costs(signal.entry_price, signal.target_price, max(qty, 1))
 
     def _can_enter_new_trades(self, state: PaperState, now: datetime) -> bool:
         if state.lockout_reason:
             return False
         if not state.active:
             return False
-        if now.time() < parse_hhmm(str(self._config.get("intraday.trade_window_start", "09:30"))):
+        if now.time() < parse_hhmm(str(self._config.get("intraday.trade_window_start", "09:45"))):
             return False
-        if now.time() > parse_hhmm(str(self._config.get("intraday.trade_window_end", "14:45"))):
+        if now.time() > parse_hhmm(str(self._config.get("intraday.trade_window_end", "14:30"))):
             return False
         return True
 
     def _apply_daily_lockout(self, state: PaperState) -> None:
         equity = float(self._config.secrets.initial_capital)
-        max_loss = equity * float(self._config.get("intraday.max_daily_loss_pct", 1.5) or 1.5) / 100.0
+        max_loss = equity * float(
+            self._config.get("intraday.max_daily_loss_pct", 1.5) or 1.5
+        ) / 100.0
         if state.daily_pnl <= -max_loss:
             state.lockout_reason = f"max daily loss reached: Rs {state.daily_pnl:,.2f}"
 

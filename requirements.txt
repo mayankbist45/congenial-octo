@@ -21,3 +21,4 @@ logzero==1.7.0
 websocket-client==1.8.0
 tenacity==9.0.0
 pytest==8.3.4
+matplotlib==3.9.4
