@@ -1,9 +1,9 @@
 """Broker selection.
 
-Live Angel One is used only when credentials exist and ``DRY_RUN`` is off.
-In paper mode the book of record is the journal (per persona), so the simulated
-broker is used even if Angel One credentials are present. Angel One can still
-be used elsewhere for market data; it must not define the paper portfolio.
+Live Angel One is used for India when credentials exist and ``DRY_RUN`` is off.
+Alpaca (paper or live) is used when ``broker.provider: alpaca`` is set on the
+persona. In India paper mode the journal is the book of record; Alpaca paper
+accounts hold the US book directly on Alpaca's servers.
 """
 
 from __future__ import annotations
@@ -17,12 +17,39 @@ from src.logging_setup import get_logger
 logger = get_logger(__name__)
 
 
+def _is_alpaca(config: Config) -> bool:
+    return config.broker_provider == "alpaca"
+
+
 def build_broker(
     config: Optional[Config] = None,
     force_simulated: bool = False,
 ) -> BrokerClient:
     config = config or get_config()
     secrets = config.secrets
+
+    if _is_alpaca(config):
+        if force_simulated or not secrets.has_alpaca_credentials:
+            from src.broker.simulated import SimulatedBroker
+            from src.market_data.prices import PriceService
+
+            logger.info("Using simulated broker (Alpaca credentials missing or forced)")
+            return SimulatedBroker(config, price_lookup=PriceService(config))
+
+        from src.broker.alpaca import AlpacaClient
+
+        if secrets.dry_run and not secrets.alpaca_paper:
+            logger.warning(
+                "DRY_RUN=true blocks live Alpaca; use ALPACA_PAPER=true for paper trading"
+            )
+            from src.broker.simulated import SimulatedBroker
+            from src.market_data.prices import PriceService
+
+            return SimulatedBroker(config, price_lookup=PriceService(config))
+
+        mode = "paper" if secrets.alpaca_paper else "live"
+        logger.info("Using Alpaca broker (%s)", mode)
+        return AlpacaClient(config)
 
     use_live = (
         not force_simulated and secrets.has_broker_credentials and not secrets.dry_run
@@ -53,16 +80,27 @@ def build_market_data_broker(
 ) -> BrokerClient:
     """Broker used for candles/quotes.
 
-    Unlike :func:`build_broker`, this may open Angel One even when ``DRY_RUN``
-    is true, because paper books still need live intraday market data. Orders
-    placed through this client must not be used for live trading in paper mode;
-    Calan's watch/simulator keep fills in their own paper state.
-
-    When ``ANGELONE_DATA2_*`` credentials are set, a dual-key candle pool
-    spreads ``getCandleData`` quota across two SmartAPI apps.
+    Unlike :func:`build_broker`, this may open Angel One or Alpaca even when
+    ``DRY_RUN`` is true, because paper books still need live market data.
     """
     config = config or get_config()
     secrets = config.secrets
+
+    if _is_alpaca(config):
+        if force_simulated or not secrets.has_alpaca_credentials:
+            from src.broker.simulated import SimulatedBroker
+            from src.market_data.prices import PriceService
+
+            logger.info("Using simulated broker for US market data")
+            return SimulatedBroker(config, price_lookup=PriceService(config))
+
+        from src.broker.alpaca import AlpacaClient
+
+        logger.info(
+            "Using Alpaca for market data"
+            + (" (paper account)" if secrets.alpaca_paper else "")
+        )
+        return AlpacaClient(config)
 
     if force_simulated or not secrets.has_broker_credentials:
         from src.broker.simulated import SimulatedBroker

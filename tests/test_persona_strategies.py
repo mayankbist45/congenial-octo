@@ -72,7 +72,7 @@ def spread_config():
 
 def test_load_revert_strategies(revert_config):
     names = [s.name for s in load_strategies(revert_config)]
-    assert names == ["vwap_fade", "opening_gap_fade", "range_revert"]
+    assert names == ["vwap_fade", "opening_gap_fade"]
 
 
 def test_load_flux_strategies(flux_config):

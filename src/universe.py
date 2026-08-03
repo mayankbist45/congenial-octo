@@ -1,12 +1,13 @@
 """Investable universe loading.
 
-The universe is the Nifty 500 as published by NSE, including each company's
-sector, which the risk engine needs for sector caps.
+The universe is typically the Nifty 500 (NSE) or S&P 500 (US), including each
+company's sector for sector-cap checks in the risk engine.
 """
 
 from __future__ import annotations
 
 import csv
+import io
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -33,18 +34,26 @@ UNIVERSE_URLS: Dict[str, str] = {
 def _read_csv(path: Path) -> List[UniverseEntry]:
     entries: List[UniverseEntry] = []
     with open(path, "r", encoding="utf-8-sig") as handle:
-        for row in csv.DictReader(handle):
-            symbol = (row.get("Symbol") or "").strip().upper()
-            if not symbol:
-                continue
-            entries.append(
-                UniverseEntry(
-                    symbol=symbol,
-                    company_name=(row.get("Company Name") or "").strip(),
-                    sector=(row.get("Industry") or "Unknown").strip() or "Unknown",
-                    isin=(row.get("ISIN Code") or "").strip(),
-                )
+        lines = [line for line in handle if not line.lstrip().startswith("#")]
+    for row in csv.DictReader(io.StringIO("".join(lines))):
+        symbol = (row.get("Symbol") or row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        entries.append(
+            UniverseEntry(
+                symbol=symbol,
+                company_name=(
+                    row.get("Company Name") or row.get("name") or ""
+                ).strip(),
+                sector=(
+                    row.get("Industry")
+                    or row.get("gics_sector")
+                    or "Unknown"
+                ).strip()
+                or "Unknown",
+                isin=(row.get("ISIN Code") or row.get("isin") or "").strip(),
             )
+        )
     return entries
 
 

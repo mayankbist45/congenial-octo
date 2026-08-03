@@ -228,6 +228,7 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
     from src.intraday.scanner import IntradayScanner
     from src.intraday.simulator import IntradaySimulator
     from src.intraday.watch import IntradayWatchEngine
+    from src.intraday.spread_math import scan_symbols
     from src.universe import load_universe
 
     as_of = _parse_date(args.as_of) or date.today()
@@ -241,7 +242,7 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
         broker.connect()
         data = IntradayDataService(config, broker=broker)
         universe = load_universe(config)
-        symbols = universe.symbols[:max_symbols] if max_symbols else universe.symbols
+        symbols = scan_symbols(config, universe.symbols, max_symbols)
 
         if args.command == "watch":
             state = IntradayWatchEngine(config, data, symbols).run_until_close()

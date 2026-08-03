@@ -59,6 +59,9 @@ class Secrets:
     angelone_data2_client_code: str = ""
     angelone_data2_pin: str = ""
     angelone_data2_totp_secret: str = ""
+    alpaca_api_key: str = ""
+    alpaca_secret_key: str = ""
+    alpaca_paper: bool = True
     openai_api_key: str = ""
     openai_base_url: Optional[str] = None
     dry_run: bool = True
@@ -76,6 +79,9 @@ class Secrets:
             angelone_data2_client_code=self.angelone_data2_client_code,
             angelone_data2_pin=self.angelone_data2_pin,
             angelone_data2_totp_secret=self.angelone_data2_totp_secret,
+            alpaca_api_key=self.alpaca_api_key,
+            alpaca_secret_key=self.alpaca_secret_key,
+            alpaca_paper=self.alpaca_paper,
             openai_api_key=self.openai_api_key,
             openai_base_url=self.openai_base_url,
             dry_run=self.dry_run,
@@ -100,6 +106,10 @@ class Secrets:
             totp_secret=(self.angelone_data2_totp_secret or self.angelone_totp_secret).strip(),
             label="data2",
         )
+
+    @property
+    def has_alpaca_credentials(self) -> bool:
+        return bool(self.alpaca_api_key and self.alpaca_secret_key)
 
     @property
     def has_broker_credentials(self) -> bool:
@@ -247,6 +257,15 @@ class Config:
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
+    @property
+    def broker_provider(self) -> str:
+        """``angelone`` (India) or ``alpaca`` (US)."""
+        return str(self.get("broker.provider", "angelone")).lower()
+
+    @property
+    def market_region(self) -> str:
+        return str(self.get("market.region", "IN")).upper()
+
     def validate(self) -> List[str]:
         """Return human-readable problems with the configuration."""
         problems: List[str] = []
@@ -312,6 +331,9 @@ def load_secrets() -> Secrets:
         angelone_data2_client_code=os.getenv("ANGELONE_DATA2_CLIENT_CODE", "").strip(),
         angelone_data2_pin=os.getenv("ANGELONE_DATA2_PIN", "").strip(),
         angelone_data2_totp_secret=os.getenv("ANGELONE_DATA2_TOTP_SECRET", "").strip(),
+        alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
+        alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
+        alpaca_paper=_as_bool(os.getenv("ALPACA_PAPER"), default=True),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_base_url=base_url,
         dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),
@@ -435,7 +457,7 @@ def get_persona_config(
         raise ValueError(f"Persona {persona_id!r} must be a mapping, got {type(persona_def).__name__}")
 
     # Strip persona-level meta keys that are not policy overrides.
-    meta_keys = {"enabled", "capital_inr", "description", "strategy_description"}
+    meta_keys = {"enabled", "capital_inr", "capital_usd", "description", "strategy_description"}
     overrides = {k: v for k, v in persona_def.items() if k not in meta_keys}
 
     # Deep-merge onto the base (without the personas block itself).
@@ -447,6 +469,8 @@ def get_persona_config(
 
     secrets = base.secrets
     capital = persona_def.get("capital_inr")
+    if capital is None:
+        capital = persona_def.get("capital_usd")
     if capital is not None:
         secrets = secrets.with_capital(float(capital))
 

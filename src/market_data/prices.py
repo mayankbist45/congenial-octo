@@ -87,7 +87,7 @@ class PriceService:
     def _download_batch(self, symbols: List[str], days: int) -> Dict[str, pd.DataFrame]:
         import yfinance as yf
 
-        yahoo_symbols = [self._to_yahoo(s) for s in symbols]
+        yahoo_symbols = [self._to_yahoo(s, self._config.market_region) for s in symbols]
         period = f"{max(days, 30)}d"
 
         try:
@@ -127,10 +127,11 @@ class PriceService:
         return out
 
     @staticmethod
-    def _to_yahoo(symbol: str) -> str:
+    def _to_yahoo(symbol: str, region: str = "IN") -> str:
         symbol = symbol.upper()
-        # Index symbols (^NSEI, ^CRSLDX) are already in Yahoo form.
         if symbol.startswith("^") or "." in symbol:
+            return symbol
+        if region == "US":
             return symbol
         return f"{symbol}.NS"
 
