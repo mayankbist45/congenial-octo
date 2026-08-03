@@ -90,12 +90,22 @@ class IntradaySimulator:
             self._config.get("intraday.max_daily_loss_pct", 1.5) or 1.5
         ) / 100.0
         day_frames: Dict[str, pd.DataFrame] = {}
+        day_previous: Dict[str, Dict[str, float]] = {}
         for symbol, frame in frames.items():
             day_frame = self._frame_for_day(frame, day)
             if not day_frame.empty:
                 day_frames[symbol] = day_frame
+            prior = frame.loc[frame.index.date < day]
+            if not prior.empty:
+                day_previous[symbol] = {
+                    "close": float(prior["close"].iloc[-1]),
+                    "high": float(prior["high"].iloc[-1]),
+                    "low": float(prior["low"].iloc[-1]),
+                }
+            elif symbol in previous_days:
+                day_previous[symbol] = previous_days[symbol]
 
-        ranked = self._ranker.rank(day_frames, previous_days)
+        ranked = self._ranker.rank(day_frames, day_previous)
         limit = int(self._config.get("intraday.ranked_universe_size", 8) or 8)
         ranked = ranked[:limit]
         pool = filter_ranked_for_persona(self._config, ranked)
@@ -112,7 +122,7 @@ class IntradaySimulator:
         if self._watchlist and self._config.persona_id != "spread":
             ranked = [r for r in ranked if r.symbol in self._watchlist]
 
-        collected = collect_signals(self._config, day_frames, ranked, previous_days)
+        collected = collect_signals(self._config, day_frames, ranked, day_previous)
 
         trades: List[IntradayTrade] = []
         daily_pnl = 0.0

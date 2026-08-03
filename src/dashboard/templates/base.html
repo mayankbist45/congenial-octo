@@ -62,6 +62,35 @@
     }
     nav a:hover { background: var(--bg); text-decoration: none; }
     nav a.active { background: #eff6ff; color: var(--accent); }
+    .persona-select {
+      position: relative;
+      margin-left: 8px;
+    }
+    .persona-select select {
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 28px 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--bg);
+      color: var(--ink);
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M3 5l3 3 3-3'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+    }
+    .persona-select select:hover { border-color: var(--accent); }
+    .persona-label {
+      font-size: 11px;
+      color: var(--ink-soft);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-weight: 600;
+      margin-right: 6px;
+    }
     .badge {
       display: inline-block;
       min-width: 18px;
@@ -307,16 +336,30 @@
       {% else %}
         <span class="mode live" title="Approved orders are sent to the broker">Live</span>
       {% endif %}
+      {% set qs = '?persona=' ~ current_persona if current_persona and current_persona != 'balanced' else '' %}
       <nav>
-        <a href="/" class="{{ 'active' if page == 'overview' }}">Overview</a>
-        <a href="/proposals" class="{{ 'active' if page == 'proposals' }}">
+        <a href="/personas" class="{{ 'active' if page == 'personas' }}">Personas</a>
+        <a href="/{{ qs }}" class="{{ 'active' if page == 'overview' }}">Overview</a>
+        <a href="/proposals{{ qs }}" class="{{ 'active' if page == 'proposals' }}">
           Proposals{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}
         </a>
-        <a href="/holdings" class="{{ 'active' if page == 'holdings' }}">Holdings</a>
-        <a href="/news" class="{{ 'active' if page == 'news' }}">News</a>
-        <a href="/performance" class="{{ 'active' if page == 'performance' }}">Performance</a>
-        <a href="/journal" class="{{ 'active' if page == 'journal' }}">Journal</a>
+        <a href="/holdings{{ qs }}" class="{{ 'active' if page == 'holdings' }}">Holdings</a>
+        <a href="/news{{ qs }}" class="{{ 'active' if page == 'news' }}">News</a>
+        <a href="/performance{{ qs }}" class="{{ 'active' if page == 'performance' }}">Performance</a>
+        <a href="/intraday{{ qs }}" class="{{ 'active' if page == 'intraday' }}">Intraday</a>
+        <a href="/learning{{ qs }}" class="{{ 'active' if page == 'learning' }}">Learning</a>
+        <a href="/journal{{ qs }}" class="{{ 'active' if page == 'journal' }}">Journal</a>
       </nav>
+      {% if personas|length > 1 %}
+      <div class="persona-select">
+        <span class="persona-label">Persona</span>
+        <select onchange="if(this.value){window.location.search='?persona='+this.value}else{window.location.search=''}">
+          {% for p in personas %}
+            <option value="{{ p.id }}" {{ 'selected' if p.id == current_persona }}>{{ p.description }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
     </div>
   </header>
   <main>

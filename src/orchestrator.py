@@ -31,6 +31,7 @@ from src.journal.performance import PerformanceCalculator
 from src.journal.portfolio import PortfolioBuilder
 from src.journal.repository import JournalRepository
 from src.logging_setup import get_logger
+from src.market_data.liquid import LiquidFundService
 from src.market_data.prices import PriceService
 from src.models import (
     DailyDecision,
@@ -82,7 +83,7 @@ class RunResult:
 
 
 class FundManager:
-    """Runs the fund's daily cycle."""
+    """Runs the fund's daily cycle for a single persona."""
 
     def __init__(
         self,
@@ -91,6 +92,7 @@ class FundManager:
         force_simulated: bool = False,
     ):
         self._config = config or get_config()
+        self._persona_id = self._config.persona_id
         init_db(self._config)
 
         self._broker = broker or build_broker(self._config, force_simulated)
@@ -107,6 +109,10 @@ class FundManager:
         self._earnings = EarningsService(self._config, self._universe)
         self._portfolios = PortfolioBuilder(self._config, self._universe)
         self._repo = JournalRepository(self._config)
+
+    @property
+    def persona_id(self) -> str:
+        return self._persona_id
 
     @property
     def broker(self) -> BrokerClient:
@@ -131,6 +137,7 @@ class FundManager:
         self._connect()
 
         logger.info("=" * 66)
+        logger.info("PERSONA: %s", self._persona_id)
         logger.info("STAGE 1/8  Price history and technical indicators")
         technicals = self._load_technicals()
 
@@ -594,7 +601,41 @@ class FundManager:
                 outcome.symbol,
                 f" - {outcome.error}" if outcome.error else "",
             )
+
+        # Dashboard overview/holdings read position_snapshots and nav_history.
+        # Refresh them here so fills show up immediately, not only at close.
+        if summary.placed:
+            try:
+                self._refresh_book(
+                    as_of=self._prices.latest_data_date() or date.today(),
+                    technicals=technicals,
+                )
+            except Exception as exc:
+                logger.error("Post-execution book refresh failed: %s", exc, exc_info=True)
+
         return summary
+
+    def _refresh_book(
+        self,
+        as_of: Optional[date] = None,
+        technicals: Optional[Dict[str, TechnicalSnapshot]] = None,
+    ) -> PortfolioState:
+        """Rebuild the portfolio from the broker/journal and journal the marks."""
+        holdings = [p["symbol"] for p in self._repo.reconstruct_positions()]
+        if technicals is None or any(symbol not in (technicals or {}) for symbol in holdings):
+            technicals = self._prices.snapshots(holdings) if holdings else {}
+        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
+        as_of = as_of or self._prices.latest_data_date() or date.today()
+        portfolio.as_of = as_of
+        self._repo.record_position_snapshot(as_of, portfolio)
+        self._record_nav(as_of, portfolio)
+        logger.info(
+            "Book refreshed for %s: %d position(s), total Rs %s",
+            as_of.isoformat(),
+            len(portfolio.positions),
+            f"{portfolio.total_value:,.0f}",
+        )
+        return portfolio
 
     # ------------------------------------------------------------------
     # Post-market
@@ -609,14 +650,10 @@ class FundManager:
         self._connect()
         self._prices.clear_cache()
 
-        holdings = [p["symbol"] for p in self._repo.reconstruct_positions()]
-        technicals = self._prices.snapshots(holdings) if holdings else {}
-        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
         as_of = as_of or self._prices.latest_data_date() or date.today()
-        portfolio.as_of = as_of
+        portfolio = self._refresh_book(as_of=as_of)
 
-        self._repo.record_position_snapshot(as_of, portfolio)
-        self._record_nav(as_of, portfolio)
+        self._record_liquid_position(as_of, portfolio)
 
         report = PerformanceCalculator(self._config).report()
         logger.info(
@@ -634,6 +671,55 @@ class FundManager:
             else "n/a",
         )
         return portfolio
+
+    def _record_liquid_position(
+        self, as_of: date, portfolio: PortfolioState
+    ) -> None:
+        """If liquid fund parking is enabled, record the parked-cash position."""
+        if not self._config.get("liquid_fund.enabled", False):
+            return
+
+        try:
+            liquid_svc = LiquidFundService(self._config)
+            nav_info = liquid_svc.current_nav()
+            if nav_info is None:
+                logger.warning("Could not fetch liquid fund NAV; skipping")
+                return
+
+            min_pct = float(
+                self._config.get("liquid_fund.min_cash_for_parking_pct", 10.0)
+            )
+            total_value = portfolio.total_value
+            if total_value <= 0:
+                return
+
+            min_cash = total_value * min_pct / 100.0
+            parkable = max(0.0, portfolio.cash - min_cash)
+            if parkable <= 0:
+                logger.info("Cash below parking threshold; no liquid fund allocation")
+                return
+
+            units = parkable / nav_info.nav if nav_info.nav > 0 else 0.0
+            market_value = units * nav_info.nav
+
+            self._repo.record_liquid_position(
+                run_date=as_of,
+                scheme_code=nav_info.scheme_code,
+                scheme_name=nav_info.scheme_name,
+                units=units,
+                nav=nav_info.nav,
+                market_value=market_value,
+                daily_return_pct=nav_info.daily_return_pct,
+            )
+            logger.info(
+                "Liquid fund: Rs %s parked in %s (NAV %.4f, daily %.4f%%)",
+                f"{market_value:,.0f}",
+                nav_info.scheme_name or nav_info.scheme_code,
+                nav_info.nav,
+                nav_info.daily_return_pct,
+            )
+        except Exception as exc:
+            logger.warning("Liquid fund recording failed: %s", exc)
 
     def disconnect(self) -> None:
         try:

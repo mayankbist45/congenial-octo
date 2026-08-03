@@ -285,6 +285,14 @@ def _trend_ok(frame: pd.DataFrame, config: Config, max_trend: float, as_of) -> b
     return IntradayRanker.trend_cleanliness(frame, config, ts) <= max_trend
 
 
+def _min_stop(entry: float, stop: float, side: str, config: Config) -> float:
+    floor_pct = _cfg_float(config, "min_stop_pct", 0.20) / 100.0
+    min_dist = entry * floor_pct
+    if side == "BUY":
+        return min(stop, entry - min_dist)
+    return max(stop, entry + min_dist)
+
+
 @_register
 class VwapFadeStrategy(IntradayStrategy):
     name = "vwap_fade"
@@ -298,7 +306,8 @@ class VwapFadeStrategy(IntradayStrategy):
     ) -> List[IntradaySignal]:
         data = _with_vwap(_session(frame, config))
         sigma_lb = _cfg_int(config, "vwap_fade_sigma_lookback", 20)
-        z_entry = _cfg_float(config, "vwap_fade_z_entry", 2.0)
+        z_entry = _cfg_float(config, "vwap_fade_z_entry", 1.5)
+        max_vol = _cfg_float(config, "vwap_fade_max_volume_ratio", 0.85)
         stop_buffer = _cfg_float(config, "stop_buffer_pct", 0.05) / 100.0
         sip = config.get("intraday.stocks_in_play", {}) or {}
         max_trend = float(sip.get("max_trend_cleanliness", 0.45) or 0.45)
@@ -324,8 +333,10 @@ class VwapFadeStrategy(IntradayStrategy):
             close = float(row["close"])
             vwap = float(row["vwap"])
 
-            if z <= -z_entry and vol_ratio < 1.0:
-                stop = session_low * (1.0 - stop_buffer)
+            if z <= -z_entry and vol_ratio < max_vol:
+                stop = _min_stop(
+                    close, session_low * (1.0 - stop_buffer), "BUY", config
+                )
                 if close <= stop or vwap <= close:
                     continue
                 return [
@@ -341,8 +352,10 @@ class VwapFadeStrategy(IntradayStrategy):
                         _force_exit_dt(ts, config),
                     )
                 ]
-            if z >= z_entry and vol_ratio < 1.0:
-                stop = session_high * (1.0 + stop_buffer)
+            if z >= z_entry and vol_ratio < max_vol:
+                stop = _min_stop(
+                    close, session_high * (1.0 + stop_buffer), "SELL", config
+                )
                 if close >= stop or vwap >= close:
                     continue
                 return [
@@ -391,7 +404,8 @@ class OpeningGapFadeStrategy(IntradayStrategy):
 
         avg_vol = float(day["volume"].mean())
         rvol = float(first["volume"]) / avg_vol if avg_vol > 0 else 0.0
-        if rvol >= 1.5:
+        max_rvol = _cfg_float(config, "opening_gap_fade_max_rvol", 1.3)
+        if rvol >= max_rvol:
             return []
 
         row = rest.iloc[0]
@@ -674,8 +688,10 @@ def scan_pair_signals(
     frames: Dict[str, pd.DataFrame],
 ) -> Dict[str, List[IntradaySignal]]:
     """Return primary-leg pair signals keyed by leg_a symbol."""
-    entry_z = _cfg_float(config, "pair_entry_z", 2.0)
-    stop_z = _cfg_float(config, "pair_stop_z", 3.0)
+    entry_z = _cfg_float(config, "pair_entry_z", 1.5)
+    stop_z = _cfg_float(config, "pair_stop_z", 2.5)
+    min_bars = _cfg_int(config, "pair_min_bars", 20)
+    max_widen = _cfg_float(config, "pair_max_widen_z", 0.4)
     out: Dict[str, List[IntradaySignal]] = {}
 
     for leg_a, leg_b in configured_pairs(config):
@@ -683,13 +699,13 @@ def scan_pair_signals(
         fb = frames.get(leg_b)
         if fa is None or fb is None or fa.empty or fb.empty:
             continue
-        z_hist = spread_z_history(fa, fb)
+        z_hist = spread_z_history(fa, fb, min_bars=min_bars)
         if z_hist.empty:
             continue
         z_now = float(z_hist.iloc[-1])
         if abs(z_now) < entry_z:
             continue
-        if len(z_hist) >= 4 and abs(z_now - float(z_hist.iloc[-4])) > 0.5:
+        if len(z_hist) >= 4 and abs(z_now - float(z_hist.iloc[-4])) > max_widen:
             continue
 
         ts = fa.index[-1].to_pydatetime()

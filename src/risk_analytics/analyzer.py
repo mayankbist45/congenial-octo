@@ -35,6 +35,7 @@ from src.risk_analytics.factor_model import (
     regress,
     tracking_error_pct,
 )
+from src.risk_analytics.market_regime import assess_market_regime
 from src.universe import Universe, load_universe
 
 logger = get_logger(__name__)
@@ -62,10 +63,6 @@ class RiskAnalyzer:
     ) -> PortfolioRiskProfile:
         profile = PortfolioRiskProfile(as_of=portfolio.as_of)
 
-        if not portfolio.positions:
-            profile.warnings.append("Portfolio is empty; no risk to decompose")
-            return profile
-
         weights = portfolio.weights()
         profile.sector_weights = portfolio.sector_weights()
 
@@ -86,6 +83,15 @@ class RiskAnalyzer:
             series = self._prices.close_series(symbol)
             if series is not None and len(series) > 60:
                 price_series[symbol] = series
+
+        profile.market_regime = assess_market_regime(
+            benchmark_prices, price_series, technicals
+        )
+        profile.warnings.extend(profile.market_regime.warnings)
+
+        if not portfolio.positions:
+            profile.warnings.append("Portfolio is empty; no risk to decompose")
+            return profile
 
         style_factors = build_style_factors(price_series, fundamentals, technicals)
         industry_factors = build_industry_factors(

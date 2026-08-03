@@ -1,16 +1,38 @@
 #!/usr/bin/env python3
-"""Entry point for the fund's daily cycle."""
+"""Entry point for the fund's daily cycle.
+
+Typical day, in three commands:
+
+    python run_daily.py analyse       # before the open: research and propose
+    python run_daily.py dashboard     # review and approve at localhost:8000
+    python run_daily.py execute       # place what you approved
+
+Or as one sequence that pauses for your approvals in between:
+
+    python run_daily.py cycle --wait 90
+
+With execution.auto_approve on, that same command runs start to finish with
+nobody watching: the fund approves its own proposals and places them. That is
+restricted to paper trading — set DRY_RUN=false and the fund refuses to
+self-approve, reverting to waiting for you. Use --require-approval to insist on a
+human for a single run, or --auto-approve to opt in for one.
+
+After the close, record the day's NAV so performance is measured on closing
+prices rather than the pre-market marks:
+
+    python run_daily.py close
+"""
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import date
-from pathlib import Path
 from typing import List, Optional
 
 from src.config import (
+    DEFAULT_PERSONA,
+    enabled_personas,
     get_config,
     get_persona_config,
     persona_description,
@@ -38,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         nargs="?",
         default="analyse",
-        choices=["analyse", "execute", "cycle", "close", "dashboard", "status", "watch"],
+        choices=["analyse", "execute", "cycle", "close", "learn", "dashboard", "status", "watch"],
         help="what to run (default: analyse)",
     )
     parser.add_argument(
@@ -97,21 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--persona",
         metavar="ID",
-        help="run only this persona (e.g. calan for intraday paper)",
+        help="run only this persona (default: all enabled personas)",
     )
     return parser
 
-
-def _print_config_problems(config) -> None:
-    problems = config.validate()
-    if problems:
-        label = getattr(config, "persona_id", "default")
-        print(f"Configuration problems for {label!r}:", file=sys.stderr)
-        for problem in problems:
-            print(f"  - {problem}", file=sys.stderr)
-        raise SystemExit(
-            "Fix config/settings.yaml before running. See scripts/setup_check.py."
-        )
 
 
 def _report_status() -> None:
@@ -147,39 +158,62 @@ def _report_status() -> None:
         print("  mode            LIVE (approved orders reach the broker)")
 
 
-def _intraday_summary_path(config) -> Path:
-    return config.intraday_dir / f"{config.persona_id}_latest.json"
+def _auto_mode(manager, args) -> bool:
+    """Whether this run decides its own proposals; the flag beats the config."""
+    if args.auto_approve is None:
+        return manager.auto_approval_enabled
+    return bool(args.auto_approve)
 
 
-def _load_intraday_summary(config) -> Optional[dict]:
-    path = _intraday_summary_path(config)
-    if not path.exists():
-        return None
+def _clear_pending(manager, args) -> None:
+    """Get the pending queue decided, by the fund itself or by a human."""
+    from src.orchestrator import AutoApprovalRefused
+
+    if _auto_mode(manager, args):
+        try:
+            manager.auto_approve()
+            return
+        except AutoApprovalRefused as exc:
+            print(
+                f"\nAuto mode is on but {exc}.\n"
+                f"Falling back to waiting for your approval in the dashboard.",
+                file=sys.stderr,
+            )
+
+    manager.wait_for_approval(timeout_minutes=args.wait)
+
+
+def _resolve_personas(args) -> List[str]:
+    """Which personas to run: the one from --persona, or all enabled ones."""
+    if args.persona:
+        return [args.persona]
+    return enabled_personas()
+
+
+def _run_learning_for(config, as_of: Optional[date] = None) -> None:
+    """Refresh advisory learning without affecting trading flows."""
+    from src.learning import LearningEvaluator
+
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+        summary = LearningEvaluator(config).run(as_of=as_of)
+        print(f"  {summary.describe()}")
+    except Exception as exc:
+        print(f"  learning skipped: {exc}", file=sys.stderr)
 
 
 def _run_intraday_persona(persona_id: str, args, config) -> int:
-    from src.broker.factory import build_market_data_broker
-    from src.intraday.reporting import save_summary, summarize_result
-    from src.intraday.scanner import IntradayScanner
-    from src.intraday.simulator import IntradaySimulator
-    from src.intraday.watch import IntradayWatchEngine
-    from src.intraday.data import IntradayDataService
-    from src.universe import load_universe
-    from src.dashboard.service import money, pct
+    """Run an intraday paper/backtest persona inside the normal daily loop."""
+    from src.dashboard.service import DashboardService, money, pct
 
     if args.command == "status":
-        summary = _load_intraday_summary(config)
+        summary = DashboardService(config).intraday_summary()
         if not summary:
             print(
                 f"\n[{persona_id}] No intraday paper result saved yet. "
                 f"Start with: python run_daily.py analyse --persona {persona_id}"
             )
             return 0
-        print(f"\n[{persona_id}] Intraday paper/backtest ({persona_description(persona_id)})")
+        print(f"\n[{persona_id}] Calan intraday paper/backtest")
         print(f"  period        {summary['start_date']} to {summary['end_date']}")
         print(f"  net P&L       {money(summary['total_net_pnl'])}")
         print(f"  return        {pct(summary['total_return_pct'], 2, True)}")
@@ -188,52 +222,74 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
         print(f"  expectancy    {summary['expectancy_r']:+.3f}R")
         return 0
 
+    from src.broker.factory import build_market_data_broker
+    from src.intraday.data import IntradayDataService
+    from src.intraday.reporting import save_summary, summarize_result
+    from src.intraday.scanner import IntradayScanner
+    from src.intraday.simulator import IntradaySimulator
+    from src.intraday.watch import IntradayWatchEngine
+    from src.universe import load_universe
+
     as_of = _parse_date(args.as_of) or date.today()
+    max_symbols = args.max_candidates
     interval = str(config.get("intraday.default_interval", "FIVE_MINUTE")).upper()
+    # Paper Calan still needs live Angel One candles; portfolio fills stay in
+    # the intraday paper state, not in the equity journal broker.
     broker = build_market_data_broker(config, force_simulated=args.simulated_broker)
 
     try:
         broker.connect()
         data = IntradayDataService(config, broker=broker)
         universe = load_universe(config)
-        symbols = universe.symbols
-        if args.max_candidates:
-            symbols = symbols[: args.max_candidates]
+        symbols = universe.symbols[:max_symbols] if max_symbols else universe.symbols
 
         if args.command == "watch":
             state = IntradayWatchEngine(config, data, symbols).run_until_close()
-            print(f"\n[{persona_id}] Intraday watch finished")
+            print(f"\n[{persona_id}] Calan watch finished")
             print(f"  date          {state.trading_date}")
-            print(
-                f"  trades        {len(state.completed_trades)} completed, "
-                f"{len(state.open_positions)} open"
-            )
+            print(f"  trades        {len(state.completed_trades)} completed, {len(state.open_positions)} open")
             print(f"  net P&L       Rs {state.daily_pnl:,.2f}")
             if state.lockout_reason:
                 print(f"  lockout       {state.lockout_reason}")
             return 0
 
-        if args.command in {"execute", "close", "learn"}:
-            print(f"\n[{persona_id}] Intraday is paper-only; no separate {args.command} step.")
+        frames = {}
+        one_shot_symbols = symbols[:25] if max_symbols is None else symbols
+        for symbol in one_shot_symbols:
+            frame = data.candles(symbol, as_of, interval=interval)
+            if not frame.empty:
+                frames[symbol] = frame
+
+        if args.command == "execute":
+            print(
+                f"\n[{persona_id}] Intraday execution is paper-only in v1; "
+                "no live orders are placed."
+            )
+            return 0
+
+        if args.command == "close":
+            print(
+                f"\n[{persona_id}] Intraday positions are force-closed inside "
+                "the paper simulation; no separate close step is needed."
+            )
+            return 0
+
+        if args.command == "learn":
+            print(f"\n[{persona_id}] Learning is not wired for intraday paper results yet.")
             return 0
 
         if args.command not in {"analyse", "cycle"}:
             return 0
 
-        frames = {}
-        fetch_limit = args.max_candidates or 25
-        for symbol in symbols[:fetch_limit]:
-            frame = data.candles(symbol, as_of, interval=interval)
-            if not frame.empty:
-                frames[symbol] = frame
-
-        previous_days = data.previous_day_stats_batch(list(frames.keys()), as_of, interval=interval)
+        previous_days = data.previous_day_stats_batch(
+            list(frames.keys()), as_of, interval=interval
+        )
         candidates = IntradayScanner(config).scan(frames, previous_days)
         result = IntradaySimulator(config).run(frames, previous_days, as_of, as_of)
         summary = summarize_result(result)
         path = save_summary(config, summary)
 
-        print(f"\n[{persona_id}] Intraday paper run for {as_of} ({interval})")
+        print(f"\n[{persona_id}] Calan intraday paper run for {as_of} ({interval})")
         print(f"  scanned       {len(frames)} symbol(s)")
         print(f"  setups        {len(candidates)} candidate(s)")
         print(f"  trades        {summary['total_trades']}")
@@ -251,6 +307,7 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
 
 
 def _run_persona(persona_id: str, args, base_config) -> int:
+    """Run a single command for one persona. Returns the exit code."""
     from src.orchestrator import FundManager
 
     try:
@@ -263,31 +320,24 @@ def _run_persona(persona_id: str, args, base_config) -> int:
     print(f"Persona: {persona_id} — {persona_description(persona_id)}")
     print(f"{'─' * 60}")
 
-    _print_config_problems(pcfg)
+    _print_config_problems_for(pcfg)
+
+    as_of = _parse_date(args.as_of)
 
     if pcfg.get("intraday.enabled", False):
         return _run_intraday_persona(persona_id, args, pcfg)
 
+    if args.command == "learn":
+        _run_learning_for(pcfg, as_of=as_of)
+        return 0
+
     manager = FundManager(config=pcfg, force_simulated=args.simulated_broker)
-    as_of = _parse_date(args.as_of)
-
-    def _auto_mode(manager, args) -> bool:
-        if args.auto_approve is None:
-            return manager.auto_approval_enabled
-        return bool(args.auto_approve)
-
-    def _clear_pending(manager, args) -> None:
-        from src.orchestrator import AutoApprovalRefused
-
-        if _auto_mode(manager, args):
-            try:
-                manager.auto_approve()
-                return
-            except AutoApprovalRefused as exc:
-                print(f"\nAuto mode refused: {exc}", file=sys.stderr)
-        manager.wait_for_approval(timeout_minutes=args.wait)
 
     try:
+        if args.command == "watch":
+            print(f"\n[{persona_id}] Watch mode is only available for intraday personas.")
+            return 0
+
         if args.command == "analyse":
             result = manager.analyse(
                 as_of=as_of,
@@ -295,8 +345,20 @@ def _run_persona(persona_id: str, args, base_config) -> int:
                 refresh_fundamentals=args.refresh_fundamentals,
                 max_candidates=args.max_candidates,
             )
-            if result.proposal_count:
-                print(f"\n[{persona_id}] {result.proposal_count} proposal(s) pending.")
+            if result.proposal_count and _auto_mode(manager, args):
+                print(
+                    f"\n[{persona_id}] {result.proposal_count} proposal(s) pending. "
+                    f"Auto mode is on, so they are approved and placed by:\n"
+                    f"  python run_daily.py execute --persona {persona_id}"
+                )
+            elif result.proposal_count:
+                host = pcfg.get("dashboard.host", "127.0.0.1")
+                port = pcfg.get("dashboard.port", 8000)
+                print(
+                    f"\n[{persona_id}] {result.proposal_count} proposal(s) await "
+                    f"your approval.\n"
+                    f"  python run_daily.py dashboard   ->  http://{host}:{port}/proposals"
+                )
             else:
                 print(f"\n[{persona_id}] No trades proposed today.")
             return 0
@@ -318,6 +380,7 @@ def _run_persona(persona_id: str, args, base_config) -> int:
             if not result.proposal_count:
                 print(f"\n[{persona_id}] No trades proposed today.")
                 return 0
+
             _clear_pending(manager, args)
             summary = manager.execute_approved(
                 technicals=result.technicals, fundamentals=result.fundamentals
@@ -327,14 +390,11 @@ def _run_persona(persona_id: str, args, base_config) -> int:
 
         if args.command == "close":
             manager.close_of_day(as_of=as_of)
+            _run_learning_for(pcfg, as_of=as_of)
             return 0
 
-        if args.command == "watch":
-            print(f"\n[{persona_id}] Watch mode is only available for intraday personas.")
-            return 1
-
     except KeyboardInterrupt:
-        print("\nInterrupted.", file=sys.stderr)
+        print("\nInterrupted. Nothing further was sent to the broker.", file=sys.stderr)
         return 130
     finally:
         manager.disconnect()
@@ -342,26 +402,16 @@ def _run_persona(persona_id: str, args, base_config) -> int:
     return 0
 
 
-def _auto_mode(manager, args) -> bool:
-    if args.auto_approve is None:
-        return manager.auto_approval_enabled
-    return bool(args.auto_approve)
-
-
-def _clear_pending(manager, args) -> None:
-    from src.orchestrator import AutoApprovalRefused
-
-    if _auto_mode(manager, args):
-        try:
-            manager.auto_approve()
-            return
-        except AutoApprovalRefused as exc:
-            print(
-                f"\nAuto mode is on but {exc}.\n"
-                f"Falling back to waiting for your approval in the dashboard.",
-                file=sys.stderr,
-            )
-    manager.wait_for_approval(timeout_minutes=args.wait)
+def _print_config_problems_for(config) -> None:
+    problems = config.validate()
+    if problems:
+        print(f"Configuration problems for persona {config.persona_id!r}:",
+              file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        raise SystemExit(
+            "Fix config/settings.yaml before running. See scripts/setup_check.py."
+        )
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -373,8 +423,11 @@ def main(argv: Optional[list] = None) -> int:
         log_file=config.path("logging.file", "data/fund.log"),
     )
 
-    if args.persona:
-        return _run_persona(args.persona, args, config)
+    if args.command == "status" and args.persona:
+        try:
+            return _run_persona(args.persona, args, config)
+        except SystemExit as exc:
+            raise exc
 
     if args.command == "status":
         _report_status()
@@ -386,80 +439,15 @@ def main(argv: Optional[list] = None) -> int:
         serve()
         return 0
 
-    _print_config_problems(config)
+    personas = _resolve_personas(args)
+    worst_exit = 0
+    for persona_id in personas:
+        exit_code = _run_persona(persona_id, args, config)
+        worst_exit = max(worst_exit, exit_code)
+        if exit_code == 130:
+            break
 
-    from src.orchestrator import FundManager
-
-    manager = FundManager(force_simulated=args.simulated_broker)
-    as_of = _parse_date(args.as_of)
-
-    try:
-        if args.command == "analyse":
-            result = manager.analyse(
-                as_of=as_of,
-                skip_news=args.skip_news,
-                refresh_fundamentals=args.refresh_fundamentals,
-                max_candidates=args.max_candidates,
-            )
-            if result.proposal_count and _auto_mode(manager, args):
-                print(
-                    f"\n{result.proposal_count} proposal(s) pending. Auto mode is "
-                    f"on, so they are approved and placed by:\n"
-                    f"  python run_daily.py execute"
-                )
-            elif result.proposal_count:
-                host = config.get("dashboard.host", "127.0.0.1")
-                port = config.get("dashboard.port", 8000)
-                print(
-                    f"\n{result.proposal_count} proposal(s) await your approval.\n"
-                    f"Start the dashboard and review them:\n"
-                    f"  python run_daily.py dashboard   ->  http://{host}:{port}/proposals"
-                )
-            else:
-                print("\nNo trades proposed today. See the memo:")
-                print("  python run_daily.py status")
-            return 0
-
-        if args.command == "execute":
-            if _auto_mode(manager, args) and manager.pending_count():
-                _clear_pending(manager, args)
-            summary = manager.execute_approved()
-            print(f"\n{summary.describe()}")
-            return 0 if not summary.failed else 1
-
-        if args.command == "cycle":
-            result = manager.analyse(
-                as_of=as_of,
-                skip_news=args.skip_news,
-                refresh_fundamentals=args.refresh_fundamentals,
-                max_candidates=args.max_candidates,
-            )
-            if not result.proposal_count:
-                print("\nNo trades proposed today; nothing to approve or execute.")
-                return 0
-
-            _clear_pending(manager, args)
-            summary = manager.execute_approved(
-                technicals=result.technicals, fundamentals=result.fundamentals
-            )
-            print(f"\n{summary.describe()}")
-            return 0
-
-        if args.command == "close":
-            manager.close_of_day(as_of=as_of)
-            return 0
-
-        if args.command == "watch":
-            print("Watch mode requires an intraday persona, e.g. --persona calan.", file=sys.stderr)
-            return 1
-
-    except KeyboardInterrupt:
-        print("\nInterrupted. Nothing further was sent to the broker.", file=sys.stderr)
-        return 130
-    finally:
-        manager.disconnect()
-
-    return 0
+    return worst_exit
 
 
 if __name__ == "__main__":

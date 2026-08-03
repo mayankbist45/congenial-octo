@@ -3,7 +3,9 @@
 Policy lives in ``config/settings.yaml``; secrets live in ``.env``. Code reads
 both through :func:`get_config` so that no module hardcodes a risk limit.
 
-Named personas (e.g. ``calan``) deep-merge overrides onto the top-level defaults.
+Each named persona is an overlay on the top-level defaults: it can override any
+section (fund, risk, quant, universe, etc.) and its own starting capital. The
+existing single-fund behaviour is preserved as the ``balanced`` persona.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.yaml"
+
 DEFAULT_PERSONA = "balanced"
 
 
@@ -30,6 +33,10 @@ def _as_bool(value: Optional[str], default: bool = False) -> bool:
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge *override* into *base*, returning a new dict.
+
+    Scalar values in override replace base; nested dicts are merged recursively.
+    """
     result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -59,6 +66,7 @@ class Secrets:
     database_url: Optional[str] = None
 
     def with_capital(self, capital: float) -> "Secrets":
+        """Return a copy with a different starting capital."""
         return Secrets(
             angelone_api_key=self.angelone_api_key,
             angelone_client_code=self.angelone_client_code,
@@ -125,6 +133,7 @@ class Config:
         return value
 
     def get(self, dotted_path: str, default: Any = None) -> Any:
+        """Fetch a nested setting, e.g. ``config.get("risk.stop_loss_pct")``."""
         node: Any = self.raw
         for part in dotted_path.split("."):
             if not isinstance(node, dict) or part not in node:
@@ -133,12 +142,14 @@ class Config:
         return node
 
     def path(self, dotted_path: str, default: str = "") -> Path:
+        """Resolve a configured relative path against the project root."""
         value = self.get(dotted_path, default)
         candidate = Path(str(value))
         if candidate.is_absolute():
             return candidate
         return self.root / candidate
 
+    # Frequently used sections, exposed as properties for readability.
     @property
     def fund(self) -> Dict[str, Any]:
         return self.section("fund")
@@ -181,10 +192,18 @@ class Config:
 
     @property
     def db_path(self) -> Path:
+        """Where the SQLite journal lives, when SQLite is the backend."""
         return self.path("database.path", "data/fund.db")
 
     @property
     def db_url(self) -> str:
+        """DSN for the journal.
+
+        ``DATABASE_URL`` in the environment wins, so a deployment can point at a
+        different server without editing tracked config. Otherwise
+        ``database.url`` decides, and if that is blank the fund falls back to the
+        SQLite file, which is what keeps a zero-install first run working.
+        """
         if self.secrets.database_url:
             return self.secrets.database_url
         configured = self.get("database.url")
@@ -204,13 +223,8 @@ class Config:
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
-    @property
-    def intraday_dir(self) -> Path:
-        directory = self.root / "data" / "intraday"
-        directory.mkdir(parents=True, exist_ok=True)
-        return directory
-
     def validate(self) -> List[str]:
+        """Return human-readable problems with the configuration."""
         problems: List[str] = []
 
         weights = self.get("quant.factor_weights", {}) or {}
@@ -220,13 +234,6 @@ class Config:
                 problems.append(
                     f"quant.factor_weights must sum to 1.0, got {total:.3f}"
                 )
-
-        if self.get("intraday.enabled"):
-            if not self.path("universe.file").exists():
-                problems.append(
-                    f"universe file not found: {self.get('universe.file')}"
-                )
-            return problems
 
         if self.get("risk.stop_loss_pct", -1) >= 0:
             problems.append("risk.stop_loss_pct must be negative")
@@ -286,43 +293,58 @@ def get_config(settings_path: Optional[str] = None) -> Config:
 
 
 def list_personas(settings_path: Optional[str] = None) -> List[str]:
+    """Return the ids of every persona defined in settings, in order."""
     config = get_config(settings_path)
     personas = config.raw.get("personas", {})
     if not isinstance(personas, dict):
-        return []
-    return list(personas.keys())
+        return [DEFAULT_PERSONA]
+    return list(personas.keys()) or [DEFAULT_PERSONA]
 
 
 def enabled_personas(settings_path: Optional[str] = None) -> List[str]:
+    """Return persona ids that are not explicitly disabled."""
     config = get_config(settings_path)
     personas = config.raw.get("personas", {})
     if not isinstance(personas, dict):
-        return []
+        return [DEFAULT_PERSONA]
     return [
-        pid
-        for pid, pdef in personas.items()
+        pid for pid, pdef in personas.items()
         if isinstance(pdef, dict) and pdef.get("enabled", True)
-    ]
+    ] or [DEFAULT_PERSONA]
 
 
-def get_persona_config(persona_id: str, settings_path: Optional[str] = None) -> Config:
+def get_persona_config(
+    persona_id: str, settings_path: Optional[str] = None
+) -> Config:
+    """Build a Config that deep-merges a persona's overrides onto the defaults.
+
+    Top-level sections (fund, risk, quant, ...) are merged; the persona can
+    override any key at any depth.  ``capital_inr`` in the persona definition
+    replaces :pyattr:`Secrets.initial_capital` for that persona.
+    """
     base = get_config(settings_path)
     personas = base.raw.get("personas", {})
+
     if persona_id not in personas:
         available = ", ".join(personas.keys()) if personas else "(none defined)"
-        raise ValueError(f"Unknown persona {persona_id!r}; available: {available}")
+        raise ValueError(
+            f"Unknown persona {persona_id!r}; available: {available}"
+        )
 
     persona_def = personas[persona_id]
     if not isinstance(persona_def, dict):
-        raise ValueError(
-            f"Persona {persona_id!r} must be a mapping, got {type(persona_def).__name__}"
-        )
+        raise ValueError(f"Persona {persona_id!r} must be a mapping, got {type(persona_def).__name__}")
 
+    # Strip persona-level meta keys that are not policy overrides.
     meta_keys = {"enabled", "capital_inr", "description", "strategy_description"}
     overrides = {k: v for k, v in persona_def.items() if k not in meta_keys}
+
+    # Deep-merge onto the base (without the personas block itself).
     base_raw = {k: v for k, v in base.raw.items() if k != "personas"}
     merged = _deep_merge(base_raw, overrides)
-    merged["personas"] = base.raw.get("personas", {})
+
+    # Preserve the full personas block so callers can introspect.
+    merged["personas"] = base.raw["personas"]
 
     secrets = base.secrets
     capital = persona_def.get("capital_inr")
@@ -338,6 +360,7 @@ def get_persona_config(persona_id: str, settings_path: Optional[str] = None) -> 
 
 
 def persona_description(persona_id: str, settings_path: Optional[str] = None) -> str:
+    """The human-readable description of a persona, for logs and the dashboard."""
     base = get_config(settings_path)
     personas = base.raw.get("personas", {})
     pdef = personas.get(persona_id, {})

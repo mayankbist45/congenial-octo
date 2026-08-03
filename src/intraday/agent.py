@@ -210,19 +210,23 @@ class IntradayAgent:
         }
 
     def _flux_catalyst_rules(self, ranked: List[RankedStock]) -> dict:
-        min_conf = float(self._config.get("intraday.agent.min_watch_confidence", 0.65) or 0.65)
+        min_conf = float(self._config.get("intraday.agent.min_watch_confidence", 0.50) or 0.50)
+        z_entry = float(self._config.get("intraday.ofi_z_entry", 1.5) or 1.5)
         watchlist = []
         for item in ranked[:10]:
-            conf = min(0.95, 0.5 + item.score / 100.0)
+            ofi_z = float(item.ofi_z or 0.0)
+            if abs(ofi_z) < z_entry * 0.85:
+                continue
+            conf = min(0.95, 0.5 + abs(ofi_z) * 0.12)
             watchlist.append(
                 {
                     "symbol": item.symbol,
                     "flow_quality": "informed",
                     "in_play": True,
-                    "direction_bias": "either",
-                    "ofi_z": 0.0,
+                    "direction_bias": "long" if ofi_z > 0 else "short",
+                    "ofi_z": round(ofi_z, 2),
                     "confidence": round(conf, 2),
-                    "rationale": "Rules-only flow placeholder (needs 1-min OFI frame).",
+                    "rationale": f"Rules flow: ofi_z={ofi_z:+.2f}",
                 }
             )
             if len(watchlist) >= 3:
@@ -237,23 +241,33 @@ class IntradayAgent:
         }
 
     def _spread_catalyst_rules(self, ranked: List[RankedStock]) -> dict:
-        pairs = self._config.get("intraday.pairs") or []
+        entry_z = float(self._config.get("intraday.pair_entry_z", 1.5) or 1.5)
         opportunities = []
         watchlist = []
-        for pair in pairs:
-            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+        seen_pairs: set[str] = set()
+        for item in ranked:
+            if not item.pair_id or item.spread_z is None:
                 continue
-            leg_a, leg_b = str(pair[0]).upper(), str(pair[1]).upper()
+            if item.pair_id in seen_pairs:
+                continue
+            if abs(item.spread_z) < entry_z * 0.9:
+                continue
+            legs = item.pair_id.split(":", 1)
+            if len(legs) != 2:
+                continue
+            leg_a, leg_b = legs
+            direction = "short_spread" if item.spread_z > 0 else "long_spread"
+            conf = min(0.95, 0.5 + abs(item.spread_z) * 0.1)
             opportunities.append(
                 {
                     "leg_a": leg_a,
                     "leg_b": leg_b,
-                    "spread_z": 2.0,
+                    "spread_z": item.spread_z,
                     "divergence_type": "technical",
                     "cointegration_ok": True,
-                    "direction": "short_spread",
-                    "confidence": 0.6,
-                    "rationale": "Rules-only spread placeholder.",
+                    "direction": direction,
+                    "confidence": round(conf, 2),
+                    "rationale": f"Rules spread z={item.spread_z:+.2f}",
                 }
             )
             for leg in (leg_a, leg_b):
@@ -262,13 +276,49 @@ class IntradayAgent:
                         "symbol": leg,
                         "in_play": True,
                         "direction_bias": "either",
-                        "confidence": 0.6,
-                        "pair_id": f"{leg_a}:{leg_b}",
-                        "rationale": "Rules-only spread placeholder.",
+                        "confidence": round(conf, 2),
+                        "pair_id": item.pair_id,
+                        "rationale": f"Pair spread z={item.spread_z:+.2f}",
                     }
                 )
+            seen_pairs.add(item.pair_id)
             if len(opportunities) >= 2:
                 break
+        if not opportunities:
+            pairs = self._config.get("intraday.pairs") or []
+            for pair in pairs:
+                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                    continue
+                leg_a, leg_b = str(pair[0]).upper(), str(pair[1]).upper()
+                pair_id = f"{leg_a}:{leg_b}"
+                if pair_id in seen_pairs:
+                    continue
+                opportunities.append(
+                    {
+                        "leg_a": leg_a,
+                        "leg_b": leg_b,
+                        "spread_z": entry_z,
+                        "divergence_type": "technical",
+                        "cointegration_ok": True,
+                        "direction": "short_spread",
+                        "confidence": 0.55,
+                        "rationale": "Rules spread fallback.",
+                    }
+                )
+                for leg in (leg_a, leg_b):
+                    watchlist.append(
+                        {
+                            "symbol": leg,
+                            "in_play": True,
+                            "direction_bias": "either",
+                            "confidence": 0.55,
+                            "pair_id": pair_id,
+                            "rationale": "Rules spread fallback.",
+                        }
+                    )
+                seen_pairs.add(pair_id)
+                if len(opportunities) >= 2:
+                    break
         return {
             "session_view": "Rules-only spread scan.",
             "trade_day_quality": "fair" if opportunities else "poor",
@@ -513,7 +563,7 @@ class IntradayAgent:
         if signal.strategy == "ofi_momentum" and ofi_divergence(frame):
             veto_reasons.append("OFI price divergence")
 
-        if ranked.range_pct > 1.2:
+        if ranked.range_pct > float(self._config.get("intraday.flux_max_atr_pct", 1.5) or 1.5):
             veto_reasons.append("ATR too wide")
 
         end_parts = str(self._config.get("intraday.trade_window_end", "14:30")).split(":")

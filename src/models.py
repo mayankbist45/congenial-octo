@@ -166,6 +166,18 @@ class RiskMetrics:
 
 
 @dataclass
+class MarketRegimeSnapshot:
+    """Price-derived read on the broad market backdrop."""
+
+    as_of: Optional[date] = None
+    regime: str = "unknown"
+    score: Optional[float] = None
+    components: Dict[str, float] = field(default_factory=dict)
+    evidence: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
 class PortfolioRiskProfile:
     """Portfolio-level risk aggregates.
 
@@ -193,6 +205,7 @@ class PortfolioRiskProfile:
     concentration_top5_pct: Optional[float] = None
     concentration_top10_pct: Optional[float] = None
     effective_positions: Optional[float] = None
+    market_regime: Optional[MarketRegimeSnapshot] = None
     sector_weights: Dict[str, float] = field(default_factory=dict)
     style_tilts: Dict[str, float] = field(default_factory=dict)
     per_position: Dict[str, RiskMetrics] = field(default_factory=dict)

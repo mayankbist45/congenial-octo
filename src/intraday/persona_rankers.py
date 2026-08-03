@@ -107,6 +107,9 @@ class FluxRanker(IntradayRanker):
         alignment = -15.0 if divergence else 10.0
         score = ofi_score + turnover_score + tight_spread + alignment
 
+        z_entry = float(self._config.get("intraday.ofi_z_entry", 1.5) or 1.5)
+        in_play = abs(ofi_z) >= z_entry * 0.85 and not divergence
+
         return RankedStock(
             symbol=item.symbol,
             score=round(score, 3),
@@ -117,7 +120,7 @@ class FluxRanker(IntradayRanker):
             vwap_distance_pct=item.vwap_distance_pct,
             prior_level_distance_pct=item.prior_level_distance_pct,
             trend_cleanliness=item.trend_cleanliness,
-            in_play=abs(ofi_z) >= 2.0 and not divergence,
+            in_play=in_play,
             ofi_z=round(ofi_z, 3),
             reasons=[
                 f"ofi_z {ofi_z:+.2f}",

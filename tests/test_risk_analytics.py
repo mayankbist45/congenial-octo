@@ -11,6 +11,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.models import (
+    FundamentalSnapshot,
+    MarketRegimeSnapshot,
+    PortfolioState,
+    Position,
+    TechnicalSnapshot,
+)
+from src.risk_analytics.analyzer import RiskAnalyzer
 from src.risk_analytics.factor_model import (
     active_share_pct,
     correlation_stats,
@@ -21,6 +29,7 @@ from src.risk_analytics.factor_model import (
     regress,
     tracking_error_pct,
 )
+from src.risk_analytics.market_regime import assess_market_regime
 
 DAYS = 500
 
@@ -225,3 +234,126 @@ def test_index_replication_has_no_active_risk(benchmark: pd.Series) -> None:
     assert result is not None
     tracking_error, _factor, _selection = result
     assert tracking_error == pytest.approx(0.0, abs=1e-9)
+
+
+def _prices_from_returns(returns: pd.Series, start: float = 100.0) -> pd.Series:
+    return start * (1.0 + returns).cumprod()
+
+
+def _market_series(kind: str) -> tuple[pd.Series, dict[str, pd.Series]]:
+    index = pd.date_range("2024-01-01", periods=360, freq="B")
+    if kind == "calm":
+        benchmark_returns = pd.Series(
+            np.r_[np.sin(np.arange(260)) * 0.004, np.full(100, 0.0008)],
+            index=index,
+        )
+        names = {
+            f"S{i}": _prices_from_returns(
+                pd.Series(
+                    np.r_[
+                        np.sin(np.arange(260) + i) * 0.004,
+                        np.full(100, 0.001 + i * 0.00002),
+                    ],
+                    index=index,
+                )
+            )
+            for i in range(8)
+        }
+    else:
+        common = np.r_[np.full(260, 0.0005), np.tile([-0.035, 0.020], 50)]
+        benchmark_returns = pd.Series(common, index=index)
+        names = {
+            f"S{i}": _prices_from_returns(
+                pd.Series(common + (i * 0.00001), index=index)
+            )
+            for i in range(8)
+        }
+    return _prices_from_returns(benchmark_returns), names
+
+
+def test_market_regime_detects_calm_market() -> None:
+    benchmark_prices, price_series = _market_series("calm")
+
+    regime = assess_market_regime(benchmark_prices, price_series)
+
+    assert regime.regime == "calm"
+    assert regime.score is not None and regime.score < 40.0
+    assert set(regime.components) == {
+        "volatility",
+        "drawdown",
+        "breadth",
+        "correlation",
+    }
+
+
+def test_market_regime_detects_stressed_market() -> None:
+    benchmark_prices, price_series = _market_series("stressed")
+
+    regime = assess_market_regime(benchmark_prices, price_series)
+
+    assert regime.regime == "stressed"
+    assert regime.score is not None and regime.score >= 65.0
+    assert regime.warnings
+
+
+def test_market_regime_is_unknown_without_enough_inputs() -> None:
+    index = pd.date_range("2026-01-01", periods=30, freq="B")
+    benchmark_prices = pd.Series(np.linspace(100.0, 101.0, len(index)), index=index)
+
+    regime = assess_market_regime(benchmark_prices, {})
+
+    assert regime.regime == "unknown"
+    assert regime.score is None
+    assert "fewer than three inputs" in regime.warnings[0]
+
+
+class FakePriceService:
+    def __init__(self, benchmark_prices, price_series):
+        self._benchmark_prices = benchmark_prices
+        self._price_series = price_series
+
+    def benchmark_series(self):
+        return self._benchmark_prices
+
+    def close_series(self, symbol):
+        return self._price_series.get(symbol)
+
+
+class FakeUniverse:
+    def __init__(self, symbols):
+        self.symbols = symbols
+
+    def sector_of(self, _symbol):
+        return "Information Technology"
+
+
+def test_risk_analyzer_populates_market_regime_and_warnings() -> None:
+    benchmark_prices, price_series = _market_series("stressed")
+    symbols = list(price_series)
+    portfolio = PortfolioState(
+        as_of=benchmark_prices.index[-1].date(),
+        cash=100_000.0,
+        positions=[
+            Position(
+                symbol=symbols[0],
+                quantity=10,
+                avg_cost=100.0,
+                last_price=100.0,
+                sector="Information Technology",
+            )
+        ],
+    )
+    technicals = {
+        symbol: TechnicalSnapshot(symbol=symbol, above_sma_200=False)
+        for symbol in symbols
+    }
+    fundamentals = {symbol: FundamentalSnapshot(symbol=symbol) for symbol in symbols}
+
+    profile = RiskAnalyzer(
+        price_service=FakePriceService(benchmark_prices, price_series),
+        universe=FakeUniverse(symbols),
+    ).analyse(portfolio, fundamentals, technicals, universe_symbols=symbols)
+
+    assert isinstance(profile.market_regime, MarketRegimeSnapshot)
+    assert profile.market_regime.regime == "stressed"
+    assert any("Market regime is stressed" in warning for warning in profile.warnings)

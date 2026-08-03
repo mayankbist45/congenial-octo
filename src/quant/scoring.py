@@ -230,6 +230,17 @@ class ScoringEngine:
                 f"below Rs {float(min_turnover) / 1e7:.1f}cr floor"
             )
 
+        # Momentum personas only buy names already in an uptrend. Mean-reverting
+        # or broken-trend names are left for other strategies.
+        if bool(self._config.get("quant.require_above_sma200", False)):
+            if not technical.sma_200 or not technical.last_price:
+                failures.append("200-DMA unavailable; cannot confirm uptrend")
+            elif technical.last_price < technical.sma_200:
+                failures.append(
+                    f"price {technical.last_price:.1f} below 200-DMA "
+                    f"{technical.sma_200:.1f}"
+                )
+
         if not fundamental.is_usable:
             failures.append("insufficient fundamental data")
 

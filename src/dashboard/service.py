@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from src.config import Config, get_config
 from src.journal.performance import PerformanceCalculator
 from src.journal.repository import JournalRepository
+from src.learning.service import LearningService
 from src.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -73,10 +74,15 @@ class DashboardService:
         self._config = config or get_config()
         self._repo = JournalRepository(self._config)
         self._performance = PerformanceCalculator(self._config)
+        self._learning = LearningService(self._config)
 
     @property
     def repository(self) -> JournalRepository:
         return self._repo
+
+    @property
+    def persona_id(self) -> str:
+        return self._config.persona_id
 
     @property
     def fund_name(self) -> str:
@@ -110,21 +116,37 @@ class DashboardService:
 
         total_value = float(latest["total_value"]) if latest else 0.0
         cash = float(latest["cash"]) if latest else 0.0
+        invested_value = float(latest["invested_value"]) if latest else 0.0
+        unrealised_pnl = float(latest["unrealised_pnl"] or 0.0) if latest else 0.0
+
+        # If NAV still reflects a cash-only book but fills exist, prefer the
+        # reconstructed book so Overview matches Holdings.
+        holdings_invested = sum(float(h["market_value"] or 0.0) for h in holdings)
+        if invested_value <= 0 and holdings:
+            capital = float(self._config.secrets.initial_capital)
+            net_deployed = self._repo.net_cash_deployed()
+            realised = self._repo.total_realised_pnl()
+            cash = max(capital - net_deployed + realised, 0.0)
+            invested_value = holdings_invested
+            unrealised_pnl = sum(float(h["unrealised_pnl"] or 0.0) for h in holdings)
+            total_value = cash + invested_value
+            daily_change_pct = None
 
         return {
-            "has_data": bool(run),
+            "has_data": bool(run) or bool(holdings),
             "run": self._run_view(run) if run else None,
             "total_value": total_value,
             "cash": cash,
             "cash_pct": (cash / total_value * 100.0) if total_value > 0 else 0.0,
-            "invested_value": float(latest["invested_value"]) if latest else 0.0,
+            "invested_value": invested_value,
             "position_count": len(holdings),
             "daily_change_pct": daily_change_pct,
             "realised_pnl": float(latest["realised_pnl"] or 0.0) if latest else 0.0,
-            "unrealised_pnl": float(latest["unrealised_pnl"] or 0.0) if latest else 0.0,
+            "unrealised_pnl": unrealised_pnl,
             "pending_count": len(pending),
             "top_holdings": holdings[:5],
             "sector_weights": self.sector_weights(),
+            "market_regime": (self.risk_profile() or {}).get("market_regime"),
         }
 
     def _run_view(self, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -146,27 +168,63 @@ class DashboardService:
     # ------------------------------------------------------------------
     def holdings(self) -> List[Dict[str, Any]]:
         rows = self._repo.latest_position_snapshot()
-        return [
-            {
-                "symbol": row["symbol"],
-                "company_name": row["company_name"] or row["symbol"],
-                "sector": row["sector"] or "Unknown",
-                "quantity": row["quantity"],
-                "avg_cost": row["avg_cost"],
-                "last_price": row["last_price"],
-                "market_value": row["market_value"],
-                "weight_pct": row["weight_pct"],
-                "return_pct": row["return_pct"],
-                "unrealised_pnl": row["unrealised_pnl"],
-                "holding_days": row["holding_days"],
-                "composite_score": row["composite_score"],
-                "beta": row["beta"],
-                "idiosyncratic_vol": row["idiosyncratic_vol"],
-                "risk_contribution_pct": row["risk_contribution_pct"],
-                "thesis": row["thesis"] or "",
-            }
-            for row in rows
-        ]
+        if rows:
+            return [
+                {
+                    "symbol": row["symbol"],
+                    "company_name": row["company_name"] or row["symbol"],
+                    "sector": row["sector"] or "Unknown",
+                    "quantity": row["quantity"],
+                    "avg_cost": row["avg_cost"],
+                    "last_price": row["last_price"],
+                    "market_value": row["market_value"],
+                    "weight_pct": row["weight_pct"],
+                    "return_pct": row["return_pct"],
+                    "unrealised_pnl": row["unrealised_pnl"],
+                    "holding_days": row["holding_days"],
+                    "composite_score": row["composite_score"],
+                    "beta": row["beta"],
+                    "idiosyncratic_vol": row["idiosyncratic_vol"],
+                    "risk_contribution_pct": row["risk_contribution_pct"],
+                    "thesis": row["thesis"] or "",
+                }
+                for row in rows
+            ]
+
+        # Fills can land before the next snapshot refresh. Reconstruct from the
+        # trade journal so Overview/Holdings are not stuck on an empty cash book.
+        lots = self._repo.reconstruct_positions()
+        if not lots:
+            return []
+
+        invested = sum(float(lot["quantity"]) * float(lot["avg_cost"]) for lot in lots)
+        views: List[Dict[str, Any]] = []
+        for lot in lots:
+            qty = int(lot["quantity"])
+            avg_cost = float(lot["avg_cost"])
+            market_value = qty * avg_cost
+            views.append(
+                {
+                    "symbol": lot["symbol"],
+                    "company_name": lot["symbol"],
+                    "sector": "Unknown",
+                    "quantity": qty,
+                    "avg_cost": avg_cost,
+                    "last_price": avg_cost,
+                    "market_value": market_value,
+                    "weight_pct": (market_value / invested * 100.0) if invested else 0.0,
+                    "return_pct": 0.0,
+                    "unrealised_pnl": 0.0,
+                    "holding_days": None,
+                    "composite_score": None,
+                    "beta": None,
+                    "idiosyncratic_vol": None,
+                    "risk_contribution_pct": None,
+                    "thesis": "",
+                }
+            )
+        views.sort(key=lambda row: row["market_value"], reverse=True)
+        return views
 
     def sector_weights(self) -> List[Dict[str, Any]]:
         buckets: Dict[str, float] = {}
@@ -364,7 +422,36 @@ class DashboardService:
             "max_pairwise_correlation": payload.get("max_pairwise_correlation"),
             "style_tilts": payload.get("style_tilts") or {},
             "warnings": payload.get("warnings") or [],
+            "market_regime": payload.get("market_regime"),
         }
+
+    # ------------------------------------------------------------------
+    # Learning
+    # ------------------------------------------------------------------
+    def learning_summary(self) -> Dict[str, Any]:
+        return self._learning.summary()
+
+    def learning_lessons(self) -> List[Dict[str, Any]]:
+        return self._learning.lessons()
+
+    def decision_reviews(self, limit: int = 100) -> List[Dict[str, Any]]:
+        return self._learning.reviews(limit=limit)
+
+    def learning_payload(self) -> Dict[str, Any]:
+        return self._learning.payload()
+
+    # ------------------------------------------------------------------
+    # Intraday paper/backtest summaries
+    # ------------------------------------------------------------------
+    def intraday_summary(self) -> Optional[Dict[str, Any]]:
+        path = self._config.root / "data" / "intraday" / f"{self.persona_id}_latest.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not read intraday summary %s: %s", path, exc)
+            return None
 
     def attribution(self) -> List[Dict[str, Any]]:
         """Contribution to return by position, from the latest snapshot."""
@@ -388,6 +475,48 @@ class DashboardService:
         ]
         rows.sort(key=lambda r: r["contribution_pct"] or 0.0, reverse=True)
         return rows
+
+    # ------------------------------------------------------------------
+    # Multi-persona overview
+    # ------------------------------------------------------------------
+    def all_personas_overview(self) -> List[Dict[str, Any]]:
+        from src.config import Config, _deep_merge
+
+        results: List[Dict[str, Any]] = []
+        personas = self._config.raw.get("personas", {})
+        if not isinstance(personas, dict):
+            personas = {}
+        for pid, pdef in personas.items():
+            if not isinstance(pdef, dict) or not pdef.get("enabled", True):
+                continue
+            meta_keys = {"enabled", "capital_inr", "description", "strategy_description"}
+            overrides = {k: v for k, v in pdef.items() if k not in meta_keys}
+            base_raw = {k: v for k, v in self._config.raw.items() if k != "personas"}
+            merged = _deep_merge(base_raw, overrides)
+            merged["personas"] = personas
+            secrets = self._config.secrets
+            if pdef.get("capital_inr") is not None:
+                secrets = secrets.with_capital(float(pdef["capital_inr"]))
+            pcfg = Config(
+                raw=merged,
+                secrets=secrets,
+                root=self._config.root,
+                persona_id=pid,
+            )
+            svc = DashboardService(config=pcfg)
+            overview = svc.overview()
+            results.append({
+                "persona_id": pid,
+                "description": str(pdef.get("description", pid)),
+                "total_value": overview["total_value"],
+                "position_count": overview["position_count"],
+                "cash_pct": overview["cash_pct"],
+                "pending_count": overview["pending_count"],
+                "has_data": overview["has_data"],
+                "intraday": bool(pcfg.get("intraday.enabled", False)),
+                "intraday_summary": svc.intraday_summary(),
+            })
+        return results
 
     # ------------------------------------------------------------------
     # Journal

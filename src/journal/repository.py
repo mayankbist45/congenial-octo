@@ -37,6 +37,7 @@ class JournalRepository:
 
     def __init__(self, config: Optional[Config] = None):
         self._config = config or get_config()
+        self._persona_id = self._config.persona_id
 
     # ------------------------------------------------------------------
     # Runs
@@ -51,11 +52,12 @@ class JournalRepository:
         with session(self._config) as conn:
             return conn.insert_returning_id(
                 """
-                INSERT INTO runs (run_date, started_at, is_deep_review,
+                INSERT INTO runs (persona_id, run_date, started_at, is_deep_review,
                                   portfolio_value, cash, status)
-                VALUES (?, ?, ?, ?, ?, 'running')
+                VALUES (?, ?, ?, ?, ?, ?, 'running')
                 """,
                 (
+                    self._persona_id,
                     run_date.isoformat(),
                     datetime.now().isoformat(timespec="seconds"),
                     int(is_deep_review),
@@ -93,14 +95,16 @@ class JournalRepository:
     def latest_run(self) -> Optional[Dict[str, Any]]:
         with session(self._config) as conn:
             row = conn.execute(
-                "SELECT * FROM runs ORDER BY id DESC LIMIT 1"
+                "SELECT * FROM runs WHERE persona_id = ? ORDER BY id DESC LIMIT 1",
+                (self._persona_id,),
             ).fetchone()
             return dict(row) if row else None
 
     def recent_runs(self, limit: int = 30) -> List[Dict[str, Any]]:
         with session(self._config) as conn:
             rows = conn.execute(
-                "SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,)
+                "SELECT * FROM runs WHERE persona_id = ? ORDER BY id DESC LIMIT ?",
+                (self._persona_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -117,14 +121,15 @@ class JournalRepository:
                 proposal_id = conn.insert_returning_id(
                     """
                     INSERT INTO proposals (
-                        run_id, created_at, symbol, company_name, sector, action,
-                        quantity, reference_price, limit_price, estimated_value,
-                        rationale, thesis, target_price, trigger_types,
-                        confidence, warnings, source, status
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')
+                        run_id, persona_id, created_at, symbol, company_name,
+                        sector, action, quantity, reference_price, limit_price,
+                        estimated_value, rationale, thesis, target_price,
+                        trigger_types, confidence, warnings, source, status
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')
                     """,
                     (
                         run_id,
+                        self._persona_id,
                         now,
                         proposal.symbol,
                         proposal.company_name,
@@ -151,26 +156,23 @@ class JournalRepository:
     def save_rejected(
         self, run_id: int, rejected: List[Tuple[TradeProposal, str]]
     ) -> None:
-        """Record proposals the risk engine blocked, with the reason.
-
-        Rejections are as informative as approvals when reviewing the fund: they
-        show where the decision layer keeps pushing against its limits.
-        """
+        """Record proposals the risk engine blocked, with the reason."""
         now = datetime.now().isoformat(timespec="seconds")
         with session(self._config) as conn:
             for proposal, reason in rejected:
                 conn.execute(
                     """
                     INSERT INTO proposals (
-                        run_id, created_at, symbol, company_name, sector, action,
-                        quantity, reference_price, estimated_value, rationale,
-                        trigger_types, confidence, warnings, source, status,
-                        decided_at, decided_by, rejection_reason
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                        run_id, persona_id, created_at, symbol, company_name,
+                        sector, action, quantity, reference_price, estimated_value,
+                        rationale, trigger_types, confidence, warnings, source,
+                        status, decided_at, decided_by, rejection_reason
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                               'rejected', ?, 'risk_engine', ?)
                     """,
                     (
                         run_id,
+                        self._persona_id,
                         now,
                         proposal.symbol,
                         proposal.company_name,
@@ -197,9 +199,10 @@ class JournalRepository:
                 """
                 SELECT p.*, r.run_date
                   FROM proposals p JOIN runs r ON r.id = p.run_id
-                 WHERE p.status = 'pending'
+                 WHERE p.status = 'pending' AND p.persona_id = ?
                  ORDER BY p.id
-                """
+                """,
+                (self._persona_id,),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -210,9 +213,10 @@ class JournalRepository:
                 """
                 SELECT p.*, r.run_date
                   FROM proposals p JOIN runs r ON r.id = p.run_id
-                 WHERE p.status = 'approved'
+                 WHERE p.status = 'approved' AND p.persona_id = ?
                  ORDER BY p.id
-                """
+                """,
+                (self._persona_id,),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -276,12 +280,14 @@ class JournalRepository:
             return conn.insert_returning_id(
                 """
                 INSERT INTO trades (
-                    proposal_id, executed_at, symbol, action, quantity, price,
-                    value, broker_order_id, status, error, dry_run, realised_pnl
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    proposal_id, persona_id, executed_at, symbol, action,
+                    quantity, price, value, broker_order_id, status, error,
+                    dry_run, realised_pnl
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     proposal_id,
+                    self._persona_id,
                     (executed_at or datetime.now()).isoformat(timespec="seconds"),
                     symbol.upper(),
                     action.upper(),
@@ -299,7 +305,8 @@ class JournalRepository:
     def trades(self, limit: int = 200) -> List[Dict[str, Any]]:
         with session(self._config) as conn:
             rows = conn.execute(
-                "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
+                "SELECT * FROM trades WHERE persona_id = ? ORDER BY id DESC LIMIT ?",
+                (self._persona_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -308,10 +315,11 @@ class JournalRepository:
             rows = conn.execute(
                 """
                 SELECT * FROM trades
-                 WHERE symbol = ? AND status IN ('filled','submitted','dry_run')
+                 WHERE persona_id = ? AND symbol = ?
+                   AND status IN ('filled','submitted','dry_run')
                  ORDER BY executed_at
                 """,
-                (symbol.upper(),),
+                (self._persona_id, symbol.upper()),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -325,9 +333,11 @@ class JournalRepository:
                 """
                 SELECT symbol, action, quantity, price, executed_at
                   FROM trades
-                 WHERE status IN ('filled','submitted','dry_run')
+                 WHERE persona_id = ?
+                   AND status IN ('filled','submitted','dry_run')
                  ORDER BY executed_at, id
-                """
+                """,
+                (self._persona_id,),
             ).fetchall()
 
         books: Dict[str, Dict[str, Any]] = {}
@@ -380,8 +390,10 @@ class JournalRepository:
                   COALESCE(SUM(CASE WHEN action IN ('SELL','TRIM')
                                     THEN value ELSE 0 END), 0) AS sold
                   FROM trades
-                 WHERE status IN ('filled','submitted','dry_run')
-                """
+                 WHERE persona_id = ?
+                   AND status IN ('filled','submitted','dry_run')
+                """,
+                (self._persona_id,),
             ).fetchone()
         return float(row["bought"]) - float(row["sold"])
 
@@ -390,8 +402,10 @@ class JournalRepository:
             row = conn.execute(
                 """
                 SELECT COALESCE(SUM(realised_pnl), 0) AS total FROM trades
-                 WHERE status IN ('filled','submitted','dry_run')
-                """
+                 WHERE persona_id = ?
+                   AND status IN ('filled','submitted','dry_run')
+                """,
+                (self._persona_id,),
             ).fetchone()
         return float(row["total"])
 
@@ -408,10 +422,11 @@ class JournalRepository:
                   COALESCE(SUM(CASE WHEN action IN ('SELL','TRIM')
                                     THEN value ELSE 0 END), 0) AS sales
                   FROM trades
-                 WHERE status IN ('filled','submitted','dry_run')
+                 WHERE persona_id = ?
+                   AND status IN ('filled','submitted','dry_run')
                    AND substr(executed_at, 1, 10) BETWEEN ? AND ?
                 """,
-                (start.isoformat(), end.isoformat()),
+                (self._persona_id, start.isoformat(), end.isoformat()),
             ).fetchone()
         return float(row["purchases"]), float(row["sales"])
 
@@ -420,9 +435,9 @@ class JournalRepository:
             row = conn.execute(
                 """
                 SELECT AVG(total_value) AS average FROM nav_history
-                 WHERE run_date BETWEEN ? AND ?
+                 WHERE persona_id = ? AND run_date BETWEEN ? AND ?
                 """,
-                (start.isoformat(), end.isoformat()),
+                (self._persona_id, start.isoformat(), end.isoformat()),
             ).fetchone()
         average = row["average"] if row else None
         return float(average) if average else 0.0
@@ -440,24 +455,19 @@ class JournalRepository:
         thesis: Optional[str] = None,
         target_price: Optional[float] = None,
     ) -> None:
-        """Store the context a sell trigger needs later.
-
-        Entry P/E, entry date and the written thesis cannot be recovered from
-        broker data, so they are captured when the position is opened.
-        """
+        """Store the context a sell trigger needs later."""
         now = datetime.now().isoformat(timespec="seconds")
         with session(self._config) as conn:
             conn.execute(
                 """
                 INSERT INTO position_meta (
-                    symbol, entry_date, entry_price, entry_pe, peak_price,
-                    thesis, target_price, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?)
-                ON CONFLICT(symbol) DO UPDATE SET
+                    persona_id, symbol, entry_date, entry_price, entry_pe,
+                    peak_price, thesis, target_price, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(persona_id, symbol) DO UPDATE SET
                     entry_date   = COALESCE(excluded.entry_date, position_meta.entry_date),
                     entry_price  = COALESCE(excluded.entry_price, position_meta.entry_price),
                     entry_pe     = COALESCE(excluded.entry_pe, position_meta.entry_pe),
-                    -- The peak only ever ratchets upward.
                     peak_price   = GREATEST(COALESCE(excluded.peak_price, 0),
                                             COALESCE(position_meta.peak_price, 0)),
                     thesis       = COALESCE(excluded.thesis, position_meta.thesis),
@@ -465,6 +475,7 @@ class JournalRepository:
                     updated_at   = excluded.updated_at
                 """,
                 (
+                    self._persona_id,
                     symbol.upper(),
                     _iso(entry_date),
                     entry_price,
@@ -478,12 +489,18 @@ class JournalRepository:
 
     def position_meta(self) -> Dict[str, Dict[str, Any]]:
         with session(self._config) as conn:
-            rows = conn.execute("SELECT * FROM position_meta").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM position_meta WHERE persona_id = ?",
+                (self._persona_id,),
+            ).fetchall()
         return {row["symbol"]: dict(row) for row in rows}
 
     def clear_position_meta(self, symbol: str) -> None:
         with session(self._config) as conn:
-            conn.execute("DELETE FROM position_meta WHERE symbol = ?", (symbol.upper(),))
+            conn.execute(
+                "DELETE FROM position_meta WHERE persona_id = ? AND symbol = ?",
+                (self._persona_id, symbol.upper()),
+            )
 
     # ------------------------------------------------------------------
     # NAV, risk and digest history
@@ -501,11 +518,11 @@ class JournalRepository:
             conn.execute(
                 """
                 INSERT INTO nav_history (
-                    run_date, total_value, invested_value, cash, position_count,
-                    benchmark_close, daily_return_pct, benchmark_return_pct,
-                    realised_pnl, unrealised_pnl
-                ) VALUES (?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(run_date) DO UPDATE SET
+                    persona_id, run_date, total_value, invested_value, cash,
+                    position_count, benchmark_close, daily_return_pct,
+                    benchmark_return_pct, realised_pnl, unrealised_pnl
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(persona_id, run_date) DO UPDATE SET
                     total_value = excluded.total_value,
                     invested_value = excluded.invested_value,
                     cash = excluded.cash,
@@ -517,6 +534,7 @@ class JournalRepository:
                     unrealised_pnl = excluded.unrealised_pnl
                 """,
                 (
+                    self._persona_id,
                     run_date.isoformat(),
                     portfolio.total_value,
                     portfolio.invested_value,
@@ -533,7 +551,8 @@ class JournalRepository:
     def nav_history(self) -> List[Dict[str, Any]]:
         with session(self._config) as conn:
             rows = conn.execute(
-                "SELECT * FROM nav_history ORDER BY run_date"
+                "SELECT * FROM nav_history WHERE persona_id = ? ORDER BY run_date",
+                (self._persona_id,),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -559,13 +578,15 @@ class JournalRepository:
             existing = {
                 row["symbol"]: dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM position_snapshots WHERE run_date = ?",
-                    (run_date.isoformat(),),
+                    "SELECT * FROM position_snapshots "
+                    "WHERE persona_id = ? AND run_date = ?",
+                    (self._persona_id, run_date.isoformat()),
                 ).fetchall()
             }
             conn.execute(
-                "DELETE FROM position_snapshots WHERE run_date = ?",
-                (run_date.isoformat(),),
+                "DELETE FROM position_snapshots "
+                "WHERE persona_id = ? AND run_date = ?",
+                (self._persona_id, run_date.isoformat()),
             )
             for position in portfolio.positions:
                 score = scores.get(position.symbol)
@@ -578,14 +599,15 @@ class JournalRepository:
                 conn.execute(
                     """
                     INSERT INTO position_snapshots (
-                        run_date, symbol, company_name, sector, quantity,
-                        avg_cost, last_price, market_value, weight_pct,
+                        persona_id, run_date, symbol, company_name, sector,
+                        quantity, avg_cost, last_price, market_value, weight_pct,
                         return_pct, unrealised_pnl, holding_days,
                         composite_score, beta, idiosyncratic_vol,
                         risk_contribution_pct, pct_of_adv, thesis
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
+                        self._persona_id,
                         run_date.isoformat(),
                         position.symbol,
                         position.company_name,
@@ -618,9 +640,14 @@ class JournalRepository:
             rows = conn.execute(
                 """
                 SELECT * FROM position_snapshots
-                 WHERE run_date = (SELECT MAX(run_date) FROM position_snapshots)
+                 WHERE persona_id = ?
+                   AND run_date = (
+                       SELECT MAX(run_date) FROM position_snapshots
+                        WHERE persona_id = ?
+                   )
                  ORDER BY market_value DESC
-                """
+                """,
+                (self._persona_id, self._persona_id),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -633,11 +660,11 @@ class JournalRepository:
             conn.execute(
                 """
                 INSERT INTO risk_history (
-                    run_date, portfolio_beta, portfolio_vol, idio_share_pct,
-                    tracking_error_pct, active_share_pct, concentration_top5_pct,
-                    avg_pairwise_correlation, payload
-                ) VALUES (?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(run_date) DO UPDATE SET
+                    persona_id, run_date, portfolio_beta, portfolio_vol,
+                    idio_share_pct, tracking_error_pct, active_share_pct,
+                    concentration_top5_pct, avg_pairwise_correlation, payload
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(persona_id, run_date) DO UPDATE SET
                     portfolio_beta = excluded.portfolio_beta,
                     portfolio_vol = excluded.portfolio_vol,
                     idio_share_pct = excluded.idio_share_pct,
@@ -648,6 +675,7 @@ class JournalRepository:
                     payload = excluded.payload
                 """,
                 (
+                    self._persona_id,
                     run_date.isoformat(),
                     profile.portfolio_beta,
                     profile.portfolio_vol_annualised,
@@ -663,7 +691,9 @@ class JournalRepository:
     def latest_risk_profile(self) -> Optional[Dict[str, Any]]:
         with session(self._config) as conn:
             row = conn.execute(
-                "SELECT * FROM risk_history ORDER BY run_date DESC LIMIT 1"
+                "SELECT * FROM risk_history WHERE persona_id = ? "
+                "ORDER BY run_date DESC LIMIT 1",
+                (self._persona_id,),
             ).fetchone()
             return dict(row) if row else None
 
@@ -672,11 +702,11 @@ class JournalRepository:
             conn.execute(
                 """
                 INSERT INTO news_digests (
-                    run_date, macro_summary, market_summary, holdings_notes,
-                    watchlist_notes, flagged_symbols, article_count,
-                    high_impact_count, generated_by_llm
-                ) VALUES (?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(run_date) DO UPDATE SET
+                    persona_id, run_date, macro_summary, market_summary,
+                    holdings_notes, watchlist_notes, flagged_symbols,
+                    article_count, high_impact_count, generated_by_llm
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(persona_id, run_date) DO UPDATE SET
                     macro_summary = excluded.macro_summary,
                     market_summary = excluded.market_summary,
                     holdings_notes = excluded.holdings_notes,
@@ -687,6 +717,7 @@ class JournalRepository:
                     generated_by_llm = excluded.generated_by_llm
                 """,
                 (
+                    self._persona_id,
                     digest.as_of.isoformat(),
                     digest.macro_summary,
                     digest.market_summary,
@@ -702,6 +733,254 @@ class JournalRepository:
     def latest_digest(self) -> Optional[Dict[str, Any]]:
         with session(self._config) as conn:
             row = conn.execute(
-                "SELECT * FROM news_digests ORDER BY run_date DESC LIMIT 1"
+                "SELECT * FROM news_digests WHERE persona_id = ? "
+                "ORDER BY run_date DESC LIMIT 1",
+                (self._persona_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Liquid fund positions
+    # ------------------------------------------------------------------
+    def record_liquid_position(
+        self,
+        run_date: date,
+        scheme_code: str,
+        scheme_name: str,
+        units: float,
+        nav: float,
+        market_value: float,
+        daily_return_pct: float,
+    ) -> None:
+        with session(self._config) as conn:
+            conn.execute(
+                """
+                INSERT INTO liquid_positions (
+                    persona_id, run_date, scheme_code, scheme_name,
+                    units, nav, market_value, daily_return_pct
+                ) VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(persona_id, run_date) DO UPDATE SET
+                    scheme_code = excluded.scheme_code,
+                    scheme_name = excluded.scheme_name,
+                    units = excluded.units,
+                    nav = excluded.nav,
+                    market_value = excluded.market_value,
+                    daily_return_pct = excluded.daily_return_pct
+                """,
+                (
+                    self._persona_id,
+                    run_date.isoformat(),
+                    scheme_code,
+                    scheme_name,
+                    units,
+                    nav,
+                    market_value,
+                    daily_return_pct,
+                ),
+            )
+
+    def latest_liquid_position(self) -> Optional[Dict[str, Any]]:
+        with session(self._config) as conn:
+            row = conn.execute(
+                "SELECT * FROM liquid_positions WHERE persona_id = ? "
+                "ORDER BY run_date DESC LIMIT 1",
+                (self._persona_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Learning reviews and lessons
+    # ------------------------------------------------------------------
+    def reviewable_proposals(self) -> List[Dict[str, Any]]:
+        """Executed/rejected proposals with the context needed for learning."""
+        with session(self._config) as conn:
+            rows = conn.execute(
+                """
+                SELECT p.*, r.run_date,
+                       t.id AS trade_id,
+                       t.executed_at AS trade_executed_at,
+                       t.price AS trade_price,
+                       t.realised_pnl AS trade_realised_pnl
+                  FROM proposals p
+                  JOIN runs r ON r.id = p.run_id
+                  LEFT JOIN trades t ON t.proposal_id = p.id
+                 WHERE p.persona_id = ?
+                   AND p.status IN ('executed','rejected','expired','failed')
+                 ORDER BY p.id
+                """,
+                (self._persona_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def upsert_decision_review(self, review: Dict[str, Any]) -> int:
+        """Persist one outcome review, replacing the same proposal/window."""
+        now = datetime.now().isoformat(timespec="seconds")
+        created_at = review.get("created_at") or now
+        updated_at = now
+        with session(self._config) as conn:
+            existing = conn.execute(
+                """
+                SELECT id FROM decision_reviews
+                 WHERE persona_id = ? AND proposal_id = ? AND review_window_days = ?
+                """,
+                (
+                    self._persona_id,
+                    review["proposal_id"],
+                    review["review_window_days"],
+                ),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO decision_reviews (
+                    proposal_id, trade_id, persona_id, review_window_days,
+                    proposal_date, review_date, symbol, action, status, label,
+                    stock_return_pct, benchmark_return_pct, excess_return_pct,
+                    max_drawdown_pct, realised_pnl, evidence, recommendation,
+                    created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(persona_id, proposal_id, review_window_days)
+                DO UPDATE SET
+                    trade_id = excluded.trade_id,
+                    proposal_date = excluded.proposal_date,
+                    review_date = excluded.review_date,
+                    symbol = excluded.symbol,
+                    action = excluded.action,
+                    status = excluded.status,
+                    label = excluded.label,
+                    stock_return_pct = excluded.stock_return_pct,
+                    benchmark_return_pct = excluded.benchmark_return_pct,
+                    excess_return_pct = excluded.excess_return_pct,
+                    max_drawdown_pct = excluded.max_drawdown_pct,
+                    realised_pnl = excluded.realised_pnl,
+                    evidence = excluded.evidence,
+                    recommendation = excluded.recommendation,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    review["proposal_id"],
+                    review.get("trade_id"),
+                    self._persona_id,
+                    review["review_window_days"],
+                    review.get("proposal_date"),
+                    review["review_date"],
+                    review["symbol"],
+                    review["action"],
+                    review["status"],
+                    review["label"],
+                    review.get("stock_return_pct"),
+                    review.get("benchmark_return_pct"),
+                    review.get("excess_return_pct"),
+                    review.get("max_drawdown_pct"),
+                    review.get("realised_pnl"),
+                    json.dumps(review.get("evidence") or {}),
+                    review.get("recommendation"),
+                    created_at,
+                    updated_at,
+                ),
+            )
+            if existing:
+                return int(existing["id"])
+            row = conn.execute(
+                """
+                SELECT id FROM decision_reviews
+                 WHERE persona_id = ? AND proposal_id = ? AND review_window_days = ?
+                """,
+                (
+                    self._persona_id,
+                    review["proposal_id"],
+                    review["review_window_days"],
+                ),
+            ).fetchone()
+            return int(row["id"])
+
+    def decision_reviews(self, limit: int = 200) -> List[Dict[str, Any]]:
+        with session(self._config) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM decision_reviews
+                 WHERE persona_id = ?
+                 ORDER BY review_date DESC, id DESC
+                 LIMIT ?
+                """,
+                (self._persona_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def clear_learning_lessons(self) -> None:
+        with session(self._config) as conn:
+            conn.execute(
+                "DELETE FROM learning_lessons WHERE persona_id = ?",
+                (self._persona_id,),
+            )
+
+    def upsert_learning_lesson(self, lesson: Dict[str, Any]) -> int:
+        now = datetime.now().isoformat(timespec="seconds")
+        created_at = lesson.get("created_at") or now
+        updated_at = now
+        with session(self._config) as conn:
+            existing = conn.execute(
+                """
+                SELECT id FROM learning_lessons
+                 WHERE persona_id = ? AND label = ?
+                """,
+                (self._persona_id, lesson["label"]),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO learning_lessons (
+                    persona_id, label, status, evidence_count, symbol_count,
+                    review_date_count, avg_excess_return_pct,
+                    avg_stock_return_pct, confidence, recommendation, evidence,
+                    created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(persona_id, label) DO UPDATE SET
+                    status = excluded.status,
+                    evidence_count = excluded.evidence_count,
+                    symbol_count = excluded.symbol_count,
+                    review_date_count = excluded.review_date_count,
+                    avg_excess_return_pct = excluded.avg_excess_return_pct,
+                    avg_stock_return_pct = excluded.avg_stock_return_pct,
+                    confidence = excluded.confidence,
+                    recommendation = excluded.recommendation,
+                    evidence = excluded.evidence,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    self._persona_id,
+                    lesson["label"],
+                    lesson["status"],
+                    lesson["evidence_count"],
+                    lesson["symbol_count"],
+                    lesson["review_date_count"],
+                    lesson.get("avg_excess_return_pct"),
+                    lesson.get("avg_stock_return_pct"),
+                    lesson.get("confidence"),
+                    lesson.get("recommendation"),
+                    json.dumps(lesson.get("evidence") or {}),
+                    created_at,
+                    updated_at,
+                ),
+            )
+            if existing:
+                return int(existing["id"])
+            row = conn.execute(
+                """
+                SELECT id FROM learning_lessons
+                 WHERE persona_id = ? AND label = ?
+                """,
+                (self._persona_id, lesson["label"]),
+            ).fetchone()
+            return int(row["id"])
+
+    def learning_lessons(self) -> List[Dict[str, Any]]:
+        with session(self._config) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM learning_lessons
+                 WHERE persona_id = ?
+                 ORDER BY CASE WHEN status = 'actionable' THEN 0 ELSE 1 END,
+                          evidence_count DESC, label
+                """,
+                (self._persona_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
