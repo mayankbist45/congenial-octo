@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from src.config import Config
-from src.market.session import session_end_time
+from src.market.session import market_timezone, session_end_time
 from src.intraday.models import RankedStock
 
 
@@ -127,8 +127,8 @@ class IntradayRanker:
     ) -> bool:
         gap_ok = gap_pct is not None and abs(gap_pct) >= min_gap
         rvol_ok = volume_expansion >= min_rvol
-        turnover_ok = turnover >= min_turnover * 1.5
-        return gap_ok or rvol_ok or turnover_ok
+        # SIP filter: gap or relative volume — turnover alone is not enough.
+        return gap_ok or rvol_ok
 
     @staticmethod
     def _vwap(frame: pd.DataFrame) -> Optional[float]:
@@ -185,7 +185,13 @@ class IntradayRanker:
         if data.empty:
             data = frame
         if as_of is not None:
-            data = data.loc[data.index <= pd.Timestamp(as_of)]
+            ts = pd.Timestamp(as_of)
+            if isinstance(data.index, pd.DatetimeIndex) and data.index.tz is None and ts.tz is not None:
+                if config is not None:
+                    ts = ts.tz_convert(market_timezone(config)).tz_localize(None)
+                else:
+                    ts = ts.tz_localize(None)
+            data = data.loc[data.index <= ts]
         return data
 
     @staticmethod

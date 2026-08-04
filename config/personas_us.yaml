@@ -128,7 +128,7 @@ personas:
       auto_approve: false
     intraday:
       enabled: true
-      mode: "paper"
+      mode: "broker"
       strategies:
         - opening_range_breakout
         - vwap_pullback
@@ -143,13 +143,18 @@ personas:
       max_open_positions: 2
       risk_per_trade_pct: 0.4
       max_daily_loss_pct: 1.5
-      min_avg_volume: 50000
+      min_avg_volume: 20000
       min_avg_turnover_inr: 10000000
       stocks_in_play:
         min_gap_pct: 0.8
-        min_rvol: 2.0
-        min_trend_cleanliness: 0.5
-        min_trend_at_signal: 0.30
+        min_rvol: 1.5
+        min_trend_cleanliness: 0.20
+        min_trend_at_signal: 0.25
+        min_watchlist_trend: 0.25
+        min_stop_pct: 0.20
+        min_or_range_pct: 0.25
+        min_rr_orb: 1.25
+        min_rr_vwap: 1.35
       agent:
         enabled: true
         veto_scalping: true
@@ -172,13 +177,14 @@ personas:
       auto_approve: false
     intraday:
       enabled: true
-      mode: "paper"
+      mode: "broker"
       strategies:
         - vwap_fade
         - opening_gap_fade
       trade_window_start: "09:45"
       trade_window_end: "14:00"
       force_exit_time: "15:45"
+      min_avg_volume: 20000
       max_trades_per_day: 4
       risk_per_trade_pct: 0.25
       stocks_in_play:
@@ -204,7 +210,7 @@ personas:
       auto_approve: false
     intraday:
       enabled: true
-      mode: "paper"
+      mode: "broker"
       strategies:
         - ofi_momentum
         - ofi_exhaustion
@@ -213,6 +219,7 @@ personas:
       trade_window_start: "09:45"
       trade_window_end: "14:00"
       force_exit_time: "15:45"
+      min_avg_volume: 20000
       agent:
         enabled: true
         min_watch_confidence: 0.50
@@ -233,7 +240,7 @@ personas:
       auto_approve: false
     intraday:
       enabled: true
-      mode: "paper"
+      mode: "broker"
       strategies:
         - pair_zscore
       pairs:
@@ -243,6 +250,7 @@ personas:
       trade_window_start: "09:45"
       trade_window_end: "14:00"
       force_exit_time: "15:45"
+      min_avg_volume: 20000
       agent:
         enabled: true
         min_watch_confidence: 0.50
@@ -263,10 +271,11 @@ personas:
       auto_approve: false
     intraday:
       enabled: true
-      mode: "paper"
+      mode: "broker"
       strategies:
         - twap_slice
         - vwap_schedule
       parent_orders: []
+      min_avg_volume: 20000
       agent:
         enabled: true

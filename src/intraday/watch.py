@@ -1,4 +1,4 @@
-"""Live market-hours paper loop for calan (SIP-ORB-VWAP + LLM gates)."""
+"""Live market-hours intraday loop (paper sim or broker-routed orders)."""
 
 from __future__ import annotations
 
@@ -11,19 +11,34 @@ import pandas as pd
 
 from src.config import Config
 from src.intraday.agent import IntradayAgent
+from src.intraday.broker_execution import IntradayBrokerExecutor, intraday_uses_broker
 from src.intraday.data import IntradayDataService
 from src.intraday.engine_helpers import collect_signals
 from src.intraday.models import IntradaySignal, IntradayTrade, PaperPosition, PaperState, RankedStock
+from src.intraday.pair_exits import is_pair_strategy, z_at_bar, pair_exit_reason, pair_z_config_keys
 from src.intraday.persona_rankers import filter_ranked_for_persona, load_ranker
 from src.intraday.reporting import save_summary, summarize_state
 from src.intraday.state import PaperStateStore
 from src.intraday.strategies import load_strategies
+from src.logging_setup import get_logger
 from src.market.session import market_timezone, session_open_close
+
+logger = get_logger(__name__)
 
 
 def parse_hhmm(value: str) -> time:
     hour, minute = str(value).split(":", 1)
     return time(int(hour), int(minute))
+
+
+def _ts_for_index(when: datetime, index: pd.DatetimeIndex, config: Config) -> pd.Timestamp:
+    """Align an aware ``now`` with exchange-local naive candle indices."""
+    ts = pd.Timestamp(when)
+    if not isinstance(index, pd.DatetimeIndex) or index.tz is not None:
+        return ts
+    if ts.tz is not None:
+        return ts.tz_convert(market_timezone(config)).tz_localize(None)
+    return ts
 
 
 class IntradayWatchEngine:
@@ -51,6 +66,7 @@ class IntradayWatchEngine:
         self._ranker = load_ranker(config)
         self._strategies = load_strategies(config)
         self._catalyst_scanned = False
+        self._broker_exec: Optional[IntradayBrokerExecutor] = None
 
     def run_until_close(self) -> PaperState:
         poll_seconds = int(self._config.get("intraday.watch_poll_seconds", 300) or 300)
@@ -72,25 +88,33 @@ class IntradayWatchEngine:
 
         symbols = self._symbols_for_poll(state, now)
         frames = self._load_frames(now, symbols)
+        interval = str(self._config.get("intraday.default_interval", "FIVE_MINUTE")).upper()
+        previous_days = self._data.previous_day_stats_batch(
+            list(frames.keys()), now.date(), interval=interval
+        )
         self._close_positions(state, frames, now)
-        ranked = self._ranker.rank(frames)
+        ranked = self._ranker.rank(frames, previous_days)
         limit = int(self._config.get("intraday.ranked_universe_size", 8) or 8)
         ranked = ranked[:limit]
         state.top_candidates = [asdict(item) for item in ranked]
 
-        if not self._catalyst_scanned and now.time() >= self._catalyst_scan_time():
+        if now.time() >= self._catalyst_scan_time() and (
+            not self._catalyst_scanned or (not state.watchlist and any(r.in_play for r in ranked))
+        ):
             pool = filter_ranked_for_persona(self._config, ranked)
             if not pool:
                 pool = ranked
             catalyst = self._agent.catalyst_scan(pool or ranked, frames, now, state.daily_pnl)
-            state.watchlist = list(catalyst.get("watchlist") or [])
+            watchlist = list(catalyst.get("watchlist") or [])
+            if watchlist or not self._catalyst_scanned:
+                state.watchlist = watchlist
             self._catalyst_scanned = True
 
         if self._can_enter_new_trades(state, now):
             watch_symbols = {str(w["symbol"]).upper() for w in state.watchlist if w.get("in_play")}
-            if watch_symbols and self._config.persona_id != "spread":
+            if watch_symbols and self._config.persona_id not in ("spread", "xstat"):
                 ranked = [r for r in ranked if r.symbol in watch_symbols]
-            self._open_new_positions(state, frames, ranked, now)
+            self._open_new_positions(state, frames, ranked, now, previous_days)
 
         self._apply_daily_lockout(state)
         self._save(state)
@@ -125,7 +149,8 @@ class IntradayWatchEngine:
             except Exception:
                 continue
             if not frame.empty:
-                frames[symbol] = frame.loc[frame.index <= pd.Timestamp(now)]
+                ts = _ts_for_index(now, frame.index, self._config)
+                frames[symbol] = frame.loc[frame.index <= ts]
         return frames
 
     def _open_new_positions(
@@ -134,8 +159,9 @@ class IntradayWatchEngine:
         frames: Dict[str, pd.DataFrame],
         ranked: List[RankedStock],
         now: datetime,
+        previous_days: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> None:
-        signals = self._rank_signals(frames, ranked, state)
+        signals = self._rank_signals(frames, ranked, state, previous_days)
         max_trades = int(self._config.get("intraday.max_trades_per_day", 3) or 3)
         max_open = int(self._config.get("intraday.max_open_positions", 2) or 2)
         watch_map = {
@@ -184,32 +210,49 @@ class IntradayWatchEngine:
                 signal.stop_price = float(gate["adjusted_stop"])
             if gate.get("adjusted_target"):
                 signal.target_price = float(gate["adjusted_target"])
+            if gate.get("use_trailing_stop") is not None:
+                signal.use_trailing_stop = bool(gate["use_trailing_stop"])
 
             position = self._paper_fill(signal, state, gate)
             if position is None:
                 self._skip(state, signal, "position size rounded to zero")
                 continue
+            broker_exec = self._broker_executor()
+            if broker_exec is not None:
+                ok, err = broker_exec.submit_entry(position)
+                if not ok:
+                    self._skip(state, signal, err or "broker entry rejected")
+                    continue
             state.open_positions.append(position)
             if signal.is_pair and signal.pair_leg:
                 pair_position = self._paper_fill_pair_leg(signal, state, gate)
-                if pair_position:
-                    state.open_positions.append(pair_position)
-                else:
+                if pair_position is None:
+                    if broker_exec is not None:
+                        broker_exec.flatten(position, position.entry_price)
                     state.open_positions.pop()
                     self._skip(state, signal, "pair leg size rounded to zero")
                     continue
+                if broker_exec is not None:
+                    ok, err = broker_exec.submit_entry(pair_position)
+                    if not ok:
+                        broker_exec.flatten(position, position.entry_price)
+                        state.open_positions.pop()
+                        self._skip(state, signal, err or "broker pair entry rejected")
+                        continue
+                state.open_positions.append(pair_position)
 
     def _rank_signals(
         self,
         frames: Dict[str, pd.DataFrame],
         ranked: List[RankedStock],
         state: PaperState,
+        previous_days: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> List[tuple[float, IntradaySignal]]:
-        if state.watchlist and self._config.persona_id != "spread":
+        if state.watchlist and self._config.persona_id not in ("spread", "xstat"):
             watch_symbols = {str(w["symbol"]).upper() for w in state.watchlist if w.get("in_play")}
             if watch_symbols:
                 ranked = [r for r in ranked if r.symbol in watch_symbols]
-        collected = collect_signals(self._config, frames, ranked)
+        collected = collect_signals(self._config, frames, ranked, previous_days)
         return [(score, signal) for score, signal, _ in collected]
 
     def _paper_fill(
@@ -237,6 +280,7 @@ class IntradayWatchEngine:
             if gate.get("use_trailing_stop") and gate.get("trailing_stop_pct")
             else float(self._config.get("intraday.trailing_stop_pct", 0.25) or 0.25)
         )
+        use_trailing = bool(gate.get("use_trailing_stop", signal.use_trailing_stop))
         return PaperPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
@@ -248,8 +292,13 @@ class IntradayWatchEngine:
             target_price=signal.target_price,
             max_exit_time=signal.max_exit_time,
             reason=signal.reason,
-            trailing_stop_pct=trailing,
+            trailing_stop_pct=trailing if use_trailing else None,
             peak_price=round(entry_price, 2),
+            pair_id=signal.pair_id,
+            pair_partner=signal.pair_leg,
+            entry_z=signal.entry_z,
+            pair_beta=signal.pair_beta,
+            use_trailing_stop=use_trailing,
         )
 
     def _paper_fill_pair_leg(
@@ -291,24 +340,134 @@ class IntradayWatchEngine:
             target_price=target,
             max_exit_time=signal.max_exit_time,
             reason=f"{signal.reason} (pair leg)",
-            trailing_stop_pct=trailing,
+            trailing_stop_pct=None,
             peak_price=round(entry_price, 2),
+            pair_id=signal.pair_id,
+            pair_partner=signal.symbol,
+            entry_z=signal.entry_z,
+            pair_beta=signal.pair_beta,
+            use_trailing_stop=False,
         )
 
     def _close_positions(
         self, state: PaperState, frames: Dict[str, pd.DataFrame], now: datetime
     ) -> None:
         still_open: List[PaperPosition] = []
+        handled_pairs: set[str] = set()
         for position in state.open_positions:
+            if position.pair_id and position.pair_id in handled_pairs:
+                continue
+            if position.pair_id and is_pair_strategy(position.strategy):
+                partner = next(
+                    (
+                        p
+                        for p in state.open_positions
+                        if p.pair_id == position.pair_id and p.symbol != position.symbol
+                    ),
+                    None,
+                )
+                if partner is None:
+                    still_open.append(position)
+                    continue
+                handled_pairs.add(position.pair_id)
+                exit_payload = self._exit_for_pair(position, partner, frames, now)
+                if exit_payload is None:
+                    still_open.extend([position, partner])
+                    continue
+                for pos in (position, partner):
+                    frame = frames.get(pos.symbol)
+                    price = float(exit_payload["exit_prices"].get(pos.symbol, pos.entry_price))
+                    trade = self._trade_from_position(
+                        pos,
+                        exit_time=exit_payload["exit_time"],
+                        exit_price=price,
+                        exit_reason=str(exit_payload["exit_reason"]),
+                    )
+                    trade.pair_id = position.pair_id
+                    state.completed_trades.append(trade)
+                    state.daily_pnl = round(state.daily_pnl + trade.net_pnl, 2)
+                continue
+
             frame = frames.get(position.symbol)
             exit_payload = self._exit_for_position(position, frame, now)
             if exit_payload is None:
                 still_open.append(position)
                 continue
+            broker_exec = self._broker_executor()
+            if broker_exec is not None:
+                ok, err = broker_exec.submit_exit(
+                    position, float(exit_payload["exit_price"])
+                )
+                if not ok:
+                    logger.warning(
+                        "Broker exit pending for %s: %s", position.symbol, err
+                    )
+                    still_open.append(position)
+                    continue
             trade = self._trade_from_position(position, **exit_payload)
             state.completed_trades.append(trade)
             state.daily_pnl = round(state.daily_pnl + trade.net_pnl, 2)
         state.open_positions = still_open
+
+    def _exit_for_pair(
+        self,
+        leg_a: PaperPosition,
+        leg_b: PaperPosition,
+        frames: Dict[str, pd.DataFrame],
+        now: datetime,
+    ) -> Optional[Dict[str, object]]:
+        frame_a = frames.get(leg_a.symbol)
+        frame_b = frames.get(leg_b.symbol)
+        if frame_a is None or frame_b is None:
+            return None
+        force_exit = now.time() >= parse_hhmm(
+            str(self._config.get("intraday.force_exit_time", "15:15"))
+        )
+        exit_z, stop_z, _ = pair_z_config_keys(self._config)
+        entry_ts = max(leg_a.entry_time, leg_b.entry_time)
+        common = frame_a.index.intersection(frame_b.index)
+        common = common[common > pd.Timestamp(entry_ts)]
+        now_ts = _ts_for_index(now, frame_a.index, self._config)
+        common = common[common <= now_ts]
+        if common.empty:
+            return None
+
+        beta = float(leg_a.pair_beta or leg_b.pair_beta or 1.0)
+        for ts in common.sort_values():
+            z = z_at_bar(
+                self._config,
+                leg_a.strategy,
+                frame_a,
+                frame_b,
+                ts,
+                beta=beta,
+            )
+            if z is None:
+                continue
+            reason = pair_exit_reason(z, exit_z, stop_z)
+            if reason:
+                return {
+                    "exit_time": ts.to_pydatetime(),
+                    "exit_reason": reason,
+                    "exit_prices": {
+                        leg_a.symbol: float(frame_a.loc[ts, "close"]),
+                        leg_b.symbol: float(frame_b.loc[ts, "close"]),
+                    },
+                }
+
+        if force_exit or (
+            leg_a.max_exit_time and now >= leg_a.max_exit_time
+        ):
+            last_ts = common[-1]
+            return {
+                "exit_time": last_ts.to_pydatetime(),
+                "exit_reason": "force_squareoff" if force_exit else "time_exit",
+                "exit_prices": {
+                    leg_a.symbol: float(frame_a.loc[last_ts, "close"]),
+                    leg_b.symbol: float(frame_b.loc[last_ts, "close"]),
+                },
+            }
+        return None
 
     def _exit_for_position(
         self,
@@ -328,28 +487,50 @@ class IntradayWatchEngine:
                     "exit_reason": "paper_time_exit_no_candle",
                 }
             return None
-        future = frame.loc[frame.index >= pd.Timestamp(position.entry_time)]
+        entry_ts = _ts_for_index(position.entry_time, frame.index, self._config)
+        future = frame.loc[frame.index >= entry_ts]
         if future.empty:
             return None
         if not force_exit:
-            future = future.loc[future.index <= pd.Timestamp(now)]
+            now_ts = _ts_for_index(now, frame.index, self._config)
+            future = future.loc[future.index <= now_ts]
         if future.empty:
             return None
 
-        trailing_pct = (position.trailing_stop_pct or 0.25) / 100.0
+        trailing_pct = (position.trailing_stop_pct or 0.0) / 100.0
+        use_trailing = position.use_trailing_stop and trailing_pct > 0
         peak = position.peak_price or position.entry_price
         half_r = position.entry_price + abs(position.entry_price - position.stop_price) * 0.5 * (
             1 if position.side == "BUY" else -1
         )
+        z_exit = float(self._config.get("intraday.vwap_fade_z_exit", 0.3) or 0.3)
+        sigma_lb = int(self._config.get("intraday.vwap_fade_sigma_lookback", 15) or 15)
 
         for ts, row in future.iterrows():
             high = float(row["high"])
             low = float(row["low"])
             close = float(row["close"])
+            if position.strategy == "vwap_fade" and position.entry_z is not None:
+                window = frame.loc[frame.index <= ts]
+                if len(window) >= sigma_lb + 1:
+                    typical = (window["high"] + window["low"] + window["close"]) / 3.0
+                    volume = window["volume"].clip(lower=0)
+                    denom = volume.cumsum().replace(0, pd.NA)
+                    vwap = (typical * volume).cumsum() / denom
+                    residuals = window["close"] - vwap
+                    sigma = float(residuals.tail(sigma_lb).std())
+                    if sigma > 1e-9:
+                        z_now = float((close - float(vwap.iloc[-1])) / sigma)
+                        if abs(z_now) <= z_exit:
+                            return {
+                                "exit_time": ts.to_pydatetime(),
+                                "exit_price": close,
+                                "exit_reason": "vwap_z_exit",
+                            }
             if position.side == "BUY":
                 peak = max(peak, high)
                 position.peak_price = peak
-                if close >= half_r:
+                if use_trailing and close >= half_r:
                     trail = peak * (1.0 - trailing_pct)
                     if low <= max(trail, position.stop_price):
                         return {
@@ -372,7 +553,7 @@ class IntradayWatchEngine:
             else:
                 peak = min(peak, low)
                 position.peak_price = peak
-                if close <= half_r:
+                if use_trailing and close <= half_r:
                     trail = peak * (1.0 + trailing_pct)
                     if high >= min(trail, position.stop_price):
                         return {
@@ -532,7 +713,18 @@ class IntradayWatchEngine:
         return open_t <= now.time() <= self._force_exit_time()
 
     def _equity(self, state: PaperState) -> float:
-        return max(float(self._config.secrets.initial_capital) + state.daily_pnl, 0.0)
+        base = max(float(self._config.secrets.initial_capital) + state.daily_pnl, 0.0)
+        broker_exec = self._broker_executor()
+        if broker_exec is not None:
+            return broker_exec.equity(base)
+        return base
+
+    def _broker_executor(self) -> Optional[IntradayBrokerExecutor]:
+        if not intraday_uses_broker(self._config):
+            return None
+        if self._broker_exec is None:
+            self._broker_exec = IntradayBrokerExecutor(self._config)
+        return self._broker_exec if self._broker_exec.active else None
 
     def _equity_from_completed(self) -> float:
         return float(self._config.secrets.initial_capital)

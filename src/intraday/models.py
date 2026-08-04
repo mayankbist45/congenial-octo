@@ -24,6 +24,9 @@ class IntradaySignal:
     pair_entry_price: Optional[float] = None
     pair_stop_price: Optional[float] = None
     pair_target_price: Optional[float] = None
+    entry_z: Optional[float] = None
+    pair_beta: Optional[float] = None
+    use_trailing_stop: bool = True
 
     @property
     def is_pair(self) -> bool:
@@ -51,6 +54,7 @@ class IntradayTrade:
     costs: float
     net_pnl: float
     r_multiple: float
+    pair_id: Optional[str] = None
 
     @property
     def trade_date(self) -> date:
@@ -89,6 +93,13 @@ class PaperPosition:
     reason: str
     trailing_stop_pct: Optional[float] = None
     peak_price: Optional[float] = None
+    entry_order_id: Optional[str] = None
+    exit_order_id: Optional[str] = None
+    pair_id: Optional[str] = None
+    pair_partner: Optional[str] = None
+    entry_z: Optional[float] = None
+    pair_beta: Optional[float] = None
+    use_trailing_stop: bool = True
 
 
 @dataclass

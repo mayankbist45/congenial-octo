@@ -12,6 +12,7 @@ from src.config import Config
 from src.intraday.agent import IntradayAgent
 from src.intraday.engine_helpers import collect_signals
 from src.intraday.models import IntradayBacktestResult, IntradaySignal, IntradayTrade
+from src.intraday.pair_exits import is_pair_strategy, pair_leg_quantities, resolve_pair_exit
 from src.intraday.persona_rankers import filter_ranked_for_persona, load_ranker
 
 
@@ -119,7 +120,7 @@ class IntradaySimulator:
             for item in catalyst.get("watchlist", [])
             if item.get("in_play")
         }
-        if self._watchlist and self._config.persona_id != "spread":
+        if self._watchlist and self._config.persona_id not in ("spread", "xstat"):
             ranked = [r for r in ranked if r.symbol in self._watchlist]
 
         collected = collect_signals(self._config, day_frames, ranked, day_previous)
@@ -152,6 +153,8 @@ class IntradaySimulator:
                 signal.stop_price = float(gate["adjusted_stop"])
             if gate.get("adjusted_target"):
                 signal.target_price = float(gate["adjusted_target"])
+            if gate.get("use_trailing_stop") is not None:
+                signal.use_trailing_stop = bool(gate["use_trailing_stop"])
             day_trades = self._execute_signal(signal, day_frames, equity)
             for trade in day_trades:
                 trades.append(trade)
@@ -163,26 +166,118 @@ class IntradaySimulator:
     def _execute_signal(
         self, signal: IntradaySignal, frames: Dict[str, pd.DataFrame], equity: float
     ) -> List[IntradayTrade]:
+        if signal.is_pair and signal.pair_leg and is_pair_strategy(signal.strategy):
+            return self._execute_pair(signal, frames, equity)
+        trade = self._execute_leg(signal, frames.get(signal.symbol), equity)
+        return [trade] if trade else []
+
+    def _execute_pair(
+        self, signal: IntradaySignal, frames: Dict[str, pd.DataFrame], equity: float
+    ) -> List[IntradayTrade]:
+        leg_b = signal.pair_leg
+        if not leg_b:
+            return []
+        frame_a = frames.get(signal.symbol)
+        frame_b = frames.get(leg_b)
+        if frame_a is None or frame_b is None:
+            return []
+        entry_b = float(signal.pair_entry_price or 0.0)
+        stop_b = float(signal.pair_stop_price or entry_b)
+        beta = float(signal.pair_beta or 1.0)
+        qty_a, qty_b = pair_leg_quantities(
+            self._config,
+            equity,
+            signal.entry_price,
+            signal.stop_price,
+            entry_b,
+            beta,
+        )
+        if qty_a < 1 or qty_b < 1:
+            return []
+
+        exit_time, exit_reason, _ = resolve_pair_exit(
+            self._config,
+            signal.strategy,
+            frame_a,
+            frame_b,
+            signal.entry_time,
+            signal.max_exit_time,
+            beta=beta,
+        )
+        if exit_time is None or exit_reason is None:
+            return []
+
+        leg_b_signal = IntradaySignal(
+            leg_b,
+            signal.strategy,
+            signal.pair_side or "BUY",
+            signal.entry_time,
+            entry_b,
+            stop_b,
+            float(signal.pair_target_price or entry_b),
+            signal.reason,
+            signal.max_exit_time,
+            pair_id=signal.pair_id,
+        )
         trades: List[IntradayTrade] = []
-        primary = self._execute_leg(signal, frames.get(signal.symbol), equity)
-        if primary:
-            trades.append(primary)
-        if signal.is_pair and signal.pair_leg:
-            leg = IntradaySignal(
-                signal.pair_leg,
-                signal.strategy,
-                signal.pair_side or "BUY",
-                signal.entry_time,
-                float(signal.pair_entry_price or 0.0),
-                float(signal.pair_stop_price or 0.0),
-                float(signal.pair_target_price or 0.0),
-                signal.reason,
-                signal.max_exit_time,
+        for leg_signal, frame, qty in (
+            (signal, frame_a, qty_a),
+            (leg_b_signal, frame_b, qty_b),
+        ):
+            trade = self._leg_trade_at_exit(
+                leg_signal, frame, qty, equity, exit_time, exit_reason
             )
-            secondary = self._execute_leg(leg, frames.get(signal.pair_leg), equity)
-            if secondary:
-                trades.append(secondary)
+            if trade:
+                trade.pair_id = signal.pair_id
+                trades.append(trade)
         return trades
+
+    def _leg_trade_at_exit(
+        self,
+        signal: IntradaySignal,
+        frame: pd.DataFrame,
+        quantity: int,
+        equity: float,
+        exit_time: datetime,
+        exit_reason: str,
+    ) -> Optional[IntradayTrade]:
+        exit_ts = pd.Timestamp(exit_time)
+        if exit_ts in frame.index:
+            exit_price = float(frame.loc[exit_ts, "close"])
+        else:
+            prior = frame.loc[frame.index <= exit_ts]
+            if prior.empty:
+                return None
+            exit_price = float(prior["close"].iloc[-1])
+        risk_amount = equity * float(
+            self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4
+        ) / 100.0
+        gross = (
+            (exit_price - signal.entry_price) * quantity
+            if signal.side == "BUY"
+            else (signal.entry_price - exit_price) * quantity
+        )
+        costs = self._costs(signal.entry_price, exit_price, quantity)
+        net = gross - costs
+        r_multiple = net / risk_amount if risk_amount > 0 else 0.0
+        return IntradayTrade(
+            symbol=signal.symbol,
+            strategy=signal.strategy,
+            side=signal.side,
+            quantity=quantity,
+            entry_time=signal.entry_time,
+            exit_time=exit_time,
+            entry_price=signal.entry_price,
+            exit_price=exit_price,
+            stop_price=signal.stop_price,
+            target_price=signal.target_price,
+            exit_reason=exit_reason,
+            gross_pnl=round(gross, 2),
+            costs=round(costs, 2),
+            net_pnl=round(net, 2),
+            r_multiple=round(r_multiple, 4),
+            pair_id=signal.pair_id,
+        )
 
     def _execute_leg(
         self, signal: IntradaySignal, frame: Optional[pd.DataFrame], equity: float
@@ -238,19 +333,41 @@ class IntradaySimulator:
         exit_time = future.index[-1].to_pydatetime()
         exit_price = float(future["close"].iloc[-1])
         exit_reason = "time_exit"
+        use_trailing = signal.use_trailing_stop
         trailing_pct = float(self._config.get("intraday.trailing_stop_pct", 0.25) or 0.25) / 100.0
         peak = signal.entry_price
         half_r = signal.entry_price + signal.risk_per_share * 0.5 * (
             1 if signal.side == "BUY" else -1
         )
+        z_exit = float(self._config.get("intraday.vwap_fade_z_exit", 0.3) or 0.3)
+        sigma_lb = int(self._config.get("intraday.vwap_fade_sigma_lookback", 15) or 15)
 
         for ts, row in future.iterrows():
             high = float(row["high"])
             low = float(row["low"])
             close = float(row["close"])
+            if signal.strategy == "vwap_fade" and signal.entry_z is not None:
+                window = frame.loc[frame.index <= ts]
+                if len(window) >= sigma_lb + 1:
+                    vwap_frame = window.copy()
+                    typical = (vwap_frame["high"] + vwap_frame["low"] + vwap_frame["close"]) / 3.0
+                    volume = vwap_frame["volume"].clip(lower=0)
+                    denom = volume.cumsum().replace(0, pd.NA)
+                    vwap_frame["vwap"] = (typical * volume).cumsum() / denom
+                    residuals = vwap_frame["close"] - vwap_frame["vwap"]
+                    sigma = float(residuals.tail(sigma_lb).std())
+                    if sigma > 1e-9:
+                        z_now = float((close - float(vwap_frame["vwap"].iloc[-1])) / sigma)
+                        if abs(z_now) <= z_exit:
+                            exit_time, exit_price, exit_reason = (
+                                ts.to_pydatetime(),
+                                close,
+                                "vwap_z_exit",
+                            )
+                            break
             if signal.side == "BUY":
                 peak = max(peak, high)
-                if close >= half_r and peak > signal.entry_price:
+                if use_trailing and close >= half_r and peak > signal.entry_price:
                     trail = peak * (1.0 - trailing_pct)
                     if low <= max(trail, signal.stop_price):
                         exit_time, exit_price, exit_reason = (
@@ -275,7 +392,7 @@ class IntradaySimulator:
                     break
             else:
                 peak = min(peak, low)
-                if close <= half_r and peak < signal.entry_price:
+                if use_trailing and close <= half_r and peak < signal.entry_price:
                     trail = peak * (1.0 + trailing_pct)
                     if high >= min(trail, signal.stop_price):
                         exit_time, exit_price, exit_reason = (

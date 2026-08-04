@@ -268,6 +268,7 @@ connectors:
   market_region: IN
   alpaca:
     min_call_interval_seconds: 0.25
+    data_feed: iex
 
 dashboard:
   host: "127.0.0.1"
@@ -528,12 +529,17 @@ personas:
         min_rvol: 2.0
         min_trend_cleanliness: 0.5
         # Checked at entry bar (09:45 → signal), not on the full session.
-        min_trend_at_signal: 0.30
+        min_trend_at_signal: 0.40
+        min_watchlist_trend: 0.40
+        min_stop_pct: 0.20
+        min_or_range_pct: 0.35
+        min_rr_orb: 1.35
+        min_rr_vwap: 1.5
       agent:
         enabled: true
         veto_scalping: true
         min_watch_confidence: 0.55
-        min_trade_confidence: 0.55
+        min_trade_confidence: 0.60
       costs:
         brokerage_pct: 0.03
         brokerage_cap_per_order: 20.0
