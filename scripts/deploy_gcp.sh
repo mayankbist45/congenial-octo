@@ -53,6 +53,18 @@ require_gcloud() {
 
 gc() { gcloud --project "$PROJECT" "$@"; }
 
+_apply_shared_permissions() {
+    ssh_vm "sudo groupadd fund 2>/dev/null || true &&
+            sudo chown -R \$(id -un):fund '$REMOTE_DIR' &&
+            sudo find '$REMOTE_DIR' -type d -exec chmod 2775 {} + &&
+            sudo find '$REMOTE_DIR' -type f ! -path '$REMOTE_DIR/.env' -exec chmod 664 {} + &&
+            sudo find '$REMOTE_DIR/scripts' -type f -name '*.sh' -exec chmod 775 {} + 2>/dev/null || true &&
+            sudo chmod -R g+rw '$REMOTE_DIR/data' '$REMOTE_DIR/logs' 2>/dev/null || true &&
+            if [ -f '$REMOTE_DIR/.env' ]; then
+                sudo chgrp fund '$REMOTE_DIR/.env' && chmod 640 '$REMOTE_DIR/.env';
+            fi"
+}
+
 ssh_vm() {
     gc compute ssh "$INSTANCE" --zone "$ZONE" --command "$1"
 }
@@ -99,9 +111,14 @@ push() {
     # committed. Taken from the working tree, so an uncommitted settings.yaml
     # tweak goes too. .env, caches and backups are gitignored and so excluded
     # here; .env is copied separately with tighter permissions. Logs and the old
-    # SQLite sidecars are excluded by pathspec: the VM keeps its own run history,
-    # and unpacking the laptop's scheduled.log over it would erase that.
-    local excludes=(':!:data/*.log' ':!:data/fund.db*')
+    # SQLite sidecars, logs, and live intraday summaries are excluded: the VM
+    # keeps its own run history; overwriting *_latest.json wipes live paper UI.
+    local excludes=(
+        ':!:data/*.log'
+        ':!:data/fund.db*'
+        ':!:data/intraday/*_latest.json'
+        ':!:data/intraday/*_state.json'
+    )
     (cd "$PROJECT_DIR" &&
         {
             git ls-files -z -- . "${excludes[@]}"
@@ -115,24 +132,31 @@ push() {
     rm -f "$tarball"
 
     ssh_vm "sudo mkdir -p '$REMOTE_DIR' &&
-            sudo chown \$(id -un):\$(id -gn) '$REMOTE_DIR' &&
             tar -xzf ~/fund-src.tar.gz -C '$REMOTE_DIR' &&
             rm -f ~/fund-src.tar.gz &&
             chmod +x '$REMOTE_DIR'/scripts/*.sh &&
             mkdir -p '$REMOTE_DIR/data'" || die "unpacking on the VM failed"
 
+    _apply_shared_permissions
+
     if [ -f "$PROJECT_DIR/.env" ]; then
         echo "Pushing .env"
         gc compute scp "$PROJECT_DIR/.env" "$INSTANCE:/tmp/fund.env" --zone "$ZONE" ||
             die "scp of .env failed"
-        # DATABASE_URL is dropped on the way up: the laptop's DSN points at a
-        # Homebrew server, and bootstrap_vm.sh writes the VM's own DSN instead.
-        ssh_vm "grep -v '^DATABASE_URL=' /tmp/fund.env > '$REMOTE_DIR/.env' &&
-                rm -f /tmp/fund.env && chmod 600 '$REMOTE_DIR/.env'" ||
+        # DATABASE_URL is dropped from the laptop copy (Homebrew DSN). Preserve
+        # the VM's existing DATABASE_URL so deploy does not break the journal DB.
+        ssh_vm "OLD_DB=\$(grep '^DATABASE_URL=' '$REMOTE_DIR/.env' 2>/dev/null || true) &&
+                grep -v '^DATABASE_URL=' /tmp/fund.env > '$REMOTE_DIR/.env' &&
+                if [ -n \"\$OLD_DB\" ]; then echo \"\$OLD_DB\" >> '$REMOTE_DIR/.env'; fi &&
+                rm -f /tmp/fund.env &&
+                sudo chgrp fund '$REMOTE_DIR/.env' &&
+                chmod 640 '$REMOTE_DIR/.env'" ||
             die "installing .env failed"
     else
         echo "  no local .env found; create $REMOTE_DIR/.env on the VM by hand"
     fi
+
+    _apply_shared_permissions
 
     # Caches are gitignored but worth carrying: a cold fundamentals cache means
     # ~500 Screener requests at one second apart on the first run.

@@ -23,6 +23,14 @@
 </div>
 {% else %}
 
+{% if summary.label == 'live paper' %}
+<p class="subtitle">
+  <span class="tag tag-intraday">Live paper</span>
+  {% if summary.active %}Session active{% else %}Session ended{% endif %}
+  {% if summary.last_scan_at %} &middot; last scan {{ summary.last_scan_at }}{% endif %}
+</p>
+{% endif %}
+
 <div class="stats">
   <div class="stat">
     <div class="label">Net P&amp;L</div>
@@ -68,9 +76,44 @@
 </div>
 {% endif %}
 
-{% if summary.trades %}
+{% set trades = summary.trades if summary.trades is defined else summary.completed_trades %}
+{% set open_positions = summary.open_positions if summary.open_positions is defined else [] %}
+
+{% if open_positions %}
 <div class="panel">
-  <h2>Trades</h2>
+  <h2>Open positions</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>Strategy</th>
+        <th>Side</th>
+        <th>Qty</th>
+        <th>Entry</th>
+        <th>Stop</th>
+        <th>Target</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in open_positions %}
+      <tr>
+        <td><strong>{{ t.symbol }}</strong></td>
+        <td>{{ t.strategy }}</td>
+        <td>{{ t.side }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+        <td>{{ t.stop_price | number(2) }}</td>
+        <td>{{ t.target_price | number(2) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if trades %}
+<div class="panel">
+  <h2>Completed trades</h2>
   <table class="data-table">
     <thead>
       <tr>
@@ -86,7 +129,7 @@
       </tr>
     </thead>
     <tbody>
-      {% for t in summary.trades %}
+      {% for t in trades %}
       <tr>
         <td><strong>{{ t.symbol }}</strong></td>
         <td>{{ t.strategy }}</td>

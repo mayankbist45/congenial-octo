@@ -18,6 +18,7 @@ from src.intraday.persona_rankers import filter_ranked_for_persona, load_ranker
 from src.intraday.reporting import save_summary, summarize_state
 from src.intraday.state import PaperStateStore
 from src.intraday.strategies import load_strategies
+from src.market.session import market_timezone, session_open_close
 
 
 def parse_hhmm(value: str) -> time:
@@ -41,7 +42,11 @@ class IntradayWatchEngine:
         self._symbols = list(symbols)
         self._state_store = state_store or PaperStateStore(config)
         self._agent = agent or IntradayAgent(config)
-        self._now = now or datetime.now
+        self._tz = market_timezone(config)
+        if now is None:
+            self._now = lambda: datetime.now(self._tz)
+        else:
+            self._now = now
         self._sleep = sleep or time_module.sleep
         self._ranker = load_ranker(config)
         self._strategies = load_strategies(config)
@@ -49,17 +54,18 @@ class IntradayWatchEngine:
 
     def run_until_close(self) -> PaperState:
         poll_seconds = int(self._config.get("intraday.watch_poll_seconds", 300) or 300)
+        force_exit = self._force_exit_time()
         while True:
-            now = self._now()
+            now = self._exchange_now(self._now())
             state = self.run_once(now)
-            if now.time() >= parse_hhmm(str(self._config.get("intraday.force_exit_time", "15:15"))):
+            if now.time() >= force_exit:
                 state.active = False
                 self._save(state)
                 return state
             self._sleep(max(poll_seconds, 1))
 
     def run_once(self, now: Optional[datetime] = None) -> PaperState:
-        now = now or self._now()
+        now = self._exchange_now(now or self._now())
         state = self._state_store.load(now.date())
         state.active = self._is_market_watch_time(now)
         state.last_scan_at = now.isoformat(timespec="seconds")
@@ -72,7 +78,7 @@ class IntradayWatchEngine:
         ranked = ranked[:limit]
         state.top_candidates = [asdict(item) for item in ranked]
 
-        if not self._catalyst_scanned and now.time() >= time(9, 20):
+        if not self._catalyst_scanned and now.time() >= self._catalyst_scan_time():
             pool = filter_ranked_for_persona(self._config, ranked)
             if not pool:
                 pool = ranked
@@ -503,8 +509,27 @@ class IntradayWatchEngine:
         if state.daily_pnl <= -max_loss:
             state.lockout_reason = f"max daily loss reached: Rs {state.daily_pnl:,.2f}"
 
+    def _exchange_now(self, now: datetime) -> datetime:
+        if now.tzinfo is None:
+            return now.replace(tzinfo=self._tz)
+        return now.astimezone(self._tz)
+
+    def _force_exit_time(self) -> time:
+        return parse_hhmm(str(self._config.get("intraday.force_exit_time", "15:15")))
+
+    def _catalyst_scan_time(self) -> time:
+        raw = self._config.get("intraday.catalyst_scan_time")
+        if raw:
+            return parse_hhmm(str(raw))
+        open_t, _ = session_open_close(self._config)
+        return time(open_t.hour, min(open_t.minute + 5, 59))
+
     def _is_market_watch_time(self, now: datetime) -> bool:
-        return now.time() <= parse_hhmm(str(self._config.get("intraday.force_exit_time", "15:15")))
+        now = self._exchange_now(now)
+        if now.weekday() >= 5:
+            return False
+        open_t, _ = session_open_close(self._config)
+        return open_t <= now.time() <= self._force_exit_time()
 
     def _equity(self, state: PaperState) -> float:
         return max(float(self._config.secrets.initial_capital) + state.daily_pnl, 0.0)

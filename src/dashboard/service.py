@@ -531,10 +531,15 @@ class DashboardService:
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            summary = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             logger.warning("Could not read intraday summary %s: %s", path, exc)
             return None
+        # Live watch writes completed_trades; backtests use trades.
+        if "trades" not in summary and summary.get("completed_trades"):
+            summary = dict(summary)
+            summary["trades"] = summary["completed_trades"]
+        return summary
 
     def attribution(self) -> List[Dict[str, Any]]:
         """Contribution to return by position, from the latest snapshot."""

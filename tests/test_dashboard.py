@@ -388,6 +388,55 @@ def test_intraday_page_lists_regions(client) -> None:
     assert "revert" in body
 
 
+def test_intraday_detail_renders_live_paper_completed_trades(client, temp_config) -> None:
+    intraday_dir = temp_config.root / "data" / "intraday"
+    intraday_dir.mkdir(parents=True, exist_ok=True)
+    (intraday_dir / "calan_latest.json").write_text(
+        """{
+          "persona_id": "calan",
+          "start_date": "2026-08-04",
+          "end_date": "2026-08-04",
+          "total_net_pnl": -180.03,
+          "total_return_pct": -0.04,
+          "total_trades": 2,
+          "win_rate_pct": 50.0,
+          "expectancy_r": -0.045,
+          "label": "live paper",
+          "active": true,
+          "completed_trades": [{
+            "symbol": "HDFCBANK",
+            "strategy": "opening_range_breakout",
+            "side": "SELL",
+            "quantity": 134,
+            "entry_time": "2026-08-04 10:10:00",
+            "exit_time": "2026-08-04 11:30:00",
+            "entry_price": 746.2,
+            "exit_price": 742.41,
+            "net_pnl": 385.22,
+            "r_multiple": 0.1926,
+            "exit_reason": "target"
+          }],
+          "open_positions": [{
+            "symbol": "HINDALCO",
+            "strategy": "opening_range_breakout",
+            "side": "SELL",
+            "quantity": 99,
+            "entry_time": "2026-08-04 12:05:00",
+            "entry_price": 1001.9,
+            "stop_price": 1011.51,
+            "target_price": 987.99
+          }]
+        }""",
+        encoding="utf-8",
+    )
+
+    body = client.get("/intraday/calan").text
+    assert "HDFCBANK" in body
+    assert "HINDALCO" in body
+    assert "Live paper" in body
+    assert "Open positions" in body
+
+
 def test_intraday_detail_renders_saved_summary(client, temp_config) -> None:
     intraday_dir = temp_config.root / "data" / "intraday"
     intraday_dir.mkdir(parents=True, exist_ok=True)
