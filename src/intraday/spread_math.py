@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import Config
+from src.intraday.cross_stat_math import configured_cross_baskets
 
 
 def configured_pairs(config: Config) -> List[Tuple[str, str]]:
@@ -24,14 +25,19 @@ def scan_symbols(
     universe_symbols: List[str],
     max_symbols: Optional[int] = None,
 ) -> List[str]:
-    """Universe slice for intraday fetch; spread always includes configured pair legs."""
+    """Universe slice for intraday fetch; include configured pair/basket legs."""
     base = list(universe_symbols)
     if max_symbols is not None:
         base = base[:max_symbols]
-    if config.persona_id != "spread":
-        return base
-    legs = [s for pair in configured_pairs(config) for s in pair]
-    return list(dict.fromkeys(legs + base))
+    if config.persona_id == "spread":
+        legs = [s for pair in configured_pairs(config) for s in pair]
+        return list(dict.fromkeys(legs + base))
+    if config.persona_id == "xstat":
+        legs = []
+        for basket in configured_cross_baskets(config):
+            legs.extend([basket.anchor, basket.leg])
+        return list(dict.fromkeys(legs + base))
+    return base
 
 
 def spread_series(fa: pd.DataFrame, fb: pd.DataFrame) -> pd.Series:

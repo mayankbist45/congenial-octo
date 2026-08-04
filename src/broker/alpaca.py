@@ -54,6 +54,11 @@ class AlpacaClient(BrokerClient):
             PAPER_TRADING_BASE if self._paper else LIVE_TRADING_BASE
         ).rstrip("/")
         self._data_base = DATA_BASE.rstrip("/")
+        self._data_feed = str(
+            self._config.get("connectors.alpaca.data_feed")
+            or self._config.get("alpaca.data_feed", "iex")
+            or "iex"
+        ).lower()
         self._session = requests.Session()
         self._connected = False
         self._last_call_at = 0.0
@@ -246,6 +251,7 @@ class AlpacaClient(BrokerClient):
                     "end": end,
                     "limit": 10000,
                     "adjustment": "split",
+                    "feed": self._data_feed,
                 },
             )
         except BrokerError as exc:

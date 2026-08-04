@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.config import Config
 from src.intraday.models import RankedStock
+from src.intraday.cross_stat_math import configured_cross_baskets, residual_z_at
 from src.intraday.ofi import ofi_divergence, ofi_z_proxy
 from src.intraday.ranking import IntradayRanker
 from src.intraday.spread_math import configured_pairs, spread_z_at
@@ -62,7 +63,10 @@ class RevertRanker(IntradayRanker):
         range_score = min(range_pct / max(min_range, 0.01), 3.0) * 15.0
         anti_trend = (1.0 - trend_cleanliness) * 25.0
         low_gap_bonus = 10.0 if abs(gap_pct or 0.0) < 0.5 else 0.0
-        score = vwap_score + liquidity + range_score + anti_trend + low_gap_bonus
+        calan_penalty = 0.0
+        if gap_pct is not None and abs(gap_pct) >= 0.8 and volume_expansion >= 1.5:
+            calan_penalty = 20.0
+        score = vwap_score + liquidity + range_score + anti_trend + low_gap_bonus - calan_penalty
 
         return RankedStock(
             symbol=symbol,
@@ -190,6 +194,73 @@ class SpreadRanker(IntradayRanker):
         return ranked
 
 
+class XStatRanker(IntradayRanker):
+    """Rank cross baskets by beta-hedged residual z-score."""
+
+    def rank(
+        self,
+        frames: Dict[str, pd.DataFrame],
+        previous_days: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> List[RankedStock]:
+        previous_days = previous_days or {}
+        ranked: List[RankedStock] = []
+        seen: set[str] = set()
+        min_bars = int(self._config.get("intraday.cross_min_bars", 25) or 25)
+        beta_lookback = int(self._config.get("intraday.cross_beta_lookback", 60) or 60)
+        entry_z = float(self._config.get("intraday.cross_entry_z", 2.0) or 2.0)
+
+        for basket in configured_cross_baskets(self._config):
+            anchor = basket.anchor
+            leg = basket.leg
+            fa = frames.get(anchor)
+            fb = frames.get(leg)
+            if fa is None or fb is None or fa.empty or fb.empty:
+                continue
+            z = residual_z_at(
+                fa,
+                fb,
+                beta=basket.beta,
+                beta_lookback=beta_lookback,
+                min_bars=min_bars,
+            )
+            if z is None:
+                continue
+            turnover_a = float((fa["close"] * fa["volume"]).sum())
+            turnover_b = float((fb["close"] * fb["volume"]).sum())
+            liquidity = min(min(turnover_a, turnover_b) / 1e8, 4.0) * 25.0
+            spread_score = min(abs(z), 4.0) * 35.0
+            score = spread_score + liquidity
+            pair_id = basket.basket_id
+            for symbol, frame, turnover in (
+                (anchor, fa, turnover_a),
+                (leg, fb, turnover_b),
+            ):
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                trend = self.trend_cleanliness(frame, self._config)
+                ranked.append(
+                    RankedStock(
+                        symbol=symbol,
+                        score=round(score, 3),
+                        turnover=turnover,
+                        volume_expansion=1.0,
+                        range_pct=(float(frame["high"].max()) / float(frame["low"].min()) - 1.0)
+                        * 100.0,
+                        gap_pct=None,
+                        vwap_distance_pct=None,
+                        prior_level_distance_pct=None,
+                        trend_cleanliness=trend,
+                        in_play=abs(z) >= entry_z,
+                        spread_z=round(z, 3),
+                        pair_id=pair_id,
+                        reasons=[f"basket {pair_id}", f"residual_z {z:+.2f}"],
+                    )
+                )
+        ranked.sort(key=lambda r: r.score, reverse=True)
+        return ranked
+
+
 class SliceRanker(IntradayRanker):
     """Rank symbols with active parent orders."""
 
@@ -234,6 +305,8 @@ def load_ranker(config: Config) -> IntradayRanker:
         return FluxRanker(config)
     if persona == "spread":
         return SpreadRanker(config)
+    if persona == "xstat":
+        return XStatRanker(config)
     if persona == "slice":
         return SliceRanker(config)
     return IntradayRanker(config)

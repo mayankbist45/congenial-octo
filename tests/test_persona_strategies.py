@@ -10,12 +10,13 @@ import pytest
 
 from src.config import get_persona_config
 from src.intraday.meta import triple_barrier_label
-from src.intraday.persona_rankers import FluxRanker, RevertRanker, SpreadRanker, load_ranker
+from src.intraday.persona_rankers import FluxRanker, RevertRanker, SpreadRanker, XStatRanker, load_ranker
 from src.intraday.strategies import (
     OpeningGapFadeStrategy,
     RangeRevertStrategy,
     VwapFadeStrategy,
     load_strategies,
+    scan_cross_signals,
     scan_pair_signals,
 )
 
@@ -77,7 +78,7 @@ def test_load_revert_strategies(revert_config):
 
 def test_load_flux_strategies(flux_config):
     names = [s.name for s in load_strategies(flux_config)]
-    assert names == ["ofi_momentum", "ofi_exhaustion"]
+    assert names == ["ofi_exhaustion"]
 
 
 def test_revert_ranker_prefers_low_trend(revert_config):
@@ -154,6 +155,12 @@ def test_spread_ranker_and_signals(spread_config):
     assert ranked
     signals = scan_pair_signals(spread_config, {"HDFCBANK": fa, "ICICIBANK": fb})
     assert isinstance(signals, dict)
+
+
+def test_xstat_ranker_and_load():
+    config = get_persona_config("xstat")
+    assert load_ranker(config).__class__.__name__ == "XStatRanker"
+    assert "cross_zscore" in [s.name for s in load_strategies(config)]
 
 
 def test_triple_barrier_label():

@@ -236,7 +236,7 @@ class Config:
     def broker_provider(self) -> str:
         """Active connector id: ``angelone`` (default) or ``alpaca``."""
         return str(
-            self.get("broker.provider") or self.get("connectors.broker") or "angelone"
+            self.get("connectors.broker") or self.get("broker.provider") or "angelone"
         ).lower()
 
     @property

@@ -76,6 +76,49 @@
 </div>
 {% endif %}
 
+{% if summary.watchlist %}
+<div class="panel">
+  <h2>Watchlist</h2>
+  <table class="data-table">
+    <thead>
+      <tr><th>Symbol</th><th>Confidence</th><th>Catalyst</th><th>Rationale</th></tr>
+    </thead>
+    <tbody>
+      {% for w in summary.watchlist %}
+      <tr>
+        <td><strong>{{ w.symbol }}</strong></td>
+        <td>{{ w.confidence | number(2) if w.confidence is defined else '—' }}</td>
+        <td>{{ w.catalyst_class or '—' }}</td>
+        <td class="muted small">{{ w.rationale or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if summary.top_candidates %}
+<div class="panel">
+  <h2>Top candidates</h2>
+  <table class="data-table">
+    <thead>
+      <tr><th>Symbol</th><th>Score</th><th>In play</th><th>Trend</th><th>RVOL</th></tr>
+    </thead>
+    <tbody>
+      {% for c in summary.top_candidates[:8] %}
+      <tr>
+        <td><strong>{{ c.symbol }}</strong></td>
+        <td>{{ c.score | number(1) }}</td>
+        <td>{{ c.in_play }}</td>
+        <td>{{ c.trend_cleanliness | number(2) }}</td>
+        <td>{{ c.volume_expansion | number(2) }}x</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% set trades = summary.trades if summary.trades is defined else summary.completed_trades %}
 {% set open_positions = summary.open_positions if summary.open_positions is defined else [] %}
 

@@ -8,9 +8,11 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from src.config import Config
+from src.intraday.costs import estimate_signal_quantity, passes_min_net_edge
+from src.intraday.cross_stat_math import configured_cross_baskets, hedge_beta, residual_z_history
 from src.intraday.models import IntradaySignal
 from src.intraday.ofi import ofi_divergence, ofi_z_proxy
-from src.intraday.spread_math import configured_pairs, spread_z_history
+from src.intraday.spread_math import configured_pairs, pair_beta, spread_z_history
 
 STRATEGY_REGISTRY: Dict[str, type] = {}
 
@@ -293,6 +295,41 @@ def _min_stop(entry: float, stop: float, side: str, config: Config) -> float:
     return max(stop, entry + min_dist)
 
 
+def _capped_vwap_target(
+    entry: float,
+    stop: float,
+    vwap: float,
+    side: str,
+    config: Config,
+) -> float:
+    """Cap VWAP target by target_r_multiple to avoid chasing extended reverts."""
+    target_r = _cfg_float(config, "target_r_multiple", 1.0)
+    risk = abs(entry - stop)
+    if side == "BUY":
+        r_target = entry + risk * target_r
+        if vwap > entry:
+            return min(vwap, r_target)
+        return entry
+    r_target = entry - risk * target_r
+    if vwap < entry:
+        return max(vwap, r_target)
+    return entry
+
+
+def _signal_passes_cost_floor(
+    config: Config,
+    entry: float,
+    target: float,
+    stop: float,
+    equity: float,
+) -> bool:
+    risk = abs(entry - stop)
+    if risk <= 0:
+        return False
+    qty = estimate_signal_quantity(config, entry, risk, equity)
+    return passes_min_net_edge(config, entry, target, max(qty, 1))
+
+
 @_register
 class VwapFadeStrategy(IntradayStrategy):
     name = "vwap_fade"
@@ -339,6 +376,10 @@ class VwapFadeStrategy(IntradayStrategy):
                 )
                 if close <= stop or vwap <= close:
                     continue
+                target = _capped_vwap_target(close, stop, vwap, "BUY", config)
+                equity = float(config.secrets.initial_capital)
+                if not _signal_passes_cost_floor(config, close, target, stop, equity):
+                    continue
                 return [
                     IntradaySignal(
                         symbol,
@@ -347,9 +388,10 @@ class VwapFadeStrategy(IntradayStrategy):
                         ts,
                         close,
                         stop,
-                        vwap,
+                        target,
                         f"VWAP fade long z={z:.2f}",
                         _force_exit_dt(ts, config),
+                        entry_z=round(z, 4),
                     )
                 ]
             if z >= z_entry and vol_ratio < max_vol:
@@ -357,6 +399,10 @@ class VwapFadeStrategy(IntradayStrategy):
                     close, session_high * (1.0 + stop_buffer), "SELL", config
                 )
                 if close >= stop or vwap >= close:
+                    continue
+                target = _capped_vwap_target(close, stop, vwap, "SELL", config)
+                equity = float(config.secrets.initial_capital)
+                if not _signal_passes_cost_floor(config, close, target, stop, equity):
                     continue
                 return [
                     IntradaySignal(
@@ -366,9 +412,10 @@ class VwapFadeStrategy(IntradayStrategy):
                         ts,
                         close,
                         stop,
-                        vwap,
+                        target,
                         f"VWAP fade short z={z:.2f}",
                         _force_exit_dt(ts, config),
+                        entry_z=round(z, 4),
                     )
                 ]
         return []
@@ -416,6 +463,10 @@ class OpeningGapFadeStrategy(IntradayStrategy):
 
         if gap_pct <= -0.3:
             stop = session_low * (1.0 - stop_buffer)
+            target = prev_close
+            equity = float(config.secrets.initial_capital)
+            if not _signal_passes_cost_floor(config, close, target, stop, equity):
+                return []
             return [
                 IntradaySignal(
                     symbol,
@@ -431,6 +482,10 @@ class OpeningGapFadeStrategy(IntradayStrategy):
             ]
         if gap_pct >= 0.3:
             stop = session_high * (1.0 + stop_buffer)
+            target = prev_close
+            equity = float(config.secrets.initial_capital)
+            if not _signal_passes_cost_floor(config, close, target, stop, equity):
+                return []
             return [
                 IntradaySignal(
                     symbol,
@@ -548,6 +603,11 @@ class OfiMomentumStrategy(IntradayStrategy):
                 _force_exit_dt(ts, config),
             )
             if z >= z_entry and close > prior_high:
+                stop = close * (1.0 - stop_pct)
+                target = close * (1.0 + target_pct)
+                equity = float(config.secrets.initial_capital)
+                if not _signal_passes_cost_floor(config, close, target, stop, equity):
+                    continue
                 return [
                     IntradaySignal(
                         symbol,
@@ -562,6 +622,11 @@ class OfiMomentumStrategy(IntradayStrategy):
                     )
                 ]
             if z <= -z_entry and close < prior_low:
+                stop = close * (1.0 + stop_pct)
+                target = close * (1.0 - target_pct)
+                equity = float(config.secrets.initial_capital)
+                if not _signal_passes_cost_floor(config, close, target, stop, equity):
+                    continue
                 return [
                     IntradaySignal(
                         symbol,
@@ -611,6 +676,11 @@ class OfiExhaustionStrategy(IntradayStrategy):
             low = float(row["low"])
             hold_exit = min(ts + timedelta(minutes=hold_min), _force_exit_dt(ts, config))
             if z >= z_entry and close < high - 0.3 * (high - low):
+                stop = high * (1.0 + stop_buffer)
+                target = close * (1.0 - target_pct)
+                equity = float(config.secrets.initial_capital)
+                if not _signal_passes_cost_floor(config, close, target, stop, equity):
+                    continue
                 return [
                     IntradaySignal(
                         symbol,
@@ -625,6 +695,11 @@ class OfiExhaustionStrategy(IntradayStrategy):
                     )
                 ]
             if z <= -z_entry and close > low + 0.3 * (high - low):
+                stop = low * (1.0 - stop_buffer)
+                target = close * (1.0 + target_pct)
+                equity = float(config.secrets.initial_capital)
+                if not _signal_passes_cost_floor(config, close, target, stop, equity):
+                    continue
                 return [
                     IntradaySignal(
                         symbol,
@@ -689,12 +764,12 @@ def scan_pair_signals(
 ) -> Dict[str, List[IntradaySignal]]:
     """Return primary-leg pair signals keyed by leg_a symbol."""
     entry_z = _cfg_float(config, "pair_entry_z", 1.5)
-    stop_z = _cfg_float(config, "pair_stop_z", 2.5)
     min_bars = _cfg_int(config, "pair_min_bars", 20)
     max_widen = _cfg_float(config, "pair_max_widen_z", 0.4)
     stop_buffer = _cfg_float(config, "pair_stop_buffer_pct", 0.30) / 100.0
     window_start = _parse_time(str(config.get("intraday.trade_window_start", "09:45")))
     window_end = _parse_time(str(config.get("intraday.trade_window_end", "14:30")))
+    equity = float(config.secrets.initial_capital)
     out: Dict[str, List[IntradaySignal]] = {}
 
     for leg_a, leg_b in configured_pairs(config):
@@ -705,6 +780,7 @@ def scan_pair_signals(
         z_hist = spread_z_history(fa, fb, min_bars=min_bars)
         if z_hist.empty:
             continue
+        beta = pair_beta(fa, fb)
 
         for ts, z_now in z_hist.items():
             bar_time = ts.time() if hasattr(ts, "time") else ts.to_pydatetime().time()
@@ -723,45 +799,184 @@ def scan_pair_signals(
             ts_dt = ts.to_pydatetime()
 
             if z_now >= entry_z:
+                stop_a = close_a * (1.0 + stop_buffer)
+                target_a = close_a * (1.0 - stop_buffer * 2)
+                stop_b = close_b * (1.0 - stop_buffer)
+                target_b = close_b * (1.0 + stop_buffer * 2)
                 signal = IntradaySignal(
                     leg_a,
                     "pair_zscore",
                     "SELL",
                     ts_dt,
                     close_a,
-                    close_a * (1.0 + stop_buffer),
-                    close_a * (1.0 - stop_buffer * 2),
+                    stop_a,
+                    target_a,
                     f"Short spread z={z_now:.2f}",
                     force_exit,
                     pair_id=pair_id,
                     pair_leg=leg_b,
                     pair_side="BUY",
                     pair_entry_price=close_b,
-                    pair_stop_price=close_b * (1.0 - stop_buffer),
-                    pair_target_price=close_b * (1.0 + stop_buffer * 2),
+                    pair_stop_price=stop_b,
+                    pair_target_price=target_b,
+                    entry_z=round(float(z_now), 4),
+                    pair_beta=round(beta, 4),
+                    use_trailing_stop=False,
                 )
             else:
+                stop_a = close_a * (1.0 - stop_buffer)
+                target_a = close_a * (1.0 + stop_buffer * 2)
+                stop_b = close_b * (1.0 + stop_buffer)
+                target_b = close_b * (1.0 - stop_buffer * 2)
                 signal = IntradaySignal(
                     leg_a,
                     "pair_zscore",
                     "BUY",
                     ts_dt,
                     close_a,
-                    close_a * (1.0 - stop_buffer),
-                    close_a * (1.0 + stop_buffer * 2),
+                    stop_a,
+                    target_a,
                     f"Long spread z={z_now:.2f}",
                     force_exit,
                     pair_id=pair_id,
                     pair_leg=leg_b,
                     pair_side="SELL",
                     pair_entry_price=close_b,
-                    pair_stop_price=close_b * (1.0 + stop_buffer),
-                    pair_target_price=close_b * (1.0 - stop_buffer * 2),
+                    pair_stop_price=stop_b,
+                    pair_target_price=target_b,
+                    entry_z=round(float(z_now), 4),
+                    pair_beta=round(beta, 4),
+                    use_trailing_stop=False,
                 )
+            if not _signal_passes_cost_floor(
+                config, close_a, target_a, stop_a, equity
+            ) or not _signal_passes_cost_floor(
+                config, close_b, target_b, stop_b, equity
+            ):
+                continue
             out.setdefault(leg_a, []).append(signal)
             break
-        _ = stop_z
     return out
+
+
+def scan_cross_signals(
+    config: Config,
+    frames: Dict[str, pd.DataFrame],
+) -> Dict[str, List[IntradaySignal]]:
+    """Return equity-leg cross signals keyed by leg symbol."""
+    entry_z = _cfg_float(config, "cross_entry_z", 2.0)
+    min_bars = _cfg_int(config, "cross_min_bars", 25)
+    max_widen = _cfg_float(config, "cross_max_widen_z", 0.35)
+    stop_buffer = _cfg_float(config, "cross_stop_buffer_pct", 0.30) / 100.0
+    beta_lookback = _cfg_int(config, "cross_beta_lookback", 60)
+    window_start = _parse_time(str(config.get("intraday.trade_window_start", "09:45")))
+    window_end = _parse_time(str(config.get("intraday.trade_window_end", "14:30")))
+    equity = float(config.secrets.initial_capital)
+    out: Dict[str, List[IntradaySignal]] = {}
+
+    for basket in configured_cross_baskets(config):
+        anchor = basket.anchor
+        leg = basket.leg
+        fa = frames.get(anchor)
+        fb = frames.get(leg)
+        if fa is None or fb is None or fa.empty or fb.empty:
+            continue
+        beta = basket.beta if basket.beta is not None else hedge_beta(fa, fb, beta_lookback)
+        z_hist = residual_z_history(
+            fa, fb, beta=beta, beta_lookback=beta_lookback, min_bars=min_bars
+        )
+        if z_hist.empty:
+            continue
+
+        for ts, z_now in z_hist.items():
+            bar_time = ts.time() if hasattr(ts, "time") else ts.to_pydatetime().time()
+            if bar_time < window_start or bar_time > window_end:
+                continue
+            if abs(z_now) < entry_z:
+                continue
+            idx = z_hist.index.get_loc(ts)
+            if idx >= 3 and abs(z_now - float(z_hist.iloc[idx - 3])) > max_widen:
+                continue
+
+            close_anchor = float(fa.loc[ts, "close"])
+            close_leg = float(fb.loc[ts, "close"])
+            pair_id = basket.basket_id
+            force_exit = _force_exit_dt(ts.to_pydatetime(), config)
+            ts_dt = ts.to_pydatetime()
+
+            if z_now >= entry_z:
+                stop_leg = close_leg * (1.0 + stop_buffer)
+                target_leg = close_leg * (1.0 - stop_buffer * 2)
+                stop_anchor = close_anchor * (1.0 - stop_buffer)
+                target_anchor = close_anchor * (1.0 + stop_buffer * 2)
+                signal = IntradaySignal(
+                    leg,
+                    "cross_zscore",
+                    "SELL",
+                    ts_dt,
+                    close_leg,
+                    stop_leg,
+                    target_leg,
+                    f"Short residual z={z_now:.2f}",
+                    force_exit,
+                    pair_id=pair_id,
+                    pair_leg=anchor,
+                    pair_side="BUY",
+                    pair_entry_price=close_anchor,
+                    pair_stop_price=stop_anchor,
+                    pair_target_price=target_anchor,
+                    entry_z=round(float(z_now), 4),
+                    pair_beta=round(beta, 4),
+                    use_trailing_stop=False,
+                )
+            else:
+                stop_leg = close_leg * (1.0 - stop_buffer)
+                target_leg = close_leg * (1.0 + stop_buffer * 2)
+                stop_anchor = close_anchor * (1.0 + stop_buffer)
+                target_anchor = close_anchor * (1.0 - stop_buffer * 2)
+                signal = IntradaySignal(
+                    leg,
+                    "cross_zscore",
+                    "BUY",
+                    ts_dt,
+                    close_leg,
+                    stop_leg,
+                    target_leg,
+                    f"Long residual z={z_now:.2f}",
+                    force_exit,
+                    pair_id=pair_id,
+                    pair_leg=anchor,
+                    pair_side="SELL",
+                    pair_entry_price=close_anchor,
+                    pair_stop_price=stop_anchor,
+                    pair_target_price=target_anchor,
+                    entry_z=round(float(z_now), 4),
+                    pair_beta=round(beta, 4),
+                    use_trailing_stop=False,
+                )
+            if not _signal_passes_cost_floor(
+                config, close_leg, target_leg, stop_leg, equity
+            ) or not _signal_passes_cost_floor(
+                config, close_anchor, target_anchor, stop_anchor, equity
+            ):
+                continue
+            out.setdefault(leg, []).append(signal)
+            break
+    return out
+
+
+@_register
+class CrossZscoreStrategy(IntradayStrategy):
+    name = "cross_zscore"
+
+    def signals(
+        self,
+        symbol: str,
+        frame: pd.DataFrame,
+        config: Config,
+        previous_day=None,
+    ) -> List[IntradaySignal]:
+        return scan_cross_signals(config, {symbol: frame}).get(symbol, [])
 
 
 def _schedule_signals(

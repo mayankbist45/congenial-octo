@@ -86,6 +86,13 @@ def _position_to_dict(p: PaperPosition) -> dict:
         "reason": p.reason,
         "trailing_stop_pct": p.trailing_stop_pct,
         "peak_price": p.peak_price,
+        "entry_order_id": p.entry_order_id,
+        "exit_order_id": p.exit_order_id,
+        "pair_id": p.pair_id,
+        "pair_partner": p.pair_partner,
+        "entry_z": p.entry_z,
+        "pair_beta": p.pair_beta,
+        "use_trailing_stop": p.use_trailing_stop,
     }
 
 
@@ -106,6 +113,13 @@ def _position_from_dict(payload: dict) -> PaperPosition:
         reason=str(payload.get("reason", "")),
         trailing_stop_pct=payload.get("trailing_stop_pct"),
         peak_price=payload.get("peak_price"),
+        entry_order_id=payload.get("entry_order_id"),
+        exit_order_id=payload.get("exit_order_id"),
+        pair_id=payload.get("pair_id"),
+        pair_partner=payload.get("pair_partner"),
+        entry_z=payload.get("entry_z"),
+        pair_beta=payload.get("pair_beta"),
+        use_trailing_stop=bool(payload.get("use_trailing_stop", True)),
     )
 
 

@@ -49,7 +49,10 @@ def main() -> int:
             frame = data.candles_range(symbol, start, end, interval=args.interval.upper())
             if not frame.empty:
                 frames[symbol] = frame
-        result = IntradaySimulator(config).run(frames, {}, start, end)
+        previous_days = data.previous_day_stats_batch(
+            list(frames.keys()), start, interval=args.interval.upper()
+        )
+        result = IntradaySimulator(config).run(frames, previous_days, start, end)
         summary = summarize_result(result)
         path = save_summary(config, summary)
         print(f"Trades: {summary['total_trades']}  Net P&L: Rs {summary['total_net_pnl']:,.2f}")

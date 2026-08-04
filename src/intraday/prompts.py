@@ -304,6 +304,7 @@ GATE_STRATEGIES = CALAN_GATE_STRATEGIES  # backward compat
 REVERT_GATE_STRATEGIES = ("vwap_fade", "opening_gap_fade", "range_revert")
 FLUX_GATE_STRATEGIES = ("ofi_momentum", "ofi_exhaustion")
 SPREAD_GATE_STRATEGIES = ("pair_zscore",)
+XSTAT_GATE_STRATEGIES = ("cross_zscore",)
 SLICE_GATE_STRATEGIES = ("twap_slice", "vwap_schedule")
 
 DEFAULT_PERSONA_ID = "calan"
@@ -632,6 +633,13 @@ PERSONA_PROMPTS: Dict[str, PersonaPromptBundle] = {
         validate_catalyst=validate_spread_catalyst_payload,
         validate_gate=_gate_validator(SPREAD_GATE_STRATEGIES),
         gate_strategies=SPREAD_GATE_STRATEGIES,
+    ),
+    "xstat": PersonaPromptBundle(
+        catalyst_prompt=SPREAD_ANALYST_PROMPT,
+        gate_prompt=SPREAD_CONVERGENCE_PROMPT,
+        validate_catalyst=validate_spread_catalyst_payload,
+        validate_gate=_gate_validator(XSTAT_GATE_STRATEGIES),
+        gate_strategies=XSTAT_GATE_STRATEGIES,
     ),
     "slice": PersonaPromptBundle(
         catalyst_prompt=SLICE_MONITOR_PROMPT,

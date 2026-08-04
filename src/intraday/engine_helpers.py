@@ -8,7 +8,7 @@ import pandas as pd
 
 from src.config import Config
 from src.intraday.models import IntradaySignal, RankedStock
-from src.intraday.strategies import load_strategies, scan_pair_signals
+from src.intraday.strategies import load_strategies, scan_cross_signals, scan_pair_signals
 
 
 STRATEGY_PRIORITY = {
@@ -20,6 +20,7 @@ STRATEGY_PRIORITY = {
     "ofi_momentum": 3.5,
     "ofi_exhaustion": 2.5,
     "pair_zscore": 4.0,
+    "cross_zscore": 4.0,
     "twap_slice": 1.0,
     "vwap_schedule": 1.0,
     "scalping": 0.0,
@@ -55,6 +56,18 @@ def collect_signals(
     if config.persona_id == "spread":
         pair_map = scan_pair_signals(config, frames)
         for symbol, signals in pair_map.items():
+            item = ranked_map.get(symbol)
+            frame = frames.get(symbol)
+            if item is None or frame is None:
+                continue
+            for signal in signals:
+                out.append((signal_score(signal, item, frame), signal, item))
+        out.sort(key=lambda row: (-row[0], row[1].entry_time))
+        return out
+
+    if config.persona_id == "xstat":
+        cross_map = scan_cross_signals(config, frames)
+        for symbol, signals in cross_map.items():
             item = ranked_map.get(symbol)
             frame = frames.get(symbol)
             if item is None or frame is None:
