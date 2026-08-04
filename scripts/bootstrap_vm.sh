@@ -34,10 +34,16 @@ id "$APP_USER" >/dev/null 2>&1 || {
 }
 
 APP_GROUP="$(id -gn "$APP_USER")"
+SHARED_GROUP="${FUND_SHARED_GROUP:-fund}"
 
 as_app() { runuser -u "$APP_USER" -- "$@"; }
 
 echo "Bootstrapping $PROJECT_DIR for $APP_USER"
+
+# --- Shared secrets group ---------------------------------------------------
+# Collaborators added to this group can read /opt/fund/.env (mode 640).
+getent group "$SHARED_GROUP" >/dev/null 2>&1 || groupadd "$SHARED_GROUP"
+usermod -aG "$SHARED_GROUP" "$APP_USER" 2>/dev/null || true
 
 # --- Clock ------------------------------------------------------------------
 # The schedule is written in IST because the market is. Setting the whole box to
@@ -67,7 +73,12 @@ if ! command -v gcloud >/dev/null 2>&1; then
 fi
 
 # --- Journal database -------------------------------------------------------
-chown -R "$APP_USER":"$APP_GROUP" "$PROJECT_DIR"
+chown -R "$APP_USER":"$SHARED_GROUP" "$PROJECT_DIR"
+find "$PROJECT_DIR" -type d -exec chmod 2775 {} +
+find "$PROJECT_DIR" -type f ! -path "$PROJECT_DIR/.env" -exec chmod 664 {} +
+find "$PROJECT_DIR/scripts" -type f -name '*.sh' -exec chmod 775 {} + 2>/dev/null || true
+chmod -R g+rw "$PROJECT_DIR/data" "$PROJECT_DIR/logs" 2>/dev/null || true
+chmod g+s "$PROJECT_DIR" "$PROJECT_DIR/data" "$PROJECT_DIR/logs" 2>/dev/null || true
 as_app mkdir -p "$PROJECT_DIR/data/backups"
 
 if [ -f "$ENV_FILE" ] && grep -qE '^DATABASE_URL=postgresql' "$ENV_FILE"; then
@@ -92,7 +103,7 @@ else
     tmp="$(mktemp)"
     [ -f "$ENV_FILE" ] && grep -v '^DATABASE_URL=' "$ENV_FILE" >"$tmp"
     echo "DATABASE_URL=postgresql://$DB_USER:$DB_PASSWORD@127.0.0.1:5432/$DB_NAME" >>"$tmp"
-    install -o "$APP_USER" -g "$APP_GROUP" -m 600 "$tmp" "$ENV_FILE"
+    install -o "$APP_USER" -g "$SHARED_GROUP" -m 640 "$tmp" "$ENV_FILE"
     rm -f "$tmp"
     echo "  created database $DB_NAME owned by $DB_USER, DSN written to .env"
 fi
@@ -127,14 +138,17 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
 
 15 8 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/run_scheduled.sh cycle
-# Calan market-hours paper watch: systemd service, started after the open.
+# India Calan intraday paper watch (NSE, IST).
 20 9 * * 1-5 root systemctl start mutualfund-calan-watch
 25 15 * * 1-5 root systemctl stop mutualfund-calan-watch
+# US intraday watches (NYSE/NASDAQ): ~19:05 IST start, ~01:35 IST stop (next calendar day).
+5 19 * * 1-5 root systemctl start mutualfund-us-intraday-watch
+35 1 * * 2-6 root systemctl stop mutualfund-us-intraday-watch
 0 18 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/run_scheduled.sh close
 30 19 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/backup_journal.sh >> data/backup.log 2>&1
 CRON
 chmod 644 /etc/cron.d/mutualfund
-echo "  cron installed: 08:15 cycle, 09:20 calan-watch, 15:25 stop watch, 18:00 close, 19:30 backup"
+echo "  cron installed: 08:15 cycle, 09:20 IN watch, 19:05 US watch, 18:00 close, 19:30 backup"
 
 cat >/etc/logrotate.d/mutualfund <<ROTATE
 $PROJECT_DIR/data/*.log {
@@ -180,6 +194,8 @@ systemctl enable --now mutualfund-dashboard >/dev/null 2>&1 &&
 # Long-running paper loop; cron starts it at 09:20 IST and stops it at 15:25.
 # Not enabled on boot — weekends and overnight should not leave it running.
 chmod +x "$PROJECT_DIR/scripts/run_calan_watch.sh"
+chmod +x "$PROJECT_DIR/scripts/run_intraday_watch.sh"
+chmod +x "$PROJECT_DIR/scripts/run_us_intraday_watches.sh"
 cat >/etc/systemd/system/mutualfund-calan-watch.service <<UNIT
 [Unit]
 Description=Calan intraday paper watch (market hours)
@@ -202,6 +218,30 @@ UNIT
 systemctl daemon-reload
 systemctl disable mutualfund-calan-watch >/dev/null 2>&1 || true
 echo "  calan-watch service installed (cron starts it weekdays 09:20 IST)"
+
+# --- US intraday watches (NYSE session, ~19:05–01:35 IST) -------------------
+cat >/etc/systemd/system/mutualfund-us-intraday-watch.service <<UNIT
+[Unit]
+Description=US intraday paper watches (calan_us, revert_us, flux_us, spread_us, slice_us)
+After=network.target
+
+[Service]
+Type=simple
+User=$APP_USER
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$PROJECT_DIR/scripts/run_us_intraday_watches.sh
+Restart=no
+TimeoutStopSec=120
+KillMode=mixed
+StandardOutput=append:$PROJECT_DIR/data/us_intraday_watch.log
+StandardError=append:$PROJECT_DIR/data/us_intraday_watch.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl disable mutualfund-us-intraday-watch >/dev/null 2>&1 || true
+echo "  US intraday-watch service installed (cron starts weekdays 19:05 IST)"
 
 # --- Cloud Logging ----------------------------------------------------------
 # The fund runs unattended, so the record of why a trade fired must outlive the
@@ -238,10 +278,13 @@ logging:
     fund_calan:
       type: files
       include_paths: [$PROJECT_DIR/data/calan_watch.log]
+    fund_us_intraday:
+      type: files
+      include_paths: [$PROJECT_DIR/data/us_intraday_watch.log, $PROJECT_DIR/data/*_us_watch.log]
   service:
     pipelines:
       fund:
-        receivers: [fund_scheduled, fund_app, fund_backup, fund_calan]
+        receivers: [fund_scheduled, fund_app, fund_backup, fund_calan, fund_us_intraday]
 OPS
         systemctl restart google-cloud-ops-agent >/dev/null 2>&1 &&
             echo "  Cloud Logging: Ops Agent shipping data/*.log (free at this volume)" ||

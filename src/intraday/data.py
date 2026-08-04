@@ -12,6 +12,7 @@ import pandas as pd
 from src.broker.base import BrokerClient
 from src.config import Config, get_config
 from src.logging_setup import get_logger
+from src.market.session import market_timezone, range_session_window, session_window
 
 logger = get_logger(__name__)
 
@@ -98,7 +99,16 @@ class IntradayDataService:
 
         if refresh and cached is not None and not cached.empty:
             overlap = timedelta(minutes=self._interval_minutes(interval))
-            from_dt = max(from_dt, cached.index.max().to_pydatetime() - overlap)
+            tz = market_timezone(self._config)
+            from_naive = (
+                from_dt.astimezone(tz).replace(tzinfo=None)
+                if from_dt.tzinfo
+                else from_dt
+            )
+            from_naive = max(
+                from_naive, cached.index.max().to_pydatetime() - overlap
+            )
+            from_dt = from_naive.replace(tzinfo=tz)
 
         if to_dt <= from_dt:
             return cached if cached is not None else pd.DataFrame(
@@ -106,7 +116,7 @@ class IntradayDataService:
             )
 
         raw = broker.get_candles(symbol, from_dt, to_dt, interval)
-        frame = normalize_candles(raw)
+        frame = _to_market_local_naive(normalize_candles(raw), self._config)
         if cached is not None and not cached.empty and not frame.empty:
             frame = _merge_candles(cached, frame)
         elif cached is not None and not cached.empty and frame.empty:
@@ -126,21 +136,7 @@ class IntradayDataService:
         return None
 
     def _request_window(self, day: date) -> Optional[tuple[datetime, datetime]]:
-        if day.weekday() >= 5:
-            return None
-        now = self._now()
-        if day > now.date():
-            return None
-
-        from_dt = datetime.combine(day, time(9, 15))
-        to_dt = datetime.combine(day, time(15, 30))
-        if day == now.date():
-            if now < from_dt:
-                return None
-            to_dt = min(to_dt, now)
-        if to_dt <= from_dt:
-            return None
-        return from_dt, to_dt
+        return session_window(self._config, day, now=self._now())
 
     def _interval_minutes(self, interval: str) -> int:
         return {"ONE_MINUTE": 1, "FIVE_MINUTE": 5, "FIFTEEN_MINUTE": 15}.get(
@@ -180,32 +176,14 @@ class IntradayDataService:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         from_dt, to_dt = window
         raw = broker.get_candles(symbol, from_dt, to_dt, interval)
-        return _strip_index_timezone(normalize_candles(raw))
+        return _strip_index_timezone(
+            _to_market_local_naive(normalize_candles(raw), self._config)
+        )
 
     def _range_request_window(
         self, start: date, end: date
     ) -> Optional[tuple[datetime, datetime]]:
-        now = self._now()
-        if end < start or start > now.date():
-            return None
-        end = min(end, now.date())
-        first_day: Optional[date] = None
-        last_day: Optional[date] = None
-        cursor = start
-        while cursor <= end:
-            if cursor.weekday() < 5:
-                first_day = first_day or cursor
-                last_day = cursor
-            cursor += timedelta(days=1)
-        if first_day is None or last_day is None:
-            return None
-        from_dt = datetime.combine(first_day, time(9, 15))
-        to_dt = datetime.combine(last_day, time(15, 30))
-        if last_day == now.date():
-            to_dt = min(to_dt, now)
-        if to_dt <= from_dt:
-            return None
-        return from_dt, to_dt
+        return range_session_window(self._config, start, end, now=self._now())
 
     def previous_day_stats(
         self,
@@ -245,6 +223,21 @@ class IntradayDataService:
             if stats:
                 out[symbol.upper()] = stats
         return out
+
+
+def _to_market_local_naive(frame: pd.DataFrame, config: Config) -> pd.DataFrame:
+    """Convert broker timestamps to exchange-local naive times for rule logic."""
+    if frame.empty or not isinstance(frame.index, pd.DatetimeIndex):
+        return frame
+    if config.market_region != "US":
+        return _strip_index_timezone(frame)
+    tz = market_timezone(config)
+    out = frame.copy()
+    idx = out.index
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+    out.index = idx.tz_convert(tz).tz_localize(None)
+    return out
 
 
 def normalize_candles(rows: Any) -> pd.DataFrame:

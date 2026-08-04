@@ -35,17 +35,31 @@ def _num(value: Optional[object]) -> Optional[float]:
     return result
 
 
-def fetch(symbol: str) -> Optional[FundamentalSnapshot]:
+def _yahoo_symbol(symbol: str, market_region: str = "IN") -> str:
+    sym = symbol.upper().strip()
+    if sym.startswith("^") or "." in sym:
+        return sym
+    if market_region.upper() == "US":
+        return sym
+    return f"{sym}.NS"
+
+
+def fetch(symbol: str, market_region: str = "IN") -> Optional[FundamentalSnapshot]:
     import yfinance as yf
 
+    yahoo_sym = _yahoo_symbol(symbol, market_region)
     try:
-        info = yf.Ticker(f"{symbol.upper()}.NS").info or {}
+        info = yf.Ticker(yahoo_sym).info or {}
     except Exception as exc:
         logger.debug("Yahoo fundamentals failed for %s: %s", symbol, exc)
         return None
 
     if not info or info.get("trailingPE") is None and info.get("marketCap") is None:
         return None
+
+    dte = _num(info.get("debtToEquity"))
+    if dte is not None and market_region.upper() != "US":
+        dte = dte / 100.0
 
     snapshot = FundamentalSnapshot(
         symbol=symbol.upper(),
@@ -61,12 +75,7 @@ def fetch(symbol: str) -> Optional[FundamentalSnapshot]:
         roe_pct=_pct(info.get("returnOnEquity")),
         operating_margin_pct=_pct(info.get("operatingMargins")),
         profit_margin_pct=_pct(info.get("profitMargins")),
-        # Yahoo already reports debtToEquity in percent for Indian names.
-        debt_to_equity=(
-            _num(info.get("debtToEquity")) / 100.0
-            if _num(info.get("debtToEquity")) is not None
-            else None
-        ),
+        debt_to_equity=dte,
         current_ratio=_num(info.get("currentRatio")),
         revenue_growth_pct=_pct(info.get("revenueGrowth")),
         earnings_growth_pct=_pct(info.get("earningsGrowth")),

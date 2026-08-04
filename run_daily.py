@@ -309,8 +309,6 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
 
 def _run_persona(persona_id: str, args, base_config) -> int:
     """Run a single command for one persona. Returns the exit code."""
-    from src.orchestrator import FundManager
-
     try:
         pcfg = get_persona_config(persona_id)
     except ValueError as exc:
@@ -327,6 +325,8 @@ def _run_persona(persona_id: str, args, base_config) -> int:
 
     if pcfg.get("intraday.enabled", False):
         return _run_intraday_persona(persona_id, args, pcfg)
+
+    from src.orchestrator import FundManager
 
     if args.command == "learn":
         _run_learning_for(pcfg, as_of=as_of)

@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from src.config import Config
+from src.market.session import session_end_time
 from src.intraday.models import RankedStock
 
 
@@ -179,7 +180,8 @@ class IntradayRanker:
         if frame.empty:
             return frame
         start = cls._parse_session_start(config)
-        data = frame.between_time(start, "15:30")
+        end = session_end_time(config) if config is not None else time(15, 30)
+        data = frame.between_time(start, end)
         if data.empty:
             data = frame
         if as_of is not None:

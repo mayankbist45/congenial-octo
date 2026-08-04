@@ -1,0 +1,272 @@
+personas:
+  balanced_us:
+    enabled: true
+    description: "Balanced US — GARP on liquid US names via Alpaca"
+    strategy_description: >
+      US equity book on a curated liquid universe (not S&P 500 membership).
+      Orders route to Alpaca paper; Yahoo Finance supplies daily history for scoring.
+    capital_usd: 100000
+    connectors:
+      broker: alpaca
+      market_region: US
+    fund:
+      name: "AI Managed US Equity Fund"
+      benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
+      base_currency: USD
+    universe:
+      file: "data/us_liquid.csv"
+      min_avg_daily_turnover_inr: 5000000
+    execution:
+      product_type: "CASH"
+      exchange: US
+      auto_approve: false
+    news:
+      feeds:
+        - name: "Yahoo Finance"
+          url: "https://finance.yahoo.com/news/rssindex"
+        - name: "CNBC Top News"
+          url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"
+        - name: "MarketWatch"
+          url: "https://feeds.marketwatch.com/marketwatch/topstories/"
+
+  steady_compounder_us:
+    enabled: true
+    description: "US low-vol compounder via Alpaca"
+    capital_usd: 100000
+    connectors:
+      broker: alpaca
+      market_region: US
+    fund:
+      benchmark_symbol: "^GSPC"
+      base_currency: USD
+      target_positions: 20
+      max_positions: 25
+      min_cash_buffer_pct: 8.0
+    universe:
+      file: "data/us_liquid.csv"
+      min_avg_daily_turnover_inr: 5000000
+    risk:
+      max_position_pct: 7.0
+      max_sector_pct: 20.0
+      stop_loss_pct: -12.0
+      trailing_stop_pct: -15.0
+      max_portfolio_beta: 0.90
+      min_portfolio_beta: 0.50
+      annual_turnover_budget_pct: 50.0
+    quant:
+      factor_weights:
+        quality: 0.40
+        value: 0.25
+        growth: 0.20
+        momentum: 0.10
+        trend: 0.05
+      gates:
+        max_debt_to_equity: 0.5
+        min_roe_pct: 14.0
+        max_pe: 50.0
+        min_revenue_growth_pct: 5.0
+    execution:
+      product_type: "CASH"
+      exchange: US
+      auto_approve: false
+
+  momentum_rider_us:
+    enabled: true
+    description: "US momentum — ride trends via Alpaca"
+    capital_usd: 50000
+    connectors:
+      broker: alpaca
+      market_region: US
+    fund:
+      benchmark_symbol: "^GSPC"
+      base_currency: USD
+      target_positions: 15
+      max_positions: 20
+    universe:
+      file: "data/us_liquid.csv"
+      min_avg_daily_turnover_inr: 5000000
+    risk:
+      max_position_pct: 10.0
+      max_sector_pct: 30.0
+      stop_loss_pct: -10.0
+      trailing_stop_pct: -12.0
+      annual_turnover_budget_pct: 200.0
+      max_portfolio_beta: 1.40
+    quant:
+      factor_weights:
+        quality: 0.10
+        value: 0.05
+        growth: 0.15
+        momentum: 0.45
+        trend: 0.25
+      min_buy_score: 0.3
+      require_above_sma200: true
+    cadence:
+      monthly_rebalance: true
+    execution:
+      product_type: "CASH"
+      exchange: US
+      auto_approve: false
+
+  calan_us:
+    enabled: true
+    description: "Calan US — SIP-ORB-VWAP intraday via Alpaca"
+    strategy_description: >
+      US intraday ORB + VWAP on liquid names. Catalyst LLM gate; flat before
+      the NYSE close. Paper on Alpaca.
+    capital_usd: 50000
+    connectors:
+      broker: alpaca
+      market_region: US
+    universe:
+      file: "data/us_liquid.csv"
+      min_avg_daily_turnover_inr: 10000000
+    execution:
+      product_type: "INTRADAY"
+      exchange: US
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - opening_range_breakout
+        - vwap_pullback
+      default_interval: "FIVE_MINUTE"
+      trade_window_start: "09:45"
+      trade_window_end: "15:00"
+      force_exit_time: "15:45"
+      watch_poll_seconds: 300
+      watch_scan_size: 12
+      ranked_universe_size: 8
+      max_trades_per_day: 3
+      max_open_positions: 2
+      risk_per_trade_pct: 0.4
+      max_daily_loss_pct: 1.5
+      min_avg_volume: 50000
+      min_avg_turnover_inr: 10000000
+      stocks_in_play:
+        min_gap_pct: 0.8
+        min_rvol: 2.0
+        min_trend_cleanliness: 0.5
+        min_trend_at_signal: 0.30
+      agent:
+        enabled: true
+        veto_scalping: true
+        min_watch_confidence: 0.55
+        min_trade_confidence: 0.55
+
+  revert_us:
+    enabled: true
+    description: "Revert US — VWAP/gap fade intraday via Alpaca"
+    capital_usd: 30000
+    connectors:
+      broker: alpaca
+      market_region: US
+    universe:
+      file: "data/us_liquid.csv"
+      min_avg_daily_turnover_inr: 10000000
+    execution:
+      product_type: "INTRADAY"
+      exchange: US
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - vwap_fade
+        - opening_gap_fade
+      trade_window_start: "09:45"
+      trade_window_end: "14:00"
+      force_exit_time: "15:45"
+      max_trades_per_day: 4
+      risk_per_trade_pct: 0.25
+      stocks_in_play:
+        max_gap_pct: 1.0
+        max_trend_cleanliness: 0.40
+      agent:
+        enabled: true
+        min_watch_confidence: 0.55
+        min_trade_confidence: 0.55
+
+  flux_us:
+    enabled: true
+    description: "Flux US — OFI proxy intraday via Alpaca"
+    capital_usd: 20000
+    connectors:
+      broker: alpaca
+      market_region: US
+    universe:
+      file: "data/us_liquid.csv"
+    execution:
+      product_type: "INTRADAY"
+      exchange: US
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - ofi_momentum
+        - ofi_exhaustion
+      default_interval: "ONE_MINUTE"
+      watch_poll_seconds: 60
+      trade_window_start: "09:45"
+      trade_window_end: "14:00"
+      force_exit_time: "15:45"
+      agent:
+        enabled: true
+        min_watch_confidence: 0.50
+        min_trade_confidence: 0.50
+
+  spread_us:
+    enabled: true
+    description: "Spread US — intraday pairs via Alpaca"
+    capital_usd: 40000
+    connectors:
+      broker: alpaca
+      market_region: US
+    universe:
+      file: "data/us_liquid.csv"
+    execution:
+      product_type: "INTRADAY"
+      exchange: US
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - pair_zscore
+      pairs:
+        - [JPM, BAC]
+        - [AAPL, MSFT]
+        - [XOM, CVX]
+      trade_window_start: "09:45"
+      trade_window_end: "14:00"
+      force_exit_time: "15:45"
+      agent:
+        enabled: true
+        min_watch_confidence: 0.50
+        min_trade_confidence: 0.50
+
+  slice_us:
+    enabled: true
+    description: "Slice US — TWAP/VWAP execution via Alpaca"
+    capital_usd: 100000
+    connectors:
+      broker: alpaca
+      market_region: US
+    universe:
+      file: "data/us_liquid.csv"
+    execution:
+      product_type: "INTRADAY"
+      exchange: US
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - twap_slice
+        - vwap_schedule
+      parent_orders: []
+      agent:
+        enabled: true

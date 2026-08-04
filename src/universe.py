@@ -1,13 +1,12 @@
 """Investable universe loading.
 
-The universe is typically the Nifty 500 (NSE) or S&P 500 (US), including each
-company's sector for sector-cap checks in the risk engine.
+The universe is the Nifty 500 as published by NSE, including each company's
+sector, which the risk engine needs for sector caps.
 """
 
 from __future__ import annotations
 
 import csv
-import io
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -21,39 +20,51 @@ logger = get_logger(__name__)
 NSE_NIFTY500_URL = (
     "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 )
-NSE_SMALLCAP250_URL = (
-    "https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv"
-)
-
-UNIVERSE_URLS: Dict[str, str] = {
-    "data/nifty500.csv": NSE_NIFTY500_URL,
-    "data/nifty_smallcap250.csv": NSE_SMALLCAP250_URL,
-}
 
 
 def _read_csv(path: Path) -> List[UniverseEntry]:
     entries: List[UniverseEntry] = []
     with open(path, "r", encoding="utf-8-sig") as handle:
-        lines = [line for line in handle if not line.lstrip().startswith("#")]
-    for row in csv.DictReader(io.StringIO("".join(lines))):
-        symbol = (row.get("Symbol") or row.get("symbol") or "").strip().upper()
-        if not symbol:
-            continue
-        entries.append(
-            UniverseEntry(
-                symbol=symbol,
-                company_name=(
-                    row.get("Company Name") or row.get("name") or ""
-                ).strip(),
-                sector=(
-                    row.get("Industry")
-                    or row.get("gics_sector")
-                    or "Unknown"
-                ).strip()
-                or "Unknown",
-                isin=(row.get("ISIN Code") or row.get("isin") or "").strip(),
-            )
+        reader = csv.DictReader(
+            line for line in handle if line.strip() and not line.lstrip().startswith("#")
         )
+        if not reader.fieldnames:
+            return entries
+        fields = {name.strip().lower(): name for name in reader.fieldnames if name}
+
+        for row in reader:
+            symbol = (
+                row.get(fields.get("symbol", "Symbol"))
+                or row.get("Symbol")
+                or ""
+            ).strip().upper()
+            if not symbol:
+                continue
+            company = (
+                row.get(fields.get("company_name", "company_name"))
+                or row.get("Company Name")
+                or row.get("name")
+                or ""
+            ).strip()
+            sector = (
+                row.get(fields.get("gics_sector", "gics_sector"))
+                or row.get("Industry")
+                or row.get("sector")
+                or "Unknown"
+            ).strip() or "Unknown"
+            isin = (
+                row.get(fields.get("isin", "isin"))
+                or row.get("ISIN Code")
+                or ""
+            ).strip()
+            entries.append(
+                UniverseEntry(
+                    symbol=symbol,
+                    company_name=company or symbol,
+                    sector=sector,
+                    isin=isin,
+                )
+            )
     return entries
 
 
@@ -115,34 +126,15 @@ def _load_universe_cached(path_str: str) -> Universe:
 def load_universe(config: Optional[Config] = None) -> Universe:
     config = config or get_config()
     path = config.path("universe.file", "data/nifty500.csv")
-    universe = _load_universe_cached(str(path))
-
-    gold_symbol = config.get("gold.symbol")
-    if gold_symbol and not universe.contains(gold_symbol):
-        extra = UniverseEntry(
-            symbol=gold_symbol.upper(),
-            company_name="Gold ETF",
-            sector="Commodities",
-        )
-        universe = Universe(universe.entries + [extra])
-        logger.info("Added gold ETF %s to universe", gold_symbol)
-
-    return universe
+    return _load_universe_cached(str(path))
 
 
 def refresh_universe_file(config: Optional[Config] = None) -> int:
-    """Download the current index constituent list from NSE.
-
-    Resolves the correct URL from UNIVERSE_URLS based on the configured
-    universe.file path. Falls back to Nifty 500 if the file is not mapped.
-    """
+    """Download the current Nifty 500 constituent list from NSE."""
     import requests
 
     config = config or get_config()
     path = config.path("universe.file", "data/nifty500.csv")
-    rel = str(Path(config.get("universe.file", "data/nifty500.csv")))
-    url = UNIVERSE_URLS.get(rel, NSE_NIFTY500_URL)
-
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -150,7 +142,7 @@ def refresh_universe_file(config: Optional[Config] = None) -> int:
         ),
         "Accept": "text/csv,*/*",
     }
-    response = requests.get(url, headers=headers, timeout=30)
+    response = requests.get(NSE_NIFTY500_URL, headers=headers, timeout=30)
     response.raise_for_status()
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,5 +150,5 @@ def refresh_universe_file(config: Optional[Config] = None) -> int:
     _load_universe_cached.cache_clear()
 
     count = len(_read_csv(path))
-    logger.info("Refreshed universe file with %d symbols from %s", count, url)
+    logger.info("Refreshed universe file with %d symbols", count)
     return count

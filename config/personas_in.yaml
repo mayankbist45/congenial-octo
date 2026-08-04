@@ -1,0 +1,401 @@
+personas:
+  balanced:
+    enabled: true
+    description: "Balanced multi-cap — quality at a reasonable price"
+    strategy_description: >
+      You are a disciplined GARP investor managing an Indian equity portfolio.
+      You favour high-quality businesses trading at reasonable valuations. You
+      are sector-agnostic but insist on strong management, clean balance sheets,
+      and visible earnings growth. You hold 20-25 names across the Nifty 500.
+    capital_inr: 1000000
+
+  steady_compounder:
+    enabled: true
+    description: "Low-vol compounder — capital protection first"
+    strategy_description: >
+      You are a conservative, compound-interest investor. You seek large-cap
+      companies with stable earnings, low debt, and generous dividends. You
+      sacrifice upside for downside protection. You avoid cyclicals, turnarounds,
+      and anything with debt-to-equity above 0.5. Portfolio beta stays below 0.9.
+    capital_inr: 1000000
+    fund:
+      target_positions: 20
+      max_positions: 25
+      min_cash_buffer_pct: 8.0
+    risk:
+      max_position_pct: 7.0
+      max_sector_pct: 20.0
+      stop_loss_pct: -12.0
+      trailing_stop_pct: -15.0
+      max_portfolio_beta: 0.90
+      min_portfolio_beta: 0.50
+      annual_turnover_budget_pct: 50.0
+    quant:
+      factor_weights:
+        quality: 0.40
+        value: 0.25
+        growth: 0.20
+        momentum: 0.10
+        trend: 0.05
+      gates:
+        max_debt_to_equity: 0.5
+        min_roe_pct: 14.0
+        max_pe: 50.0
+        min_revenue_growth_pct: 5.0
+    gold:
+      enabled: true
+      symbol: "GOLDBEES.NS"
+      target_pct: 10.0
+
+  small_cap_aggressor:
+    enabled: true
+    description: "Small-cap growth — high risk, high reward"
+    strategy_description: >
+      You are an aggressive growth investor hunting for the next multi-bagger
+      among Indian small caps. You look for companies with explosive revenue
+      growth, improving margins, and nascent competitive advantages. You accept
+      higher volatility and wider drawdowns in exchange for outsized returns.
+      You avoid over-leveraged balance sheets but tolerate higher valuations
+      when growth justifies them.
+    capital_inr: 500000
+    fund:
+      target_positions: 20
+      max_positions: 25
+      min_cash_buffer_pct: 10.0
+    universe:
+      file: "data/nifty_smallcap250.csv"
+      min_avg_daily_turnover_inr: 20000000
+    risk:
+      max_position_pct: 8.0
+      max_sector_pct: 25.0
+      stop_loss_pct: -20.0
+      trailing_stop_pct: -25.0
+      profit_review_pct: 50.0
+      max_portfolio_beta: 1.50
+      min_portfolio_beta: 0.80
+      annual_turnover_budget_pct: 100.0
+      max_tracking_error_pct: 18.0
+    quant:
+      factor_weights:
+        quality: 0.20
+        value: 0.15
+        growth: 0.35
+        momentum: 0.20
+        trend: 0.10
+      min_buy_score: 0.4
+      gates:
+        max_debt_to_equity: 1.5
+        min_roe_pct: 8.0
+        max_pe: 120.0
+        min_revenue_growth_pct: 10.0
+
+  momentum_rider:
+    enabled: true
+    description: "Momentum — ride trends, cut losers fast"
+    strategy_description: >
+      You are a systematic momentum investor. You buy stocks that are trending
+      strongly upward and sell them the moment the trend breaks. You pay
+      little attention to fundamentals beyond basic quality gates. Your edge
+      comes from cutting losers quickly and letting winners run. You rebalance
+      monthly and are willing to hold high-turnover portfolios.
+    capital_inr: 500000
+    fund:
+      target_positions: 15
+      max_positions: 20
+      min_cash_buffer_pct: 5.0
+    risk:
+      max_position_pct: 10.0
+      max_sector_pct: 30.0
+      stop_loss_pct: -10.0
+      trailing_stop_pct: -12.0
+      profit_review_pct: 40.0
+      annual_turnover_budget_pct: 200.0
+      max_portfolio_beta: 1.40
+      min_portfolio_beta: 0.70
+      max_tracking_error_pct: 15.0
+    quant:
+      factor_weights:
+        quality: 0.10
+        value: 0.05
+        growth: 0.15
+        momentum: 0.45
+        trend: 0.25
+      min_buy_score: 0.3
+      # Only ride confirmed trends; skip choppy / mean-reverting setups.
+      require_above_sma200: true
+      gates:
+        max_debt_to_equity: 2.0
+        min_roe_pct: 5.0
+        max_pe: 100.0
+        min_revenue_growth_pct: -5.0
+    cadence:
+      monthly_rebalance: true
+      new_position_grace_days: 30
+
+  calan:
+    enabled: true
+    description: "Calan — SIP-ORB-VWAP intraday (Stocks in Play + LLM gate)"
+    strategy_description: >
+      Calan trades NSE intraday using Stocks-in-Play ORB and VWAP trend only.
+      Scalping is disabled. A catalyst-scan LLM agent filters the watchlist;
+      a trade-gate agent approves each rule signal. Flat by 15:15. Paper only.
+    capital_inr: 500000
+    universe:
+      # Nifty 50 only for now — Angel One candle history rate-limits hard on
+      # the full Nifty 500 every poll. Revisit once we have a thinner scan path.
+      file: "data/nifty50.csv"
+      min_avg_daily_turnover_inr: 100000000
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - opening_range_breakout
+        - vwap_pullback
+      default_interval: "FIVE_MINUTE"
+      trade_window_start: "09:45"
+      trade_window_end: "14:30"
+      force_exit_time: "15:15"
+      watch_poll_seconds: 300
+      watch_scan_size: 12
+      ranked_universe_size: 8
+      max_trades_per_day: 3
+      max_open_positions: 2
+      risk_per_trade_pct: 0.4
+      max_daily_loss_pct: 1.5
+      max_position_value_pct: 20.0
+      min_avg_volume: 100000
+      min_avg_turnover_inr: 100000000
+      min_atr_pct: 0.6
+      volume_spike_multiple: 1.2
+      opening_range_minutes: 15
+      stop_buffer_pct: 0.05
+      target_r_multiple: 1.5
+      trailing_stop_pct: 0.25
+      slippage_bps_per_side: 2.0
+      stocks_in_play:
+        min_gap_pct: 0.8
+        min_rvol: 2.0
+        min_trend_cleanliness: 0.5
+        # Checked at entry bar (09:45 → signal), not on the full session.
+        min_trend_at_signal: 0.30
+      agent:
+        enabled: true
+        veto_scalping: true
+        min_watch_confidence: 0.55
+        min_trade_confidence: 0.55
+      costs:
+        brokerage_pct: 0.03
+        brokerage_cap_per_order: 20.0
+        stt_sell_pct: 0.025
+        exchange_txn_pct: 0.00325
+        sebi_pct: 0.0001
+        stamp_buy_pct: 0.003
+        gst_pct: 18.0
+
+  revert:
+    enabled: true
+    description: "Revert — intraday VWAP/gap fade (mean reversion)"
+    strategy_description: >
+      Fades session extremes in range-bound Nifty 50 names. Regime analyst
+      blocks trades on trend days. Opposite philosophy to calan. See
+      docs/intraday/personas/revert.md.
+    capital_inr: 300000
+    universe:
+      file: "data/nifty50.csv"
+      min_avg_daily_turnover_inr: 100000000
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - vwap_fade
+        - opening_gap_fade
+      trade_window_start: "09:45"
+      trade_window_end: "13:00"
+      max_trades_per_day: 4
+      risk_per_trade_pct: 0.25
+      target_r_multiple: 0.9
+      stop_buffer_pct: 0.08
+      min_stop_pct: 0.25
+      stocks_in_play:
+        max_gap_pct: 1.0
+        max_trend_cleanliness: 0.40
+      vwap_fade_z_entry: 1.5
+      vwap_fade_sigma_lookback: 15
+      vwap_fade_max_volume_ratio: 0.85
+      opening_gap_fade_max_rvol: 1.3
+      agent:
+        enabled: true
+        min_watch_confidence: 0.55
+        min_trade_confidence: 0.55
+
+  flux:
+    enabled: true
+    description: "Flux — OFI proxy intraday (flow momentum)"
+    strategy_description: >
+      Follows candle-based order flow imbalance on top Nifty names. Requires
+      ONE_MINUTE candles. See docs/intraday/personas/flux.md.
+    capital_inr: 200000
+    universe:
+      file: "data/nifty50.csv"
+      min_avg_daily_turnover_inr: 100000000
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - ofi_momentum
+        - ofi_exhaustion
+      default_interval: "ONE_MINUTE"
+      watch_poll_seconds: 60
+      ranked_universe_size: 10
+      max_trades_per_day: 6
+      max_open_positions: 1
+      risk_per_trade_pct: 0.2
+      max_daily_loss_pct: 0.8
+      trade_window_start: "09:45"
+      trade_window_end: "14:00"
+      min_avg_volume: 15000
+      min_avg_turnover_inr: 50000000
+      stocks_in_play:
+        min_gap_pct: 0.0
+        min_rvol: 0.0
+        min_trend_cleanliness: 0.0
+      ofi_lookback_bars: 3
+      ofi_z_lookback: 30
+      ofi_z_entry: 1.5
+      ofi_exhaustion_z: 2.0
+      ofi_stop_pct: 0.18
+      ofi_target_pct: 0.30
+      ofi_max_hold_minutes: 12
+      flux_max_atr_pct: 1.5
+      min_stop_pct: 0.12
+      agent:
+        enabled: true
+        veto_scalping: false
+        min_watch_confidence: 0.50
+        min_trade_confidence: 0.50
+
+  spread:
+    enabled: true
+    description: "Spread — intraday pairs mean reversion"
+    strategy_description: >
+      Trades cointegrated Nifty pair spreads. Requires two-leg execution.
+      See docs/intraday/personas/spread.md.
+    capital_inr: 400000
+    universe:
+      file: "data/nifty50.csv"
+      min_avg_daily_turnover_inr: 100000000
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - pair_zscore
+      pairs:
+        - [HDFCBANK, ICICIBANK]
+        - [TCS, INFY]
+        - [RELIANCE, ONGC]
+        - [MARUTI, M&M]
+      max_trades_per_day: 2
+      max_position_value_pct: 15.0
+      risk_per_trade_pct: 0.30
+      trade_window_start: "09:45"
+      trade_window_end: "14:00"
+      pair_entry_z: 2.0
+      pair_exit_z: 0.20
+      pair_stop_z: 2.5
+      pair_min_bars: 20
+      pair_max_widen_z: 0.3
+      pair_stop_buffer_pct: 0.30
+      watch_scan_size: 16
+      ranked_universe_size: 12
+      agent:
+        enabled: true
+        min_watch_confidence: 0.50
+        min_trade_confidence: 0.50
+
+  slice:
+    enabled: true
+    description: "Slice — TWAP/VWAP execution scheduler"
+    strategy_description: >
+      Schedules parent orders into TWAP/VWAP child slices. No directional alpha.
+      See docs/intraday/persona_design.md.
+    capital_inr: 1000000
+    universe:
+      file: "data/nifty50.csv"
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - twap_slice
+        - vwap_schedule
+      parent_orders: []
+      agent:
+        enabled: true
+
+  xstat:
+    enabled: false
+    description: "Xstat — cross-asset beta-hedged stat-arb (ETF vs equity)"
+    strategy_description: >
+      Trades rolling beta-hedged residuals between Nifty/Bank ETF anchors and
+      liquid single names. Two-leg MIS execution. See docs/intraday/personas/xstat.md.
+    capital_inr: 500000
+    universe:
+      file: "data/nifty50.csv"
+      min_avg_daily_turnover_inr: 100000000
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - cross_zscore
+      cross_baskets:
+        - anchor: NIFTYBEES
+          leg: RELIANCE
+        - anchor: NIFTYBEES
+          leg: TCS
+        - anchor: BANKBEES
+          leg: HDFCBANK
+        - anchor: BANKBEES
+          leg: ICICIBANK
+      default_interval: "FIVE_MINUTE"
+      max_trades_per_day: 2
+      max_position_value_pct: 12.0
+      risk_per_trade_pct: 0.25
+      max_daily_loss_pct: 1.0
+      trade_window_start: "09:45"
+      trade_window_end: "14:00"
+      cross_entry_z: 2.0
+      cross_exit_z: 0.25
+      cross_min_bars: 25
+      cross_beta_lookback: 60
+      cross_max_widen_z: 0.35
+      cross_stop_buffer_pct: 0.30
+      watch_scan_size: 12
+      ranked_universe_size: 8
+      agent:
+        enabled: true
+        min_watch_confidence: 0.50
+        min_trade_confidence: 0.50
+

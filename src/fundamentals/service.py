@@ -137,20 +137,22 @@ class FundamentalsService:
     def _fetch_fresh(self, symbol: str) -> Optional[FundamentalSnapshot]:
         from src.fundamentals import yahoo
 
+        region = self._config.market_region
         snapshot: Optional[FundamentalSnapshot] = None
-        try:
-            snapshot = self._screener.fetch(symbol)
-        except Exception as exc:
-            logger.debug("Screener fetch error for %s: %s", symbol, exc)
 
-        # Only pay for a Yahoo call when Screener left something important out.
-        needs_supplement = snapshot is None or any(
+        if region != "US":
+            try:
+                snapshot = self._screener.fetch(symbol)
+            except Exception as exc:
+                logger.debug("Screener fetch error for %s: %s", symbol, exc)
+
+        needs_supplement = region == "US" or snapshot is None or any(
             getattr(snapshot, name) is None
             for name in ("pe_ratio", "roe_pct", "debt_to_equity", "revenue_growth_pct")
         )
         if needs_supplement:
             try:
-                snapshot = _merge(snapshot, yahoo.fetch(symbol))
+                snapshot = _merge(snapshot, yahoo.fetch(symbol, market_region=region))
             except Exception as exc:
                 logger.debug("Yahoo fetch error for %s: %s", symbol, exc)
 

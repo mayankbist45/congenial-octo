@@ -2,10 +2,6 @@
 
 Policy lives in ``config/settings.yaml``; secrets live in ``.env``. Code reads
 both through :func:`get_config` so that no module hardcodes a risk limit.
-
-Each named persona is an overlay on the top-level defaults: it can override any
-section (fund, risk, quant, universe, etc.) and its own starting capital. The
-existing single-fund behaviour is preserved as the ``balanced`` persona.
 """
 
 from __future__ import annotations
@@ -22,7 +18,6 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.yaml"
-
 DEFAULT_PERSONA = "balanced"
 
 
@@ -33,10 +28,6 @@ def _as_bool(value: Optional[str], default: bool = False) -> bool:
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """Recursively merge *override* into *base*, returning a new dict.
-
-    Scalar values in override replace base; nested dicts are merged recursively.
-    """
     result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -54,7 +45,6 @@ class Secrets:
     angelone_client_code: str = ""
     angelone_pin: str = ""
     angelone_totp_secret: str = ""
-    # Optional second SmartAPI app — spreads getCandleData quota (see candle_pool).
     angelone_data2_api_key: str = ""
     angelone_data2_client_code: str = ""
     angelone_data2_pin: str = ""
@@ -66,10 +56,10 @@ class Secrets:
     openai_base_url: Optional[str] = None
     dry_run: bool = True
     initial_capital: float = 1_000_000.0
+    # Kept with the secrets because a production DSN carries a password.
     database_url: Optional[str] = None
 
     def with_capital(self, capital: float) -> "Secrets":
-        """Return a copy with a different starting capital."""
         return Secrets(
             angelone_api_key=self.angelone_api_key,
             angelone_client_code=self.angelone_client_code,
@@ -94,7 +84,6 @@ class Secrets:
         return bool(self.angelone_data2_api_key.strip())
 
     def secondary_candle_credentials(self):
-        """Second SmartAPI app; reuses primary login if DATA2 login fields blank."""
         from src.broker.angelone import AngelOneCredentials
 
         if not self.has_secondary_candle_credentials:
@@ -201,14 +190,6 @@ class Config:
         return self.section("fundamentals")
 
     @property
-    def persona_definition(self) -> Dict[str, Any]:
-        personas = self.raw.get("personas", {})
-        if not isinstance(personas, dict):
-            return {}
-        value = personas.get(self.persona_id)
-        return value if isinstance(value, dict) else {}
-
-    @property
     def mandate(self) -> Dict[str, Any]:
         value = self.get("mandate", {}) or {}
         return value if isinstance(value, dict) else {}
@@ -252,19 +233,21 @@ class Config:
         return directory
 
     @property
+    def broker_provider(self) -> str:
+        """Active connector id: ``angelone`` (default) or ``alpaca``."""
+        return str(
+            self.get("broker.provider") or self.get("connectors.broker") or "angelone"
+        ).lower()
+
+    @property
+    def market_region(self) -> str:
+        return str(self.get("connectors.market_region", "IN")).upper()
+
+    @property
     def intraday_dir(self) -> Path:
         directory = self.root / "data" / "intraday"
         directory.mkdir(parents=True, exist_ok=True)
         return directory
-
-    @property
-    def broker_provider(self) -> str:
-        """``angelone`` (India) or ``alpaca`` (US)."""
-        return str(self.get("broker.provider", "angelone")).lower()
-
-    @property
-    def market_region(self) -> str:
-        return str(self.get("market.region", "IN")).upper()
 
     def validate(self) -> List[str]:
         """Return human-readable problems with the configuration."""
@@ -277,6 +260,13 @@ class Config:
                 problems.append(
                     f"quant.factor_weights must sum to 1.0, got {total:.3f}"
                 )
+
+        if self.get("intraday.enabled"):
+            if not self.path("universe.file").exists():
+                problems.append(
+                    f"universe file not found: {self.get('universe.file')}"
+                )
+            return problems
 
         if self.get("risk.stop_loss_pct", -1) >= 0:
             problems.append("risk.stop_loss_pct must be negative")
@@ -342,13 +332,18 @@ def load_secrets() -> Secrets:
     )
 
 
-@lru_cache(maxsize=1)
-def get_config(settings_path: Optional[str] = None) -> Config:
-    path = Path(settings_path) if settings_path else DEFAULT_SETTINGS_PATH
-    with open(path, "r", encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
-    _apply_policy_defaults(raw)
-    return Config(raw=raw, secrets=load_secrets())
+def _load_persona_overlays(settings_dir: Path) -> Dict[str, Any]:
+    personas: Dict[str, Any] = {}
+    for name in ("personas_in.yaml", "personas_us.yaml"):
+        overlay_path = settings_dir / name
+        if not overlay_path.exists():
+            continue
+        with open(overlay_path, "r", encoding="utf-8") as handle:
+            block = yaml.safe_load(handle) or {}
+        block_personas = block.get("personas", block)
+        if isinstance(block_personas, dict):
+            personas.update(block_personas)
+    return personas
 
 
 def _apply_policy_defaults(raw: Dict[str, Any]) -> None:
@@ -393,7 +388,10 @@ def _apply_policy_defaults(raw: Dict[str, Any]) -> None:
     mandate.setdefault("esg_exclusions", [])
     mandate.setdefault("governance_exclusions", ["promoter pledging above internal limits"])
     mandate.setdefault("rebalancing_policy", "rebalance on drift, deep review, or thesis change")
-    mandate.setdefault("emergency_exit_policy", "exit on mandatory risk triggers or thesis-breaking governance events")
+    mandate.setdefault(
+        "emergency_exit_policy",
+        "exit on mandatory risk triggers or thesis-breaking governance events",
+    )
 
     analytics.setdefault("enabled", True)
     analytics.setdefault(
@@ -413,8 +411,19 @@ def _apply_policy_defaults(raw: Dict[str, Any]) -> None:
     analytics.setdefault("metric_weights", {})
 
 
+@lru_cache(maxsize=1)
+def get_config(settings_path: Optional[str] = None) -> Config:
+    path = Path(settings_path) if settings_path else DEFAULT_SETTINGS_PATH
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    _apply_policy_defaults(raw)
+    overlay_personas = _load_persona_overlays(path.parent)
+    if overlay_personas:
+        raw["personas"] = overlay_personas
+    return Config(raw=raw, secrets=load_secrets())
+
+
 def list_personas(settings_path: Optional[str] = None) -> List[str]:
-    """Return the ids of every persona defined in settings, in order."""
     config = get_config(settings_path)
     personas = config.raw.get("personas", {})
     if not isinstance(personas, dict):
@@ -423,7 +432,6 @@ def list_personas(settings_path: Optional[str] = None) -> List[str]:
 
 
 def enabled_personas(settings_path: Optional[str] = None) -> List[str]:
-    """Return persona ids that are not explicitly disabled."""
     config = get_config(settings_path)
     personas = config.raw.get("personas", {})
     if not isinstance(personas, dict):
@@ -435,37 +443,27 @@ def enabled_personas(settings_path: Optional[str] = None) -> List[str]:
 
 
 def get_persona_config(
-    persona_id: str, settings_path: Optional[str] = None
+    persona_id: str,
+    settings_path: Optional[str] = None,
+    base: Optional[Config] = None,
 ) -> Config:
-    """Build a Config that deep-merges a persona's overrides onto the defaults.
-
-    Top-level sections (fund, risk, quant, ...) are merged; the persona can
-    override any key at any depth.  ``capital_inr`` in the persona definition
-    replaces :pyattr:`Secrets.initial_capital` for that persona.
-    """
-    base = get_config(settings_path)
+    base = base or get_config(settings_path)
     personas = base.raw.get("personas", {})
-
     if persona_id not in personas:
         available = ", ".join(personas.keys()) if personas else "(none defined)"
-        raise ValueError(
-            f"Unknown persona {persona_id!r}; available: {available}"
-        )
+        raise ValueError(f"Unknown persona {persona_id!r}; available: {available}")
 
     persona_def = personas[persona_id]
     if not isinstance(persona_def, dict):
-        raise ValueError(f"Persona {persona_id!r} must be a mapping, got {type(persona_def).__name__}")
+        raise ValueError(
+            f"Persona {persona_id!r} must be a mapping, got {type(persona_def).__name__}"
+        )
 
-    # Strip persona-level meta keys that are not policy overrides.
     meta_keys = {"enabled", "capital_inr", "capital_usd", "description", "strategy_description"}
     overrides = {k: v for k, v in persona_def.items() if k not in meta_keys}
-
-    # Deep-merge onto the base (without the personas block itself).
     base_raw = {k: v for k, v in base.raw.items() if k != "personas"}
     merged = _deep_merge(base_raw, overrides)
-
-    # Preserve the full personas block so callers can introspect.
-    merged["personas"] = base.raw["personas"]
+    merged["personas"] = base.raw.get("personas", {})
 
     secrets = base.secrets
     capital = persona_def.get("capital_inr")
@@ -483,7 +481,6 @@ def get_persona_config(
 
 
 def persona_description(persona_id: str, settings_path: Optional[str] = None) -> str:
-    """The human-readable description of a persona, for logs and the dashboard."""
     base = get_config(settings_path)
     personas = base.raw.get("personas", {})
     pdef = personas.get(persona_id, {})

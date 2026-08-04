@@ -34,15 +34,37 @@ def _loads(value: Any, default: Any) -> Any:
 
 def money(value: Optional[float]) -> str:
     """Indian-convention rupee formatting: crore and lakh, not millions."""
+    return format_money(value, "INR")
+
+
+def format_money(value: Optional[float], currency: str = "INR") -> str:
+    """Format a monetary amount in INR or USD."""
     if value is None:
         return "-"
     sign = "-" if value < 0 else ""
     magnitude = abs(value)
+    code = (currency or "INR").upper()
+    if code == "USD":
+        if magnitude >= 1e6:
+            return f"{sign}${magnitude / 1e6:,.2f}M"
+        if magnitude >= 1e3:
+            return f"{sign}${magnitude / 1e3:,.1f}K"
+        return f"{sign}${magnitude:,.2f}"
     if magnitude >= 1e7:
         return f"{sign}Rs {magnitude / 1e7:,.2f} cr"
     if magnitude >= 1e5:
         return f"{sign}Rs {magnitude / 1e5:,.2f} L"
     return f"{sign}Rs {magnitude:,.0f}"
+
+
+def region_label(region: str) -> str:
+    mapping = {"IN": "India", "US": "United States"}
+    return mapping.get((region or "IN").upper(), region)
+
+
+def broker_label(provider: str) -> str:
+    mapping = {"angelone": "Angel One", "alpaca": "Alpaca"}
+    return mapping.get((provider or "angelone").lower(), provider)
 
 
 def pct(value: Optional[float], places: int = 1, signed: bool = False) -> str:
@@ -136,6 +158,27 @@ class DashboardService:
             "metric_weights": analytics.get("metric_weights", {}) or {},
         }
 
+    def _empty_overview(self) -> Dict[str, Any]:
+        return {
+            "has_data": False,
+            "total_value": 0.0,
+            "position_count": 0,
+            "cash_pct": 100.0,
+            "pending_count": 0,
+            "cash": 0.0,
+            "invested_value": 0.0,
+            "unrealised_pnl": 0.0,
+            "run": None,
+            "daily_change_pct": None,
+        }
+
+    def _safe_overview(self) -> Dict[str, Any]:
+        try:
+            return self.overview()
+        except Exception as exc:
+            logger.debug("Overview unavailable for %s: %s", self.persona_id, exc)
+            return self._empty_overview()
+
     # ------------------------------------------------------------------
     # Overview
     # ------------------------------------------------------------------
@@ -209,7 +252,7 @@ class DashboardService:
     def holdings(self) -> List[Dict[str, Any]]:
         rows = self._repo.latest_position_snapshot()
         if rows:
-            views = [
+            return [
                 {
                     "symbol": row["symbol"],
                     "company_name": row["company_name"] or row["symbol"],
@@ -230,9 +273,6 @@ class DashboardService:
                 }
                 for row in rows
             ]
-            for view in views:
-                view.update(self._quarterly_summary(view["symbol"]))
-            return views
 
         # Fills can land before the next snapshot refresh. Reconstruct from the
         # trade journal so Overview/Holdings are not stuck on an empty cash book.
@@ -267,8 +307,6 @@ class DashboardService:
                 }
             )
         views.sort(key=lambda row: row["market_value"], reverse=True)
-        for view in views:
-            view.update(self._quarterly_summary(view["symbol"]))
         return views
 
     def sector_weights(self) -> List[Dict[str, Any]]:
@@ -493,10 +531,15 @@ class DashboardService:
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            summary = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             logger.warning("Could not read intraday summary %s: %s", path, exc)
             return None
+        # Live watch writes completed_trades; backtests use trades.
+        if "trades" not in summary and summary.get("completed_trades"):
+            summary = dict(summary)
+            summary["trades"] = summary["completed_trades"]
+        return summary
 
     def attribution(self) -> List[Dict[str, Any]]:
         """Contribution to return by position, from the latest snapshot."""
@@ -534,14 +577,23 @@ class DashboardService:
         for pid, pdef in personas.items():
             if not isinstance(pdef, dict) or not pdef.get("enabled", True):
                 continue
-            meta_keys = {"enabled", "capital_inr", "description", "strategy_description"}
+            meta_keys = {
+                "enabled",
+                "capital_inr",
+                "capital_usd",
+                "description",
+                "strategy_description",
+            }
             overrides = {k: v for k, v in pdef.items() if k not in meta_keys}
             base_raw = {k: v for k, v in self._config.raw.items() if k != "personas"}
             merged = _deep_merge(base_raw, overrides)
             merged["personas"] = personas
             secrets = self._config.secrets
-            if pdef.get("capital_inr") is not None:
-                secrets = secrets.with_capital(float(pdef["capital_inr"]))
+            capital = pdef.get("capital_inr")
+            if capital is None:
+                capital = pdef.get("capital_usd")
+            if capital is not None:
+                secrets = secrets.with_capital(float(capital))
             pcfg = Config(
                 raw=merged,
                 secrets=secrets,
@@ -549,21 +601,57 @@ class DashboardService:
                 persona_id=pid,
             )
             svc = DashboardService(config=pcfg)
-            overview = svc.overview()
+            is_intraday = bool(pcfg.get("intraday.enabled", False))
+            overview = (
+                self._empty_overview()
+                if is_intraday
+                else svc._safe_overview()
+            )
+            intraday_summary = svc.intraday_summary()
+            region = pcfg.market_region
+            currency = str(pcfg.get("fund.base_currency", "INR" if region == "IN" else "USD"))
             results.append({
                 "persona_id": pid,
                 "description": str(pdef.get("description", pid)),
+                "strategy_description": str(pdef.get("strategy_description", "")),
+                "region": region,
+                "region_label": region_label(region),
+                "currency": currency,
+                "broker": pcfg.broker_provider,
+                "broker_label": broker_label(pcfg.broker_provider),
+                "fund_name": str(pcfg.get("fund.name", pcfg.get("fund.benchmark_label", pid))),
+                "benchmark_label": str(pcfg.get("fund.benchmark_label", "")),
+                "capital": float(capital) if capital is not None else secrets.initial_capital,
                 "total_value": overview["total_value"],
                 "position_count": overview["position_count"],
                 "cash_pct": overview["cash_pct"],
                 "pending_count": overview["pending_count"],
                 "has_data": overview["has_data"],
                 "intraday": bool(pcfg.get("intraday.enabled", False)),
-                "intraday_summary": svc.intraday_summary(),
-                "mandate": svc.mandate_summary(),
-                "analytics": svc.analytics_summary(),
+                "intraday_summary": intraday_summary,
+                "intraday_has_results": intraday_summary is not None,
             })
         return results
+
+    def personas_by_region(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Group enabled personas by market region for the dashboard."""
+        grouped: Dict[str, List[Dict[str, Any]]] = {"IN": [], "US": []}
+        for row in self.all_personas_overview():
+            region = row.get("region", "IN")
+            grouped.setdefault(region, []).append(row)
+        for rows in grouped.values():
+            rows.sort(key=lambda r: (r.get("intraday", False), r.get("persona_id", "")))
+        return grouped
+
+    def intraday_personas(self, region: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Intraday personas, optionally filtered to one market region."""
+        rows = [
+            row for row in self.all_personas_overview()
+            if row.get("intraday")
+        ]
+        if region:
+            rows = [row for row in rows if row.get("region") == region.upper()]
+        return rows
 
     # ------------------------------------------------------------------
     # Journal
@@ -598,76 +686,8 @@ class DashboardService:
                 view["proposals"] = [
                     self._proposal_view(p) for p in self._repo.proposals_for_run(run_id)
                 ]
-                view["quarterly_updates"] = self.quarterly_updates_for_run(run["run_date"])
                 return view
         return None
-
-    def quarterly_updates_for_run(self, run_date: str) -> List[Dict[str, Any]]:
-        try:
-            parsed = datetime.fromisoformat(run_date).date()
-        except (TypeError, ValueError):
-            return []
-        rows = self._repo.quarterly_report_analyses_for_run(parsed)
-        updates: List[Dict[str, Any]] = []
-        for row in rows:
-            updates.append(
-                {
-                    "symbol": row["symbol"],
-                    "fiscal_period": row["fiscal_period"],
-                    "summary": row["summary"] or "",
-                    "thesis_impact": row["thesis_impact"] or "unclear",
-                    "flags": _loads(row["flags"], []),
-                    "highlights": _loads(row["highlights"], {}),
-                }
-            )
-        return updates
-
-    def quarterly_report_cards(self) -> List[Dict[str, Any]]:
-        cards: List[Dict[str, Any]] = []
-        for holding in self.holdings():
-            history = self._repo.quarterly_history(holding["symbol"], limit=8)
-            if not history:
-                continue
-            periods = [row["fiscal_period"] for row in reversed(history)]
-            revenue = [float(row["revenue"]) for row in reversed(history) if row["revenue"] is not None]
-            net_profit = [float(row["net_profit"]) for row in reversed(history) if row["net_profit"] is not None]
-            opm = [float(row["opm_pct"]) for row in reversed(history) if row["opm_pct"] is not None]
-            cards.append(
-                {
-                    "symbol": holding["symbol"],
-                    "company_name": holding["company_name"],
-                    "latest_quarter": holding.get("latest_quarter"),
-                    "quarterly_summary": holding.get("quarterly_summary"),
-                    "quarterly_thesis_impact": holding.get("quarterly_thesis_impact"),
-                    "quarterly_flags": holding.get("quarterly_flags", []),
-                    "quarterly_sector_model": holding.get("quarterly_sector_model"),
-                    "revenue_series": self._align_series(periods, history, "revenue"),
-                    "profit_series": self._align_series(periods, history, "net_profit"),
-                    "opm_series": self._align_series(periods, history, "opm_pct"),
-                }
-            )
-        return cards
-
-    @staticmethod
-    def _align_series(periods: List[str], history: List[Dict[str, Any]], field: str) -> Dict[str, List[Any]]:
-        ordered = list(reversed(history))
-        values = [row.get(field) for row in ordered]
-        return {
-            "dates": [row["fiscal_period"] for row in ordered],
-            "values": [float(v) if v is not None else 0.0 for v in values],
-            "has_values": any(v is not None for v in values),
-        }
-
-    def _quarterly_summary(self, symbol: str) -> Dict[str, Any]:
-        latest = self._repo.latest_quarterly_report(symbol)
-        analysis = self._repo.latest_quarterly_report_analysis(symbol)
-        return {
-            "latest_quarter": latest["fiscal_period"] if latest else None,
-            "quarterly_summary": analysis["summary"] if analysis else "",
-            "quarterly_thesis_impact": analysis["thesis_impact"] if analysis else "",
-            "quarterly_flags": _loads(analysis["flags"], []) if analysis else [],
-            "quarterly_sector_model": analysis["sector_model"] if analysis else "",
-        }
 
     def briefing(self, run_date: str) -> Optional[str]:
         """The exact briefing text the decision layer was given that day."""

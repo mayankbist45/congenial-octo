@@ -262,6 +262,13 @@ market:
   region: IN
   currency: INR
 
+# Pluggable broker connectors; US personas override via personas_us.yaml.
+connectors:
+  broker: angelone
+  market_region: IN
+  alpaca:
+    min_call_interval_seconds: 0.25
+
 dashboard:
   host: "127.0.0.1"
   port: 8000
@@ -690,32 +697,3 @@ personas:
       parent_orders: []
       agent:
         enabled: true
-
-  balanced_us:
-    enabled: true
-    description: "Balanced US — S&P 500 GARP via Alpaca paper"
-    strategy_description: >
-      US equity book on the S&P 500, mirroring the balanced GARP mandate.
-      Orders route to Alpaca paper trading; Yahoo Finance supplies daily history
-      for scoring. Run with: python run_daily.py status --persona balanced_us
-    capital_usd: 100000
-    market:
-      region: US
-      currency: USD
-    broker:
-      provider: alpaca
-    fund:
-      name: "AI Managed US Equity Fund"
-      benchmark_symbol: "^GSPC"
-      benchmark_label: "S&P 500"
-      base_currency: USD
-      target_positions: 25
-      max_positions: 30
-      min_cash_buffer_pct: 5.0
-    universe:
-      file: "data/sp500.csv"
-    execution:
-      product_type: "CASH"
-      order_type: "LIMIT"
-      exchange: "US"
-      auto_approve: false

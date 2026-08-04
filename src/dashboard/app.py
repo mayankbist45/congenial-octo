@@ -27,7 +27,16 @@ from src.config import (
     persona_description,
 )
 from src.dashboard import charts
-from src.dashboard.service import DashboardService, money, number, pct, sign_class
+from src.dashboard.service import (
+    DashboardService,
+    broker_label,
+    format_money,
+    money,
+    number,
+    pct,
+    region_label,
+    sign_class,
+)
 from src.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -42,23 +51,24 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app = FastAPI(title=default_service.fund_name, docs_url="/api/docs")
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
     templates.env.filters["money"] = money
+    templates.env.filters["money_currency"] = format_money
     templates.env.filters["pct"] = pct
     templates.env.filters["number"] = number
     templates.env.filters["sign"] = sign_class
+    templates.env.globals["region_label"] = region_label
+    templates.env.globals["broker_label"] = broker_label
 
     _persona_services: Dict[str, DashboardService] = {}
 
     def _get_service(persona: Optional[str] = None) -> DashboardService:
-        """Return the DashboardService for a persona, caching instances."""
         if not persona:
             return default_service
         if persona not in _persona_services:
-            pcfg = get_persona_config(persona)
+            pcfg = get_persona_config(persona, base=config)
             _persona_services[persona] = DashboardService(config=pcfg)
         return _persona_services[persona]
 
     def _persona_nav_items() -> List[Dict[str, str]]:
-        """List of personas for the selector dropdown."""
         return [
             {"id": pid, "description": persona_description(pid)}
             for pid in enabled_personas()
@@ -71,12 +81,16 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         service: Optional[DashboardService] = None,
     ) -> HTMLResponse:
         svc = service or default_service
+        try:
+            pending_count = len(svc.pending_proposals())
+        except Exception:
+            pending_count = 0
         persona_id = svc.persona_id
         base = {
             "fund_name": svc.fund_name,
             "benchmark_label": svc.benchmark_label,
             "is_dry_run": svc.is_dry_run,
-            "pending_count": len(svc.pending_proposals()),
+            "pending_count": pending_count,
             "current_persona": persona_id,
             "persona_description": persona_description(persona_id),
             "personas": _persona_nav_items(),
@@ -87,17 +101,6 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # ------------------------------------------------------------------
     # Pages
     # ------------------------------------------------------------------
-    @app.get("/personas", response_class=HTMLResponse)
-    def personas_page(request: Request) -> HTMLResponse:
-        return render(
-            request,
-            "personas.html",
-            {
-                "page": "personas",
-                "persona_cards": default_service.all_personas_overview(),
-            },
-        )
-
     @app.get("/", response_class=HTMLResponse)
     def overview(
         request: Request, persona: Optional[str] = Query(default=None)
@@ -148,39 +151,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     ) -> HTMLResponse:
         svc = _get_service(persona)
         sectors = svc.sector_weights()
-        pcfg = get_persona_config(persona) if persona else config
+        pcfg = get_persona_config(persona, base=config) if persona else config
         return render(
             request,
             "holdings.html",
             {
                 "page": "holdings",
                 "holdings": svc.holdings(),
-                "mandate": svc.mandate_summary(),
-                "analytics": svc.analytics_summary(),
-                "quarterly_cards": [
-                    {
-                        **card,
-                        "revenue_chart": charts.line_chart(
-                            card["revenue_series"]["dates"],
-                            card["revenue_series"]["values"],
-                        )
-                        if card["revenue_series"]["has_values"]
-                        else "",
-                        "profit_chart": charts.line_chart(
-                            card["profit_series"]["dates"],
-                            card["profit_series"]["values"],
-                        )
-                        if card["profit_series"]["has_values"]
-                        else "",
-                        "opm_chart": charts.line_chart(
-                            card["opm_series"]["dates"],
-                            card["opm_series"]["values"],
-                        )
-                        if card["opm_series"]["has_values"]
-                        else "",
-                    }
-                    for card in svc.quarterly_report_cards()
-                ],
                 "sectors": sectors,
                 "sector_chart": charts.bar_chart(
                     [s["sector"] for s in sectors],
@@ -188,6 +165,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 ),
                 "max_sector_pct": pcfg.get("risk.max_sector_pct"),
                 "max_position_pct": pcfg.get("risk.max_position_pct"),
+                "mandate": svc.mandate_summary(),
+                "analytics": svc.analytics_summary(),
             },
             service=svc,
         )
@@ -198,10 +177,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     ) -> HTMLResponse:
         svc = _get_service(persona)
         return render(
-            request,
-            "news.html",
-            {"page": "news", "digest": svc.digest()},
-            service=svc,
+            request, "news.html", {"page": "news", "digest": svc.digest()}, service=svc
         )
 
     @app.get("/performance", response_class=HTMLResponse)
@@ -249,38 +225,6 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             service=svc,
         )
 
-    @app.get("/learning", response_class=HTMLResponse)
-    def learning(
-        request: Request, persona: Optional[str] = Query(default=None)
-    ) -> HTMLResponse:
-        svc = _get_service(persona)
-        return render(
-            request,
-            "learning.html",
-            {
-                "page": "learning",
-                "summary": svc.learning_summary(),
-                "lessons": svc.learning_lessons(),
-                "reviews": svc.decision_reviews(limit=100),
-            },
-            service=svc,
-        )
-
-    @app.get("/intraday", response_class=HTMLResponse)
-    def intraday(
-        request: Request, persona: Optional[str] = Query(default=None)
-    ) -> HTMLResponse:
-        svc = _get_service(persona)
-        return render(
-            request,
-            "intraday.html",
-            {
-                "page": "intraday",
-                "summary": svc.intraday_summary(),
-            },
-            service=svc,
-        )
-
     @app.get("/journal/{run_id}", response_class=HTMLResponse)
     def run_detail(
         request: Request,
@@ -300,6 +244,86 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "briefing": svc.briefing(run["run_date"]),
             },
             service=svc,
+        )
+
+    @app.get("/personas", response_class=HTMLResponse)
+    def personas_page(request: Request) -> HTMLResponse:
+        grouped = default_service.personas_by_region()
+        return render(
+            request,
+            "personas.html",
+            {
+                "page": "personas",
+                "regions": grouped,
+                "region_labels": {
+                    "IN": region_label("IN"),
+                    "US": region_label("US"),
+                },
+            },
+        )
+
+    @app.get("/intraday", response_class=HTMLResponse)
+    def intraday_page(
+        request: Request,
+        region: Optional[str] = None,
+        persona: Optional[str] = Query(default=None),
+    ) -> HTMLResponse:
+        active = region.upper() if region else None
+        if active and active not in {"IN", "US"}:
+            raise HTTPException(status_code=400, detail="region must be IN or US")
+        personas = default_service.intraday_personas(active)
+        by_region = default_service.personas_by_region()
+        return render(
+            request,
+            "intraday.html",
+            {
+                "page": "intraday",
+                "personas": personas,
+                "intraday_by_region": {
+                    "IN": [p for p in by_region.get("IN", []) if p.get("intraday")],
+                    "US": [p for p in by_region.get("US", []) if p.get("intraday")],
+                },
+                "active_region": active,
+                "region_labels": {
+                    "IN": region_label("IN"),
+                    "US": region_label("US"),
+                },
+            },
+            service=_get_service(persona),
+        )
+
+    @app.get("/intraday/{persona_id}", response_class=HTMLResponse)
+    def intraday_detail(request: Request, persona_id: str) -> HTMLResponse:
+        try:
+            pcfg = get_persona_config(persona_id, base=config)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not pcfg.get("intraday.enabled", False):
+            raise HTTPException(status_code=404, detail="Not an intraday persona")
+
+        persona_svc = DashboardService(config=pcfg)
+        summary = persona_svc.intraday_summary()
+        region = pcfg.market_region
+        currency = str(pcfg.get("fund.base_currency", "INR" if region == "IN" else "USD"))
+        capital = pcfg.secrets.initial_capital
+        persona = {
+            "persona_id": persona_id,
+            "description": persona_description(persona_id),
+            "region": region,
+            "region_label": region_label(region),
+            "currency": currency,
+            "capital": capital,
+            "broker_label": broker_label(pcfg.broker_provider),
+        }
+        return render(
+            request,
+            "intraday_detail.html",
+            {
+                "page": "intraday",
+                "persona": persona,
+                "summary": summary,
+            },
+            service=persona_svc,
         )
 
     # ------------------------------------------------------------------
@@ -386,19 +410,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         svc = _get_service(persona)
         return JSONResponse(svc.risk_profile() or {})
 
-    @app.get("/api/learning")
-    def api_learning(persona: Optional[str] = Query(default=None)) -> JSONResponse:
-        svc = _get_service(persona)
-        return JSONResponse(svc.learning_payload())
-
-    @app.get("/api/intraday")
-    def api_intraday(persona: Optional[str] = Query(default=None)) -> JSONResponse:
-        svc = _get_service(persona)
-        return JSONResponse(svc.intraday_summary() or {})
-
     @app.get("/api/personas")
     def api_personas() -> JSONResponse:
-        return JSONResponse(default_service.all_personas_overview())
+        return JSONResponse(default_service.personas_by_region())
+
+    @app.get("/api/intraday")
+    def api_intraday(region: Optional[str] = None) -> JSONResponse:
+        active = region.upper() if region else None
+        return JSONResponse(default_service.intraday_personas(active))
 
     return app
 

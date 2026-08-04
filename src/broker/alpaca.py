@@ -80,7 +80,9 @@ class AlpacaClient(BrokerClient):
 
     def _throttle(self) -> None:
         interval = float(
-            self._config.get("alpaca.min_call_interval_seconds", 0.25) or 0.25
+            self._config.get("connectors.alpaca.min_call_interval_seconds")
+            or self._config.get("alpaca.min_call_interval_seconds", 0.25)
+            or 0.25
         )
         elapsed = time.monotonic() - self._last_call_at
         if elapsed < interval:

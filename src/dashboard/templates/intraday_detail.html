@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}{{ persona.persona_id }} intraday &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<p class="subtitle"><a href="/intraday{% if persona.region == 'US' %}?region=US{% elif persona.region == 'IN' %}?region=IN{% endif %}">&larr; Intraday</a></p>
+
+<h1>{{ persona.persona_id }}</h1>
+<p class="subtitle">
+  <span class="region-badge region-{{ persona.region | lower }}">{{ persona.region_label }}</span>
+  {{ persona.description }} &middot; {{ persona.broker_label }}
+</p>
+
+{% if not summary %}
+<div class="panel">
+  <p class="empty">
+    No intraday paper result saved yet for <code>{{ persona.persona_id }}</code>.
+  </p>
+  <code class="cmd">python run_daily.py analyse --persona {{ persona.persona_id }} --as-of YYYY-MM-DD</code>
+  <p class="muted" style="margin-top:12px">
+    Live polling during the session:
+    <code>python run_daily.py watch --persona {{ persona.persona_id }}</code>
+  </p>
+</div>
+{% else %}
+
+{% if summary.label == 'live paper' %}
+<p class="subtitle">
+  <span class="tag tag-intraday">Live paper</span>
+  {% if summary.active %}Session active{% else %}Session ended{% endif %}
+  {% if summary.last_scan_at %} &middot; last scan {{ summary.last_scan_at }}{% endif %}
+</p>
+{% endif %}
+
+<div class="stats">
+  <div class="stat">
+    <div class="label">Net P&amp;L</div>
+    <div class="value {{ summary.total_net_pnl | sign }}">
+      {{ summary.total_net_pnl | money_currency(persona.currency) }}
+    </div>
+    <div class="sub">{{ summary.start_date }} to {{ summary.end_date }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Return</div>
+    <div class="value {{ summary.total_return_pct | sign }}">
+      {{ summary.total_return_pct | pct(2, true) }}
+    </div>
+    <div class="sub">on {{ persona.capital | money_currency(persona.currency) }} capital</div>
+  </div>
+  <div class="stat">
+    <div class="label">Trades</div>
+    <div class="value">{{ summary.total_trades }}</div>
+    <div class="sub">{{ summary.win_rate_pct | pct(1) }} win rate</div>
+  </div>
+  <div class="stat">
+    <div class="label">Expectancy</div>
+    <div class="value {{ summary.expectancy_r | sign }}">
+      {{ summary.expectancy_r | number(3) }}R
+    </div>
+    {% if summary.profit_factor is defined and summary.profit_factor is not none %}
+    <div class="sub">PF {{ summary.profit_factor | number(2) }}</div>
+    {% endif %}
+  </div>
+</div>
+
+{% if summary.strategy_pnl %}
+<div class="panel">
+  <h2>By strategy</h2>
+  <div class="bars">
+    {% for name, pnl in summary.strategy_pnl.items() %}
+    <div class="bar-row">
+      <span class="bar-label">{{ name }}</span>
+      <span class="bar-value {{ pnl | sign }}">{{ pnl | money_currency(persona.currency) }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% set trades = summary.trades if summary.trades is defined else summary.completed_trades %}
+{% set open_positions = summary.open_positions if summary.open_positions is defined else [] %}
+
+{% if open_positions %}
+<div class="panel">
+  <h2>Open positions</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>Strategy</th>
+        <th>Side</th>
+        <th>Qty</th>
+        <th>Entry</th>
+        <th>Stop</th>
+        <th>Target</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in open_positions %}
+      <tr>
+        <td><strong>{{ t.symbol }}</strong></td>
+        <td>{{ t.strategy }}</td>
+        <td>{{ t.side }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+        <td>{{ t.stop_price | number(2) }}</td>
+        <td>{{ t.target_price | number(2) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if trades %}
+<div class="panel">
+  <h2>Completed trades</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>Strategy</th>
+        <th>Side</th>
+        <th>Qty</th>
+        <th>Entry</th>
+        <th>Exit</th>
+        <th>Net P&amp;L</th>
+        <th>R</th>
+        <th>Exit reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in trades %}
+      <tr>
+        <td><strong>{{ t.symbol }}</strong></td>
+        <td>{{ t.strategy }}</td>
+        <td>{{ t.side }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+        <td>{{ t.exit_time }} @ {{ t.exit_price | number(2) }}</td>
+        <td class="{{ t.net_pnl | sign }}">{{ t.net_pnl | money_currency(persona.currency) }}</td>
+        <td class="{{ t.r_multiple | sign }}">{{ t.r_multiple | number(3) }}</td>
+        <td>{{ t.exit_reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

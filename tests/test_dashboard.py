@@ -19,7 +19,6 @@ from src.dashboard.service import DashboardService
 from src.journal.repository import JournalRepository
 from src.models import (
     Action,
-    MarketRegimeSnapshot,
     PortfolioRiskProfile,
     RiskMetrics,
     NewsDigest,
@@ -27,15 +26,24 @@ from src.models import (
 )
 from tests.conftest import make_diversified_portfolio, make_scores
 
-PAGES = ["/", "/proposals", "/holdings", "/news", "/performance", "/intraday", "/learning", "/journal"]
+PAGES = [
+    "/",
+    "/proposals",
+    "/holdings",
+    "/news",
+    "/performance",
+    "/personas",
+    "/intraday",
+    "/journal",
+]
 API = [
     "/api/overview",
     "/api/holdings",
     "/api/proposals",
     "/api/performance",
     "/api/risk",
+    "/api/personas",
     "/api/intraday",
-    "/api/learning",
 ]
 
 
@@ -99,84 +107,33 @@ def seed_history(repo: JournalRepository, days: int = 40) -> None:
             daily_return_pct=0.06,
             benchmark_return_pct=0.04,
         )
-    risk_profile = PortfolioRiskProfile(
-        as_of=date.today(),
-        portfolio_beta=0.98,
-        portfolio_vol_annualised=16.4,
-        tracking_error_pct=6.2,
-        active_share_pct=71.0,
-        active_factor_share_pct=38.0,
-        active_selection_share_pct=62.0,
-        concentration_top5_pct=32.0,
-        effective_positions=12.4,
-        avg_pairwise_correlation=0.41,
-        market_regime=MarketRegimeSnapshot(
-            as_of=date.today(),
-            regime="elevated",
-            score=48.2,
-            components={"volatility": 60.0, "drawdown": 20.0, "breadth": 55.0},
-            evidence=[
-                "21-day benchmark volatility is 18.0% annualised",
-                "55% of priced universe names are above their 200-DMA",
-            ],
-            warnings=["Market regime is elevated"],
-        ),
-        per_position={
-            p.symbol: RiskMetrics(
-                symbol=p.symbol,
-                beta=1.02,
-                idiosyncratic_vol=19.0,
-                risk_contribution_pct=7.1,
-                pct_of_adv=0.4,
-            )
-            for p in portfolio.positions
-        },
-        warnings=["Tracking error 6.2% is within the limit"],
-    )
     repo.record_position_snapshot(
         date.today(),
         portfolio,
         scores={p.symbol: make_scores(p.symbol) for p in portfolio.positions},
-        risk_profile=risk_profile,
-    )
-    repo.record_risk_profile(date.today(), risk_profile)
-
-
-def seed_learning(repo: JournalRepository) -> None:
-    run_id = seed_run(repo)
-    [proposal_row] = repo.proposals_for_run(run_id)
-    review = {
-        "proposal_id": proposal_row["id"],
-        "trade_id": None,
-        "review_window_days": 90,
-        "proposal_date": date.today().isoformat(),
-        "review_date": date.today().isoformat(),
-        "symbol": "WIPRO",
-        "action": "BUY",
-        "status": "executed",
-        "label": "bad_decision_bad_outcome",
-        "stock_return_pct": -6.0,
-        "benchmark_return_pct": 1.0,
-        "excess_return_pct": -7.0,
-        "max_drawdown_pct": -9.0,
-        "realised_pnl": None,
-        "evidence": {"source": "test"},
-        "recommendation": "Research this pattern before repeating it.",
-    }
-    repo.upsert_decision_review(review)
-    repo.upsert_learning_lesson(
-        {
-            "label": "bad_decision_bad_outcome",
-            "status": "watch",
-            "evidence_count": 1,
-            "symbol_count": 1,
-            "review_date_count": 1,
-            "avg_excess_return_pct": -7.0,
-            "avg_stock_return_pct": -6.0,
-            "confidence": 0.43,
-            "recommendation": "Research this pattern before repeating it.",
-            "evidence": {"symbols": ["WIPRO"]},
-        }
+        risk_profile=PortfolioRiskProfile(
+            as_of=date.today(),
+            portfolio_beta=0.98,
+            portfolio_vol_annualised=16.4,
+            tracking_error_pct=6.2,
+            active_share_pct=71.0,
+            active_factor_share_pct=38.0,
+            active_selection_share_pct=62.0,
+            concentration_top5_pct=32.0,
+            effective_positions=12.4,
+            avg_pairwise_correlation=0.41,
+            per_position={
+                p.symbol: RiskMetrics(
+                    symbol=p.symbol,
+                    beta=1.02,
+                    idiosyncratic_vol=19.0,
+                    risk_contribution_pct=7.1,
+                    pct_of_adv=0.4,
+                )
+                for p in portfolio.positions
+            },
+            warnings=["Tracking error 6.2% is within the limit"],
+        ),
     )
 
 
@@ -199,13 +156,6 @@ def test_empty_overview_tells_the_user_what_to_do(client) -> None:
     body = client.get("/").text
     assert "has not run yet" in body
     assert "run_daily.py" in body
-
-
-def test_personas_page_lists_calan_as_intraday(client) -> None:
-    body = client.get("/personas").text
-    assert "Calan" in body
-    assert "Paper/backtest" in body
-    assert "Sector modules:" in body
 
 
 # ----------------------------------------------------------------------
@@ -238,7 +188,6 @@ def test_proposal_card_shows_rationale_thesis_and_warnings(client, repo) -> None
     assert "Margins hold" in body
     assert "overbought" in body
     assert "initial_build" in body
-    assert "Persona Constitution" in body
 
 
 def test_mandatory_proposal_is_marked_as_rule_enforced(client, repo) -> None:
@@ -255,7 +204,6 @@ def test_holdings_page_lists_positions_with_risk_metrics(client, repo) -> None:
     assert "TCS" in body
     assert "Idio vol" in body
     assert "Sector exposure" in body
-    assert "Mandate and Analytics" in body
 
 
 def test_performance_page_reports_excess_return(client, repo) -> None:
@@ -265,24 +213,6 @@ def test_performance_page_reports_excess_return(client, repo) -> None:
     assert "Excess return" in body
     assert "Sharpe" in body
     assert "<svg" in body
-
-
-def test_learning_page_shows_lessons_and_reviews(client, repo) -> None:
-    seed_learning(repo)
-
-    body = client.get("/learning").text
-    assert "bad_decision_bad_outcome" in body
-    assert "Research this pattern" in body
-    assert "WIPRO" in body
-
-
-def test_learning_api_returns_summary_lessons_and_reviews(client, repo) -> None:
-    seed_learning(repo)
-
-    payload = client.get("/api/learning").json()
-    assert payload["summary"]["reviewed_decisions"] == 1
-    assert payload["lessons"][0]["label"] == "bad_decision_bad_outcome"
-    assert payload["reviews"][0]["symbol"] == "WIPRO"
 
 
 def test_news_page_shows_the_digest(client, repo, temp_config) -> None:
@@ -432,26 +362,6 @@ def test_sector_weights_sum_to_the_invested_share(service, repo) -> None:
     assert abs(total - invested_pct) < 0.5
 
 
-def test_overview_exposes_market_regime(service, repo) -> None:
-    seed_run(repo)
-    seed_history(repo)
-
-    overview = service.overview()
-
-    assert overview["market_regime"]["regime"] == "elevated"
-    assert overview["market_regime"]["score"] == 48.2
-
-
-def test_risk_profile_exposes_market_regime(service, repo) -> None:
-    seed_history(repo)
-
-    risk = service.risk_profile()
-
-    assert risk is not None
-    assert risk["market_regime"]["regime"] == "elevated"
-    assert risk["market_regime"]["evidence"]
-
-
 def test_briefing_is_served_when_it_exists(service, temp_config) -> None:
     today = date.today()
     path = temp_config.briefing_dir / f"briefing_{today.isoformat()}.txt"
@@ -460,3 +370,114 @@ def test_briefing_is_served_when_it_exists(service, temp_config) -> None:
     assert "DAILY BRIEFING" in (service.briefing(today.isoformat()) or "")
     assert service.briefing("not-a-date") is None
     assert service.briefing("1999-01-01") is None
+
+
+def test_personas_page_groups_india_and_us(client) -> None:
+    body = client.get("/personas").text
+    assert "India" in body
+    assert "United States" in body
+    assert "calan_us" in body
+    assert "balanced_us" in body
+    assert "calan" in body
+
+
+def test_intraday_page_lists_regions(client) -> None:
+    body = client.get("/intraday").text
+    assert "Intraday" in body
+    assert "calan_us" in body
+    assert "revert" in body
+
+
+def test_intraday_detail_renders_live_paper_completed_trades(client, temp_config) -> None:
+    intraday_dir = temp_config.root / "data" / "intraday"
+    intraday_dir.mkdir(parents=True, exist_ok=True)
+    (intraday_dir / "calan_latest.json").write_text(
+        """{
+          "persona_id": "calan",
+          "start_date": "2026-08-04",
+          "end_date": "2026-08-04",
+          "total_net_pnl": -180.03,
+          "total_return_pct": -0.04,
+          "total_trades": 2,
+          "win_rate_pct": 50.0,
+          "expectancy_r": -0.045,
+          "label": "live paper",
+          "active": true,
+          "completed_trades": [{
+            "symbol": "HDFCBANK",
+            "strategy": "opening_range_breakout",
+            "side": "SELL",
+            "quantity": 134,
+            "entry_time": "2026-08-04 10:10:00",
+            "exit_time": "2026-08-04 11:30:00",
+            "entry_price": 746.2,
+            "exit_price": 742.41,
+            "net_pnl": 385.22,
+            "r_multiple": 0.1926,
+            "exit_reason": "target"
+          }],
+          "open_positions": [{
+            "symbol": "HINDALCO",
+            "strategy": "opening_range_breakout",
+            "side": "SELL",
+            "quantity": 99,
+            "entry_time": "2026-08-04 12:05:00",
+            "entry_price": 1001.9,
+            "stop_price": 1011.51,
+            "target_price": 987.99
+          }]
+        }""",
+        encoding="utf-8",
+    )
+
+    body = client.get("/intraday/calan").text
+    assert "HDFCBANK" in body
+    assert "HINDALCO" in body
+    assert "Live paper" in body
+    assert "Open positions" in body
+
+
+def test_intraday_detail_renders_saved_summary(client, temp_config) -> None:
+    intraday_dir = temp_config.root / "data" / "intraday"
+    intraday_dir.mkdir(parents=True, exist_ok=True)
+    (intraday_dir / "calan_us_latest.json").write_text(
+        """{
+          "persona_id": "calan_us",
+          "start_date": "2026-08-03",
+          "end_date": "2026-08-03",
+          "total_net_pnl": 102.93,
+          "total_return_pct": 0.21,
+          "total_trades": 3,
+          "win_rate_pct": 66.7,
+          "expectancy_r": 0.172,
+          "strategy_pnl": {"opening_range_breakout": 102.93},
+          "trades": [{
+            "symbol": "NVDA",
+            "strategy": "opening_range_breakout",
+            "side": "BUY",
+            "quantity": 49,
+            "entry_time": "2026-08-03 10:00:00",
+            "exit_time": "2026-08-03 10:15:00",
+            "entry_price": 202.4,
+            "exit_price": 205.08,
+            "net_pnl": 116.46,
+            "r_multiple": 0.582,
+            "exit_reason": "trailing_stop"
+          }]
+        }""",
+        encoding="utf-8",
+    )
+
+    response = client.get("/intraday/calan_us")
+    assert response.status_code == 200
+    body = response.text
+    assert "NVDA" in body
+    assert "trailing_stop" in body
+    assert "United States" in body or "region-us" in body
+
+
+def test_api_personas_returns_regions(client) -> None:
+    payload = client.get("/api/personas").json()
+    assert "IN" in payload
+    assert "US" in payload
+    assert any(row["persona_id"] == "calan_us" for row in payload["US"])
