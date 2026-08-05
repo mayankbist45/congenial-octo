@@ -160,6 +160,17 @@ personas:
         veto_scalping: true
         min_watch_confidence: 0.55
         min_trade_confidence: 0.55
+      fundamentals:
+        enabled: true
+        cache_only: true
+        high_pe_threshold: 40
+        value_pe_threshold: 20
+        min_growth_pct: 10
+        max_peg_growth: 2.5
+        block_value_trap: true
+        block_momentum_on_value: true
+        growth_confidence_boost: 0.05
+        value_confidence_penalty: 0.08
 
   revert_us:
     enabled: true

@@ -102,6 +102,8 @@ class OpeningRangeBreakoutStrategy(IntradayStrategy):
         volume_multiple = _cfg_float(config, "volume_spike_multiple", 1.2)
         stop_buffer = _cfg_float(config, "stop_buffer_pct", 0.05) / 100.0
         target_r = _cfg_float(config, "target_r_multiple", 1.5)
+        min_or_range = _cfg_float(config, "orb_min_range_pct", 0.0)
+        min_or_trend = _cfg_float(config, "orb_min_trend_at_signal", 0.0)
 
         for ts, row in rest.iterrows():
             avg_vol = _avg_volume(data.loc[:ts].iloc[:-1])
@@ -110,6 +112,18 @@ class OpeningRangeBreakoutStrategy(IntradayStrategy):
             close = float(row["close"])
             vwap_frame = _with_vwap(data.loc[:ts])
             vwap = float(vwap_frame["vwap"].iloc[-1]) if not vwap_frame.empty else close
+            if min_or_range > 0 and low > 0:
+                or_range_pct = (high / low - 1.0) * 100.0
+                if or_range_pct < min_or_range:
+                    continue
+            if min_or_trend > 0:
+                from src.intraday.ranking import IntradayRanker
+
+                trend = IntradayRanker.trend_cleanliness(
+                    frame, config, pd.Timestamp(ts.to_pydatetime())
+                )
+                if trend < min_or_trend:
+                    continue
             if close > high and close >= vwap:
                 stop = low * (1.0 - stop_buffer)
                 target = close + (close - stop) * target_r
@@ -236,20 +250,30 @@ class ScalpingStrategy(IntradayStrategy):
         min_edge = _cfg_float(config, "scalping_min_net_edge_bps", 30.0) / 10000.0
         slippage_round_trip = _cfg_float(config, "slippage_bps_per_side", 2.0) * 2 / 10000.0
         hold = timedelta(minutes=_cfg_int(config, "scalping_max_hold_minutes", 15))
+        require_vwap = bool(config.get("intraday.scalping_require_vwap", True))
         if target_pct <= stop_pct + min_edge + slippage_round_trip:
             return []
 
-        for i in range(3, len(data)):
-            ts = data.index[i].to_pydatetime()
+        vwap_data = _with_vwap(data) if require_vwap else data
+
+        for i in range(3, len(vwap_data)):
+            ts = vwap_data.index[i].to_pydatetime()
             if ts < start or ts > end:
                 continue
-            prev = data.iloc[i - 3 : i]
-            row = data.iloc[i]
+            prev = vwap_data.iloc[i - 3 : i]
+            row = vwap_data.iloc[i]
             close = float(row["close"])
-            avg_vol = _avg_volume(data.iloc[:i])
+            avg_vol = _avg_volume(vwap_data.iloc[:i])
             if avg_vol > 0 and float(row["volume"]) < avg_vol * 1.5:
                 continue
+            vwap = (
+                float(row["vwap"])
+                if require_vwap and "vwap" in row.index and pd.notna(row["vwap"])
+                else close
+            )
             if close > float(prev["high"].max()):
+                if require_vwap and close < vwap:
+                    continue
                 return [
                     IntradaySignal(
                         symbol,
@@ -259,11 +283,13 @@ class ScalpingStrategy(IntradayStrategy):
                         close,
                         close * (1.0 - stop_pct),
                         close * (1.0 + target_pct),
-                        "Momentum scalp cleared recent highs",
+                        "Momentum scalp cleared recent highs above VWAP",
                         min(ts + hold, _force_exit_dt(ts, config)),
                     )
                 ]
             if close < float(prev["low"].min()):
+                if require_vwap and close > vwap:
+                    continue
                 return [
                     IntradaySignal(
                         symbol,
@@ -273,7 +299,7 @@ class ScalpingStrategy(IntradayStrategy):
                         close,
                         close * (1.0 + stop_pct),
                         close * (1.0 - target_pct),
-                        "Momentum scalp cleared recent lows",
+                        "Momentum scalp cleared recent lows below VWAP",
                         min(ts + hold, _force_exit_dt(ts, config)),
                     )
                 ]

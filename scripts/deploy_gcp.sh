@@ -152,6 +152,11 @@ push() {
                 sudo chgrp fund '$REMOTE_DIR/.env' &&
                 chmod 640 '$REMOTE_DIR/.env'" ||
             die "installing .env failed"
+        # Confirm we did not install the laptop's socket DSN on the VM.
+        ssh_vm "grep '^DATABASE_URL=' '$REMOTE_DIR/.env' | grep -q '127.0.0.1' &&
+                echo '  DATABASE_URL preserved (VM localhost PostgreSQL)' ||
+                echo '  WARNING: DATABASE_URL missing or not 127.0.0.1 — run bootstrap_vm.sh on the VM'" ||
+            true
     else
         echo "  no local .env found; create $REMOTE_DIR/.env on the VM by hand"
     fi

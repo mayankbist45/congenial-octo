@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from unittest.mock import MagicMock
 
-from src.config import get_persona_config
+from src.config import Config, get_persona_config
 from src.intraday.agent import IntradayAgent
 from src.intraday.models import IntradaySignal, RankedStock
 from src.intraday.ranking import IntradayRanker
@@ -38,10 +38,100 @@ def calan_config():
     return get_persona_config("calan")
 
 
-def test_load_strategies_excludes_scalping_by_default(calan_config):
+def test_load_strategies_includes_scalping_for_calan(calan_config):
     names = [s.name for s in load_strategies(calan_config)]
-    assert names == ["opening_range_breakout", "vwap_pullback"]
-    assert ScalpingStrategy().signals("TEST", _sample_frame(), calan_config) == []
+    assert names == ["scalping"]
+
+
+def test_scalping_strategy_respects_veto_flag(calan_config):
+    vetoed = calan_config.raw.copy()
+    vetoed.setdefault("intraday", {}).setdefault("agent", {})["veto_scalping"] = True
+    veto_config = Config(
+        raw=vetoed,
+        secrets=calan_config.secrets,
+        root=calan_config.root,
+        persona_id=calan_config.persona_id,
+    )
+    assert ScalpingStrategy().signals("TEST", _sample_frame(), veto_config) == []
+
+
+def test_agent_rules_veto_scalping_when_disabled(calan_config):
+    vetoed = calan_config.raw.copy()
+    vetoed.setdefault("intraday", {}).setdefault("agent", {})["veto_scalping"] = True
+    config = Config(
+        raw=vetoed,
+        secrets=calan_config.secrets,
+        root=calan_config.root,
+        persona_id=calan_config.persona_id,
+    )
+    agent = IntradayAgent(config)
+    signal = IntradaySignal(
+        "RELIANCE",
+        "scalping",
+        "BUY",
+        datetime(2026, 8, 3, 10, 0),
+        100.0,
+        99.85,
+        100.50,
+        "test",
+    )
+    ranked = RankedStock(
+        symbol="RELIANCE",
+        score=50.0,
+        turnover=1e8,
+        volume_expansion=2.0,
+        range_pct=1.0,
+        gap_pct=1.0,
+        vwap_distance_pct=0.1,
+        prior_level_distance_pct=0.5,
+        trend_cleanliness=0.6,
+        in_play=True,
+    )
+    frame = _sample_frame()
+    gate = agent.gate_trade(
+        signal, ranked, frame, datetime(2026, 8, 3, 10, 0), 0.0, {"confidence": 0.7}, 180.0
+    )
+    assert gate["decision"] == "veto"
+
+
+def test_agent_rules_approve_scalping_when_enabled(calan_config):
+    agent = IntradayAgent(calan_config)
+    agent._llm = MagicMock()
+    agent._llm.available = False
+    signal = IntradaySignal(
+        "RELIANCE",
+        "scalping",
+        "BUY",
+        datetime(2026, 8, 3, 10, 0),
+        100.0,
+        99.85,
+        100.50,
+        "test",
+    )
+    ranked = RankedStock(
+        symbol="RELIANCE",
+        score=50.0,
+        turnover=1e8,
+        volume_expansion=2.0,
+        range_pct=1.0,
+        gap_pct=1.0,
+        vwap_distance_pct=0.1,
+        prior_level_distance_pct=0.5,
+        trend_cleanliness=0.6,
+        in_play=True,
+    )
+    frame = _sample_frame()
+    gate = agent.gate_trade(
+        signal,
+        ranked,
+        frame,
+        datetime(2026, 8, 3, 10, 0),
+        0.0,
+        {"confidence": 0.7},
+        180.0,
+    )
+    assert gate["decision"] == "approve"
+    assert gate["use_trailing_stop"] is False
 
 
 def test_ranker_marks_stocks_in_play(calan_config):
@@ -72,35 +162,6 @@ def test_agent_rules_catalyst_scan(calan_config):
     ]
     result = agent.catalyst_scan(ranked, {"RELIANCE": frame}, datetime(2026, 8, 3, 9, 20))
     assert len(result.get("watchlist", [])) >= 1
-
-
-def test_agent_rules_veto_scalping(calan_config):
-    agent = IntradayAgent(calan_config)
-    signal = IntradaySignal(
-        "RELIANCE",
-        "scalping",
-        "BUY",
-        datetime(2026, 8, 3, 10, 0),
-        100.0,
-        99.5,
-        100.5,
-        "test",
-    )
-    ranked = RankedStock(
-        symbol="RELIANCE",
-        score=50.0,
-        turnover=1e8,
-        volume_expansion=2.0,
-        range_pct=1.0,
-        gap_pct=1.0,
-        vwap_distance_pct=0.1,
-        prior_level_distance_pct=0.5,
-        trend_cleanliness=0.6,
-        in_play=True,
-    )
-    frame = _sample_frame()
-    gate = agent.gate_trade(signal, ranked, frame, datetime(2026, 8, 3, 10, 0), 0.0, None, 180.0)
-    assert gate["decision"] == "veto"
 
 
 def test_ranker_allows_volume_in_play_despite_choppy_open(calan_config):
@@ -286,6 +347,31 @@ def test_persona_prompt_bundle_unknown_falls_back_to_calan():
     bundle = get_persona_prompt_bundle("unknown_persona")
     calan = get_persona_prompt_bundle("calan")
     assert bundle.catalyst_prompt == calan.catalyst_prompt
+
+
+def test_symbols_for_poll_includes_watchlist(calan_config):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from src.intraday.models import PaperState
+    from src.intraday.watch import IntradayWatchEngine
+
+    engine = IntradayWatchEngine(
+        calan_config,
+        data_service=MagicMock(),
+        symbols=["AAPL", "MSFT", "NVDA", "GOOGL", "AMD", "META"],
+    )
+    state = PaperState(
+        trade_date=datetime(2026, 8, 5).date(),
+        watchlist=[
+            {"symbol": "AMD", "in_play": True},
+            {"symbol": "GOOGL", "in_play": True},
+        ],
+    )
+    now = datetime(2026, 8, 5, 11, 0, tzinfo=ZoneInfo("America/New_York"))
+    polled = engine._symbols_for_poll(state, now)
+    assert "AMD" in polled
+    assert "GOOGL" in polled
 
 
 def test_revert_agent_regime_rules():

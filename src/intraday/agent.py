@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.config import Config, get_config
 from src.intraday.briefing import build_catalyst_briefing, build_trade_gate_briefing
+from src.intraday.fundamental_style import get_style_profile
 from src.intraday.models import IntradaySignal, RankedStock
 from src.intraday.ranking import IntradayRanker
 from src.intraday.prompts import get_persona_prompt_bundle
@@ -62,7 +63,8 @@ class IntradayAgent:
         )
         if rules["decision"] == "veto":
             return rules
-        if self.enabled and self._llm.available:
+        use_llm = self._config.get("intraday.agent.gate_use_llm", True)
+        if use_llm and self.enabled and self._llm.available:
             llm = self._gate_llm(
                 signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
             )
@@ -199,16 +201,28 @@ class IntradayAgent:
             if item.volume_expansion >= 2.0:
                 conf += 0.05
             catalyst = "technical_only" if item.trend_cleanliness >= 0.6 else "index_beta"
-            watchlist.append(
-                {
-                    "symbol": item.symbol,
-                    "in_play": True,
-                    "catalyst_class": catalyst,
-                    "direction_bias": "either",
-                    "confidence": round(min(conf, 0.95), 2),
-                    "rationale": f"Quant in_play: {'; '.join(item.reasons[:3])}",
-                }
-            )
+            entry: Dict[str, object] = {
+                "symbol": item.symbol,
+                "in_play": True,
+                "catalyst_class": catalyst,
+                "direction_bias": "either",
+                "confidence": round(min(conf, 0.95), 2),
+                "rationale": f"Quant in_play: {'; '.join(item.reasons[:3])}",
+            }
+            profile = get_style_profile(self._config, item.symbol)
+            if profile is not None:
+                entry["fundamental_style"] = profile.label
+                entry["intraday_bias"] = profile.intraday_bias
+                entry["fundamental_summary"] = profile.summary()
+                if profile.intraday_bias == "momentum" and profile.label == "growth":
+                    entry["confidence"] = round(
+                        min(float(entry["confidence"]) + 0.03, 0.95), 2
+                    )
+                elif profile.intraday_bias == "mean_reversion":
+                    entry["confidence"] = round(
+                        max(float(entry["confidence"]) - 0.05, 0.0), 2
+                    )
+            watchlist.append(entry)
             if len(watchlist) >= 5:
                 break
         quality = "good" if len(watchlist) >= 2 else "fair" if watchlist else "poor"
@@ -531,9 +545,10 @@ class IntradayAgent:
             }
         veto_reasons: List[str] = []
         sip = self._config.get("intraday.stocks_in_play", {}) or {}
-        if signal.strategy == "scalping" or self._config.get("intraday.agent.veto_scalping", True):
-            if signal.strategy == "scalping":
-                veto_reasons.append("scalping disabled")
+        if signal.strategy == "scalping" and self._config.get(
+            "intraday.agent.veto_scalping", True
+        ):
+            veto_reasons.append("scalping disabled")
 
         end_parts = str(self._config.get("intraday.trade_window_end", "14:30")).split(":")
         window_end = time(int(end_parts[0]), int(end_parts[1]))
@@ -545,8 +560,27 @@ class IntradayAgent:
         if daily_pnl <= -max_loss:
             veto_reasons.append("daily loss limit")
 
+        style = get_style_profile(self._config, signal.symbol)
+        fund_cfg = self._config.get("intraday.fundamentals", {}) or {}
+        momentum_strats = {"opening_range_breakout", "vwap_pullback", "scalping"}
+        if (
+            style is not None
+            and signal.strategy in momentum_strats
+            and fund_cfg.get("enabled")
+        ):
+            if style.label == "value_trap" and fund_cfg.get("block_value_trap", True):
+                veto_reasons.append(f"fundamental value trap ({style.rationale})")
+            if (
+                style.intraday_bias == "mean_reversion"
+                and fund_cfg.get("block_momentum_on_value", True)
+                and style.label in ("value", "value_trap")
+            ):
+                veto_reasons.append(
+                    f"fundamental {style.label}; prefer revert persona for fades"
+                )
+
         min_conf = float(self._config.get("intraday.agent.min_trade_confidence", 0.55) or 0.55)
-        conf = self._trade_confidence(watchlist_entry, ranked)
+        conf = self._trade_confidence(watchlist_entry, ranked, style)
         if conf < min_conf:
             veto_reasons.append("catalyst confidence too low")
 
@@ -557,17 +591,37 @@ class IntradayAgent:
         net_reward = reward - signal.entry_price * cost_pct / 100.0
         min_rr = float(
             sip.get(
-                "min_rr_orb" if signal.strategy == "opening_range_breakout" else "min_rr_vwap",
-                1.35 if signal.strategy == "opening_range_breakout" else 1.5,
+                "min_rr_orb"
+                if signal.strategy == "opening_range_breakout"
+                else "min_rr_scalping"
+                if signal.strategy == "scalping"
+                else "min_rr_vwap",
+                1.35
+                if signal.strategy == "opening_range_breakout"
+                else 1.2
+                if signal.strategy == "scalping"
+                else 1.5,
             )
-            or (1.35 if signal.strategy == "opening_range_breakout" else 1.5)
+            or (
+                1.35
+                if signal.strategy == "opening_range_breakout"
+                else 1.2
+                if signal.strategy == "scalping"
+                else 1.5
+            )
         )
         if risk > 0 and net_reward / risk < min_rr:
             veto_reasons.append(f"R:R after costs {net_reward / risk:.2f} < {min_rr}")
 
         stop_pct = risk / signal.entry_price * 100.0 if signal.entry_price > 0 else 0.0
-        min_stop_pct = float(sip.get("min_stop_pct", 0.20) or 0.20)
-        if stop_pct < min_stop_pct:
+        if signal.strategy == "scalping":
+            min_stop_pct = float(
+                self._config.get("intraday.scalping_stop_pct", 0.15) or 0.15
+            )
+        else:
+            min_stop_pct = float(sip.get("min_stop_pct", 0.20) or 0.20)
+        # Allow tiny float slack on stop distance (~0.005%).
+        if stop_pct + 0.005 < min_stop_pct:
             veto_reasons.append(f"stop too tight ({stop_pct:.2f}% < {min_stop_pct:.2f}%)")
 
         if signal.strategy == "opening_range_breakout":
@@ -595,9 +649,10 @@ class IntradayAgent:
 
         min_signal_trend = float(
             sip.get(
-                "min_trend_at_signal",
-                sip.get("min_trend_cleanliness", 0.5),
+                "min_trend_at_signal_scalping" if signal.strategy == "scalping" else "min_trend_at_signal",
+                sip.get("min_trend_at_signal", sip.get("min_trend_cleanliness", 0.5)),
             )
+            or sip.get("min_trend_at_signal", sip.get("min_trend_cleanliness", 0.5))
             or 0.5
         )
         signal_trend = IntradayRanker.trend_cleanliness(
@@ -611,6 +666,7 @@ class IntradayAgent:
             )
 
         decision = "veto" if veto_reasons else "approve"
+        use_trailing = decision == "approve" and signal.strategy != "scalping"
         return {
             "decision": decision,
             "symbol": signal.symbol,
@@ -618,7 +674,7 @@ class IntradayAgent:
             "side": signal.side,
             "adjusted_stop": None,
             "adjusted_target": None,
-            "use_trailing_stop": decision == "approve",
+            "use_trailing_stop": use_trailing,
             "trailing_stop_pct": float(
                 self._config.get("intraday.trailing_stop_pct", 0.25) or 0.25
             ),
@@ -834,19 +890,35 @@ class IntradayAgent:
         self,
         watchlist_entry: Optional[Dict[str, object]],
         ranked: RankedStock,
+        style: Optional[object] = None,
     ) -> float:
         """Confidence for the trade gate — watchlist entry or quant fallback."""
         if watchlist_entry is not None:
-            return float(watchlist_entry.get("confidence", 0.0) or 0.0)
-        if not ranked.in_play:
+            conf = float(watchlist_entry.get("confidence", 0.0) or 0.0)
+        elif not ranked.in_play:
             return 0.0
-        sip = self._config.get("intraday.stocks_in_play", {}) or {}
-        min_gap = float(sip.get("min_gap_pct", 0.8) or 0.8)
-        conf = 0.55 + ranked.trend_cleanliness * 0.3
-        if ranked.volume_expansion >= float(sip.get("min_rvol", 1.5) or 1.5):
-            conf += 0.05
-        if ranked.gap_pct is not None and abs(ranked.gap_pct) >= min_gap:
-            conf += 0.10
+        else:
+            sip = self._config.get("intraday.stocks_in_play", {}) or {}
+            min_gap = float(sip.get("min_gap_pct", 0.8) or 0.8)
+            conf = 0.55 + ranked.trend_cleanliness * 0.3
+            if ranked.volume_expansion >= float(sip.get("min_rvol", 1.5) or 1.5):
+                conf += 0.05
+            if ranked.gap_pct is not None and abs(ranked.gap_pct) >= min_gap:
+                conf += 0.10
+
+        if style is None:
+            style = get_style_profile(self._config, ranked.symbol)
+        fund_cfg = self._config.get("intraday.fundamentals", {}) or {}
+        if style is not None and fund_cfg.get("enabled"):
+            boost = float(fund_cfg.get("growth_confidence_boost", 0.05) or 0.05)
+            penalty = float(fund_cfg.get("value_confidence_penalty", 0.08) or 0.08)
+            if style.intraday_bias == "momentum" and style.label == "growth":
+                conf = min(0.95, conf + boost)
+            elif style.intraday_bias == "mean_reversion" and style.label in (
+                "value",
+                "value_trap",
+            ):
+                conf = max(0.0, conf - penalty)
         return round(min(conf, 0.95), 2)
 
     def _slice_gate_rules(

@@ -123,6 +123,11 @@ class IntradayWatchEngine:
     def _symbols_for_poll(self, state: PaperState, now: datetime) -> List[str]:
         scan_size = int(self._config.get("intraday.watch_scan_size", 12) or 12)
         must = [p.symbol for p in state.open_positions]
+        must.extend(
+            str(w["symbol"]).upper()
+            for w in state.watchlist
+            if w.get("in_play") and w.get("symbol")
+        )
         if not self._symbols:
             return list(dict.fromkeys(must))
         poll = max(int(self._config.get("intraday.watch_poll_seconds", 300) or 300), 1)
