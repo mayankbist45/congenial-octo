@@ -19,12 +19,14 @@ from src.dashboard.service import DashboardService, pct
 from src.journal.repository import JournalRepository
 from src.models import (
     Action,
+    MarketRegimeSnapshot,
     PortfolioRiskProfile,
     RiskMetrics,
     NewsDigest,
     TradeProposal,
 )
 from tests.conftest import make_diversified_portfolio, make_scores
+from tests.conftest import make_portfolio
 
 PAGES = [
     "/",
@@ -107,11 +109,7 @@ def seed_history(repo: JournalRepository, days: int = 40) -> None:
             daily_return_pct=0.06,
             benchmark_return_pct=0.04,
         )
-    repo.record_position_snapshot(
-        date.today(),
-        portfolio,
-        scores={p.symbol: make_scores(p.symbol) for p in portfolio.positions},
-        risk_profile=PortfolioRiskProfile(
+    risk_profile = PortfolioRiskProfile(
             as_of=date.today(),
             portfolio_beta=0.98,
             portfolio_vol_annualised=16.4,
@@ -122,6 +120,12 @@ def seed_history(repo: JournalRepository, days: int = 40) -> None:
             concentration_top5_pct=32.0,
             effective_positions=12.4,
             avg_pairwise_correlation=0.41,
+            market_regime=MarketRegimeSnapshot(
+                as_of=date.today(),
+                regime="elevated",
+                score=48.2,
+                evidence=["Benchmark volatility above its 20-day average"],
+            ),
             per_position={
                 p.symbol: RiskMetrics(
                     symbol=p.symbol,
@@ -133,8 +137,14 @@ def seed_history(repo: JournalRepository, days: int = 40) -> None:
                 for p in portfolio.positions
             },
             warnings=["Tracking error 6.2% is within the limit"],
-        ),
+        )
+    repo.record_position_snapshot(
+        date.today(),
+        portfolio,
+        scores={p.symbol: make_scores(p.symbol) for p in portfolio.positions},
+        risk_profile=risk_profile,
     )
+    repo.record_risk_profile(date.today(), risk_profile)
 
 
 # ----------------------------------------------------------------------
@@ -375,6 +385,59 @@ def test_sector_weights_sum_to_the_invested_share(service, repo) -> None:
     invested_pct = 100.0 - service.overview()["cash_pct"]
 
     assert abs(total - invested_pct) < 0.5
+
+
+def test_overview_exposes_market_regime(service, repo) -> None:
+    seed_run(repo)
+    seed_history(repo)
+
+    overview = service.overview()
+
+    assert overview["market_regime"]["regime"] == "elevated"
+    assert overview["market_regime"]["score"] == 48.2
+
+
+def test_performance_falls_back_to_reconstructed_book_when_nav_is_cash_only(
+    service, repo
+) -> None:
+    portfolio = make_diversified_portfolio(cash=100_000)
+    portfolio.positions[0].last_price = 120.0
+    start = date.today() - timedelta(days=5)
+    repo.record_nav(
+        run_date=start,
+        portfolio=make_portfolio([], cash=1_500_000),
+        benchmark_close=20_000.0,
+        daily_return_pct=0.0,
+        benchmark_return_pct=0.0,
+    )
+    repo.record_nav(
+        run_date=date.today(),
+        portfolio=make_portfolio([], cash=1_500_000),
+        benchmark_close=20_050.0,
+        daily_return_pct=0.0,
+        benchmark_return_pct=0.1,
+    )
+    repo.record_position_snapshot(
+        date.today(),
+        portfolio,
+        scores={p.symbol: make_scores(p.symbol) for p in portfolio.positions},
+        risk_profile=None,
+    )
+
+    perf = service.performance()
+
+    assert perf["current_value"] > perf["starting_value"]
+    assert perf["total_return_pct"] > 0
+
+
+def test_risk_profile_exposes_market_regime(service, repo) -> None:
+    seed_history(repo)
+
+    risk = service.risk_profile()
+
+    assert risk is not None
+    assert risk["market_regime"]["regime"] == "elevated"
+    assert risk["market_regime"]["evidence"]
 
 
 def test_briefing_is_served_when_it_exists(service, temp_config) -> None:

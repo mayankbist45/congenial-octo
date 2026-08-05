@@ -102,7 +102,7 @@
         <th class="num">Price</th>
         <th class="num">Value</th>
         <th class="num">Weight</th>
-        <th class="num">Return</th>
+        <th class="num">Position return</th>
         <th class="num">P&amp;L</th>
         <th class="num">Held</th>
         <th class="num">Score</th>
@@ -143,6 +143,14 @@
     </p>
   {% endif %}
 </div>
+
+{% if holdings %}
+<p class="muted" style="font-size:13px;margin:10px 0 0">
+  Position return is calculated per stock from average cost to current price.
+  The Overview page shows fund return, which is the whole portfolio result after
+  cash and all holdings are combined.
+</p>
+{% endif %}
 
 {% if sectors %}
 <div class="panel">
