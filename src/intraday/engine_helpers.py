@@ -23,7 +23,7 @@ STRATEGY_PRIORITY = {
     "cross_zscore": 4.0,
     "twap_slice": 1.0,
     "vwap_schedule": 1.0,
-    "scalping": 0.0,
+    "scalping": 2.8,
 }
 
 

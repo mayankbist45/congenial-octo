@@ -43,21 +43,24 @@ TRADE_GATE_SYSTEM_PROMPT = """You are the intraday risk officer for a paper-trad
 15:15). The rule engine proposed ONE trade. Approve or veto.
 
 VETO if:
-- strategy is scalping
 - time >= 14:30 IST
 - daily loss >= 1.0% of capital
 - catalyst confidence < 0.55 (from watchlist)
-- reward:risk after estimated costs < 1.2 for ORB or < 1.5 for VWAP
-- stop distance < 0.15% of entry (too tight for NSE noise)
+- reward:risk after estimated costs < 1.2 for ORB or scalping or < 1.5 for VWAP
+- stop distance below strategy minimum (ORB/VWAP 0.20%; scalping 0.15%)
 
 APPROVE ORB only if breakout has volume confirmation and price on correct side
 of VWAP for trade direction.
+
+APPROVE scalping only if momentum break has volume >= 1.5x session average and
+trade direction aligns with the break (long above recent highs, short below lows).
+Scalps use a 15-minute max hold; do not enable trailing stop.
 
 OUTPUT JSON only:
 {
   "decision": "approve" | "veto",
   "symbol": "...",
-  "strategy": "opening_range_breakout" | "vwap_pullback",
+  "strategy": "opening_range_breakout" | "vwap_pullback" | "scalping",
   "side": "BUY" | "SELL",
   "adjusted_stop": null or number,
   "adjusted_target": null or number,
@@ -299,7 +302,7 @@ SESSION_REGIMES = ("trend", "range", "chop")
 FLOW_QUALITIES = ("informed", "noise", "exhausted")
 DIVERGENCE_TYPES = ("fundamental", "technical")
 
-CALAN_GATE_STRATEGIES = ("opening_range_breakout", "vwap_pullback")
+CALAN_GATE_STRATEGIES = ("opening_range_breakout", "vwap_pullback", "scalping")
 GATE_STRATEGIES = CALAN_GATE_STRATEGIES  # backward compat
 REVERT_GATE_STRATEGIES = ("vwap_fade", "opening_gap_fade", "range_revert")
 FLUX_GATE_STRATEGIES = ("ofi_momentum", "ofi_exhaustion")

@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from src.config import Config
+from src.intraday.fundamental_style import get_style_profile, load_style_profiles
 from src.intraday.models import IntradaySignal, RankedStock
 from src.intraday.ofi import ofi_divergence, ofi_z_proxy
 
@@ -90,11 +91,16 @@ def _build_calan_catalyst_briefing(
         "",
         "CANDIDATES (ranked by quant score):",
     ]
+    styles = load_style_profiles(config, [item.symbol for item in ranked[:15]])
     for item in ranked[:15]:
         frame = frames.get(item.symbol)
         vwap_side = ""
         if frame is not None and not frame.empty:
             _, vwap_side = _vwap_side(frame)
+        style_line = ""
+        profile = styles.get(item.symbol.upper())
+        if profile is not None:
+            style_line = f"  {profile.summary()}"
         lines.append(
             f"  {item.symbol}: score={item.score:.1f} in_play={item.in_play} "
             f"gap={item.gap_pct if item.gap_pct is not None else 'n/a'}% "
@@ -102,9 +108,13 @@ def _build_calan_catalyst_briefing(
             f"trend={item.trend_cleanliness:.2f} turnover=Rs {item.turnover:,.0f} "
             f"{vwap_side}"
         )
+        if style_line:
+            lines.append(f"    fundamentals: {style_line.strip()}")
         lines.append(f"    reasons: {'; '.join(item.reasons)}")
     lines.append("")
     lines.append(
+        "Fundamental style: growth names suit momentum (ORB/VWAP pullback); "
+        "value/trap names suit mean reversion (revert persona). "
         "Identify Stocks in Play with a catalyst. Return JSON watchlist (0-5 names)."
     )
     return "\n".join(lines)
@@ -262,20 +272,29 @@ def _build_calan_gate_briefing(
         catalyst_conf = float(watchlist_entry.get("confidence", 0.0) or 0.0)
         catalyst_class = str(watchlist_entry.get("catalyst_class", "none"))
 
-    return "\n".join(
+    style_line = ""
+    profile = get_style_profile(config, signal.symbol)
+    if profile is not None:
+        style_line = profile.summary()
+
+    lines = [
+        f"TRADE GATE — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+        f"Symbol: {signal.symbol}",
+        f"Strategy: {signal.strategy}",
+        f"Side: {signal.side}",
+        f"Entry: {signal.entry_price:.2f}  Stop: {signal.stop_price:.2f}  "
+        f"Target: {signal.target_price:.2f}",
+        f"R:R gross: {rr:.2f}",
+        f"Estimated round-trip costs: Rs {estimated_costs:,.2f}",
+        f"VWAP: {vwap:.2f}  Last: {last:.2f}",
+        f"Rank score: {ranked.score:.1f}  in_play: {ranked.in_play}  "
+        f"trend: {ranked.trend_cleanliness:.2f}",
+        f"Catalyst: {catalyst_class}  confidence: {catalyst_conf:.2f}",
+    ]
+    if style_line:
+        lines.append(f"Fundamentals: {style_line}")
+    lines.extend(
         [
-            f"TRADE GATE — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
-            f"Symbol: {signal.symbol}",
-            f"Strategy: {signal.strategy}",
-            f"Side: {signal.side}",
-            f"Entry: {signal.entry_price:.2f}  Stop: {signal.stop_price:.2f}  "
-            f"Target: {signal.target_price:.2f}",
-            f"R:R gross: {rr:.2f}",
-            f"Estimated round-trip costs: Rs {estimated_costs:,.2f}",
-            f"VWAP: {vwap:.2f}  Last: {last:.2f}",
-            f"Rank score: {ranked.score:.1f}  in_play: {ranked.in_play}  "
-            f"trend: {ranked.trend_cleanliness:.2f}",
-            f"Catalyst: {catalyst_class}  confidence: {catalyst_conf:.2f}",
             f"Daily P&L: Rs {daily_pnl:,.2f}  "
             f"max daily loss: {config.get('intraday.max_daily_loss_pct', 1.5)}%",
             f"Reason: {signal.reason}",
@@ -283,6 +302,7 @@ def _build_calan_gate_briefing(
             "Approve or veto this trade. Return JSON only.",
         ]
     )
+    return "\n".join(lines)
 
 
 def _build_revert_gate_briefing(
