@@ -45,6 +45,7 @@
           <th>Return</th>
           <th>Trades</th>
           <th>Win rate</th>
+          <th>Status</th>
           <th></th>
         </tr>
       </thead>
@@ -64,9 +65,13 @@
           <td class="{{ s.total_return_pct | sign }}">{{ s.total_return_pct | pct(2, true) }}</td>
           <td>{{ s.total_trades }}</td>
           <td>{{ s.win_rate_pct | pct(1) }}</td>
+          <td class="muted small">
+            {% if s.active %}Active{% else %}Ended{% endif %}
+            {% if s.last_scan_at %}<br>{{ s.last_scan_at }}{% endif %}
+          </td>
           <td><a href="/intraday/{{ p.persona_id }}">Details</a></td>
           {% else %}
-          <td colspan="6" class="muted">No saved run</td>
+          <td colspan="7" class="muted">No saved run</td>
           <td><a href="/intraday/{{ p.persona_id }}">Setup</a></td>
           {% endif %}
         </tr>

@@ -67,9 +67,20 @@ def broker_label(provider: str) -> str:
     return mapping.get((provider or "angelone").lower(), provider)
 
 
+def persona_currency(pcfg: Config, region: str) -> str:
+    """USD for US personas even when global fund.base_currency is INR."""
+    region = (region or "IN").upper()
+    explicit = str(pcfg.get("fund.base_currency") or "").upper()
+    if region == "US":
+        return "USD" if not explicit or explicit == "INR" else explicit
+    return explicit or "INR"
+
+
 def pct(value: Optional[float], places: int = 1, signed: bool = False) -> str:
     if value is None:
         return "-"
+    if signed and value == 0:
+        return f"{value:.{places}f}%"
     return f"{value:+.{places}f}%" if signed else f"{value:.{places}f}%"
 
 
@@ -112,7 +123,13 @@ class DashboardService:
 
     @property
     def benchmark_label(self) -> str:
-        return str(self._config.get("fund.benchmark_label", "Nifty 500"))
+        fund_label = self._config.get("fund.benchmark_label")
+        if fund_label:
+            return str(fund_label)
+        mandate_label = self._config.mandate.get("benchmark_label")
+        if mandate_label:
+            return str(mandate_label)
+        return "Nifty 500"
 
     @property
     def is_dry_run(self) -> bool:
@@ -122,8 +139,13 @@ class DashboardService:
         mandate = self._config.mandate
         liquidity = mandate.get("liquidity", {}) or {}
         cash_bounds = mandate.get("cash_bounds_pct", {}) or {}
+        benchmark = (
+            self._config.get("fund.benchmark_label")
+            or mandate.get("benchmark_label")
+            or self.benchmark_label
+        )
         return {
-            "benchmark": mandate.get("benchmark_label", self.benchmark_label),
+            "benchmark": benchmark,
             "horizon_years": mandate.get("investment_horizon_years"),
             "target_excess_return_pct": mandate.get("target_excess_return_pct"),
             "max_stock_weight_pct": mandate.get(
@@ -205,6 +227,7 @@ class DashboardService:
         # If NAV still reflects a cash-only book but fills exist, prefer the
         # reconstructed book so Overview matches Holdings.
         holdings_invested = sum(float(h["market_value"] or 0.0) for h in holdings)
+        reconstructed = False
         if invested_value <= 0 and holdings:
             capital = float(self._config.secrets.initial_capital)
             net_deployed = self._repo.net_cash_deployed()
@@ -214,6 +237,25 @@ class DashboardService:
             unrealised_pnl = sum(float(h["unrealised_pnl"] or 0.0) for h in holdings)
             total_value = cash + invested_value
             daily_change_pct = None
+            reconstructed = True
+
+        capital = float(self._config.secrets.initial_capital)
+        return_since_inception_pct = (
+            (total_value / capital - 1.0) * 100.0
+            if capital > 0 and total_value > 0
+            else None
+        )
+        perf = self.performance()
+        total_return_pct = perf.get("total_return_pct")
+        observations = perf.get("observations") or 0
+        if return_since_inception_pct is not None:
+            if total_return_pct is None or observations < 2 or reconstructed:
+                total_return_pct = return_since_inception_pct
+            elif (
+                total_return_pct == 0
+                and abs(return_since_inception_pct) > 0.005
+            ):
+                total_return_pct = return_since_inception_pct
 
         return {
             "has_data": bool(run) or bool(holdings),
@@ -230,6 +272,8 @@ class DashboardService:
             "top_holdings": holdings[:5],
             "sector_weights": self.sector_weights(),
             "market_regime": (self.risk_profile() or {}).get("market_regime"),
+            "total_return_pct": total_return_pct,
+            "excess_return_pct": perf.get("excess_return_pct"),
         }
 
     def _run_view(self, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -541,6 +585,109 @@ class DashboardService:
             summary["trades"] = summary["completed_trades"]
         return summary
 
+    @property
+    def is_intraday(self) -> bool:
+        return bool(self._config.get("intraday.enabled", False))
+
+    def intraday_performance(
+        self, summary: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Performance-page payload for live intraday personas."""
+        capital = float(
+            summary.get("starting_capital") or self._config.secrets.initial_capital
+        )
+        ending = float(summary.get("ending_capital") or capital)
+        trades = summary.get("trades") or summary.get("completed_trades") or []
+        return {
+            "is_intraday": True,
+            "start_date": summary.get("start_date"),
+            "end_date": summary.get("end_date"),
+            "days": 1,
+            "observations": 1,
+            "starting_value": capital,
+            "current_value": ending,
+            "total_return_pct": float(summary.get("total_return_pct") or 0.0),
+            "annualised_return_pct": None,
+            "benchmark_return_pct": None,
+            "excess_return_pct": None,
+            "volatility_pct": None,
+            "sharpe_ratio": None,
+            "sortino_ratio": None,
+            "information_ratio": None,
+            "max_drawdown_pct": None,
+            "max_drawdown_date": None,
+            "current_drawdown_pct": None,
+            "win_rate_pct": float(summary.get("win_rate_pct") or 0.0),
+            "best_day_pct": None,
+            "worst_day_pct": None,
+            "realised_pnl": float(
+                summary.get("total_net_pnl") or summary.get("daily_net_pnl") or 0.0
+            ),
+            "unrealised_pnl": 0.0,
+            "notes": [],
+            "is_beating_benchmark": None,
+            "total_trades": int(summary.get("total_trades") or len(trades)),
+            "expectancy_r": float(summary.get("expectancy_r") or 0.0),
+            "strategy_pnl": summary.get("strategy_pnl") or {},
+        }
+
+    def intraday_news_context(
+        self, summary: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """News-page substitute for intraday: watchlist catalysts and scan notes."""
+        if not summary:
+            return {"has_data": False}
+        watchlist = summary.get("watchlist") or []
+        candidates = summary.get("top_candidates") or []
+        skipped = summary.get("skipped_signals") or []
+        return {
+            "has_data": bool(watchlist or candidates or skipped),
+            "run_date": summary.get("end_date") or summary.get("start_date"),
+            "active": bool(summary.get("active")),
+            "last_scan_at": summary.get("last_scan_at"),
+            "watchlist": watchlist,
+            "top_candidates": candidates,
+            "skipped_signals": skipped,
+        }
+
+    def intraday_dashboard_overview(
+        self, summary: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Overview-page payload for live intraday personas (not the swing journal)."""
+        region = self._config.market_region
+        currency = persona_currency(self._config, region)
+        capital = float(
+            summary.get("starting_capital") or self._config.secrets.initial_capital
+        )
+        trades = summary.get("trades") or summary.get("completed_trades") or []
+        return {
+            "has_data": True,
+            "is_intraday": True,
+            "currency": currency,
+            "region": region,
+            "region_label": region_label(region),
+            "broker_label": broker_label(self._config.broker_provider),
+            "starting_capital": capital,
+            "total_value": float(summary.get("ending_capital") or capital),
+            "total_net_pnl": float(
+                summary.get("total_net_pnl") or summary.get("daily_net_pnl") or 0.0
+            ),
+            "total_return_pct": float(summary.get("total_return_pct") or 0.0),
+            "total_trades": int(summary.get("total_trades") or len(trades)),
+            "win_rate_pct": float(summary.get("win_rate_pct") or 0.0),
+            "expectancy_r": float(summary.get("expectancy_r") or 0.0),
+            "active": bool(summary.get("active")),
+            "last_scan_at": summary.get("last_scan_at"),
+            "start_date": summary.get("start_date"),
+            "end_date": summary.get("end_date"),
+            "watchlist": summary.get("watchlist") or [],
+            "open_positions": summary.get("open_positions") or [],
+            "trades": trades,
+            "skipped_signals": summary.get("skipped_signals") or [],
+            "top_candidates": summary.get("top_candidates") or [],
+            "lockout_reason": summary.get("lockout_reason"),
+        }
+
     def attribution(self) -> List[Dict[str, Any]]:
         """Contribution to return by position, from the latest snapshot."""
         holdings = self.holdings()
@@ -568,7 +715,7 @@ class DashboardService:
     # Multi-persona overview
     # ------------------------------------------------------------------
     def all_personas_overview(self) -> List[Dict[str, Any]]:
-        from src.config import Config, _deep_merge
+        from src.config import Config, _deep_merge, _sync_mandate_from_fund
 
         results: List[Dict[str, Any]] = []
         personas = self._config.raw.get("personas", {})
@@ -588,6 +735,7 @@ class DashboardService:
             base_raw = {k: v for k, v in self._config.raw.items() if k != "personas"}
             merged = _deep_merge(base_raw, overrides)
             merged["personas"] = personas
+            _sync_mandate_from_fund(merged)
             secrets = self._config.secrets
             capital = pdef.get("capital_inr")
             if capital is None:
@@ -609,7 +757,7 @@ class DashboardService:
             )
             intraday_summary = svc.intraday_summary()
             region = pcfg.market_region
-            currency = str(pcfg.get("fund.base_currency", "INR" if region == "IN" else "USD"))
+            currency = persona_currency(pcfg, region)
             results.append({
                 "persona_id": pid,
                 "description": str(pdef.get("description", pid)),
@@ -620,7 +768,11 @@ class DashboardService:
                 "broker": pcfg.broker_provider,
                 "broker_label": broker_label(pcfg.broker_provider),
                 "fund_name": str(pcfg.get("fund.name", pcfg.get("fund.benchmark_label", pid))),
-                "benchmark_label": str(pcfg.get("fund.benchmark_label", "")),
+                "benchmark_label": str(
+                    pcfg.get("fund.benchmark_label")
+                    or pcfg.mandate.get("benchmark_label")
+                    or ""
+                ),
                 "capital": float(capital) if capital is not None else secrets.initial_capital,
                 "total_value": overview["total_value"],
                 "position_count": overview["position_count"],

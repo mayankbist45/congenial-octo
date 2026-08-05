@@ -38,7 +38,9 @@ personas:
       broker: alpaca
       market_region: US
     fund:
+      name: "US Steady Compounder"
       benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
       base_currency: USD
       target_positions: 20
       max_positions: 25
@@ -79,7 +81,9 @@ personas:
       broker: alpaca
       market_region: US
     fund:
+      name: "US Momentum Rider"
       benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
       base_currency: USD
       target_positions: 15
       max_positions: 20
@@ -116,6 +120,11 @@ personas:
       US intraday ORB + VWAP on liquid names. Catalyst LLM gate; flat before
       the NYSE close. Paper on Alpaca.
     capital_usd: 50000
+    fund:
+      name: "Calan US Intraday"
+      base_currency: USD
+      benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
     connectors:
       broker: alpaca
       market_region: US
@@ -176,6 +185,10 @@ personas:
     enabled: true
     description: "Revert US — VWAP/gap fade intraday via Alpaca"
     capital_usd: 30000
+    fund:
+      base_currency: USD
+      benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
     connectors:
       broker: alpaca
       market_region: US
@@ -210,6 +223,10 @@ personas:
     enabled: true
     description: "Flux US — OFI proxy intraday via Alpaca"
     capital_usd: 20000
+    fund:
+      base_currency: USD
+      benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
     connectors:
       broker: alpaca
       market_region: US
@@ -240,6 +257,10 @@ personas:
     enabled: true
     description: "Spread US — intraday pairs via Alpaca"
     capital_usd: 40000
+    fund:
+      base_currency: USD
+      benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
     connectors:
       broker: alpaca
       market_region: US
@@ -271,6 +292,10 @@ personas:
     enabled: true
     description: "Slice US — TWAP/VWAP execution via Alpaca"
     capital_usd: 100000
+    fund:
+      base_currency: USD
+      benchmark_symbol: "^GSPC"
+      benchmark_label: "S&P 500"
     connectors:
       broker: alpaca
       market_region: US

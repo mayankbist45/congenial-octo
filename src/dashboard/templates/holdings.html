@@ -3,7 +3,62 @@
 
 {% block content %}
 <h1>Holdings</h1>
+
+{% if is_intraday %}
 <p class="subtitle">
+  <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
+  Intraday open positions from the live session.
+  <a href="/intraday/{{ current_persona }}">Full intraday view</a>
+</p>
+
+{% if open_positions %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{ open_positions | length }} open position{{ 's' if open_positions | length != 1 }}</h2>
+    {% if intraday_summary and intraday_summary.last_scan_at %}
+    <span class="note">Last scan {{ intraday_summary.last_scan_at }}</span>
+    {% endif %}
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Strategy</th><th>Side</th><th>Qty</th>
+        <th>Entry</th><th>Stop</th><th>Target</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in open_positions %}
+      <tr>
+        <td><strong>{{ t.symbol }}</strong></td>
+        <td>{{ t.strategy }}</td>
+        <td>{{ t.side }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+        <td>{{ t.stop_price | number(2) }}</td>
+        <td>{{ t.target_price | number(2) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="panel">
+  <p class="empty" style="margin:0">
+    No open intraday positions.
+    {% if intraday_summary %}
+      Session {% if intraday_summary.active %}active{% else %}ended{% endif %}
+      with {{ intraday_summary.total_trades or 0 }} completed trade(s) today.
+    {% else %}
+      No session data saved yet for <code>{{ current_persona }}</code>.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+
+{% else %}
+
+<p class="subtitle">
+  <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
   As recorded at the last run. Position cap {{ max_position_pct }}%, sector cap
   {{ max_sector_pct }}%.
 </p>
@@ -20,7 +75,9 @@
   </p>
   <p class="note">
     Market-cap buckets: {{ mandate.market_caps | join(', ') }}.
-    Liquidity floor {{ mandate.liquidity_floor_inr | money }},
+    {% if mandate.liquidity_floor_inr %}
+    Liquidity floor {{ mandate.liquidity_floor_inr | money_currency(currency) }},
+    {% endif %}
     ADV usage cap {{ mandate.adv_limit_pct | pct(1) }},
     derivatives {{ 'allowed' if mandate.derivatives_allowed else 'not allowed' }},
     leverage {{ 'allowed' if mandate.leverage_allowed else 'not allowed' }}.
@@ -60,50 +117,34 @@
         <td>
           <div class="sym">{{ h.symbol }}</div>
           <div class="sub-line">{{ h.sector }}</div>
-          {% if h.latest_quarter %}
-          <div class="sub-line">Latest quarter: {{ h.latest_quarter }}</div>
-          {% endif %}
         </td>
         <td class="num">{{ h.quantity }}</td>
         <td class="num">{{ h.avg_cost | number }}</td>
         <td class="num">{{ h.last_price | number }}</td>
-        <td class="num">{{ h.market_value | money }}</td>
+        <td class="num">{{ h.market_value | money_currency(currency) }}</td>
         <td class="num {{ 'down' if h.weight_pct and h.weight_pct > max_position_pct }}">
           {{ h.weight_pct | pct(2) }}
         </td>
         <td class="num {{ h.return_pct | sign }}">{{ h.return_pct | pct(1, true) }}</td>
-        <td class="num {{ h.unrealised_pnl | sign }}">{{ h.unrealised_pnl | money }}</td>
+        <td class="num {{ h.unrealised_pnl | sign }}">{{ h.unrealised_pnl | money_currency(currency) }}</td>
         <td class="num">{{ h.holding_days if h.holding_days is not none else '-' }}</td>
         <td class="num">{{ h.composite_score | number(2) }}</td>
         <td class="num">{{ h.beta | number(2) }}</td>
         <td class="num">{{ h.idiosyncratic_vol | pct(1) }}</td>
         <td class="num">{{ h.risk_contribution_pct | pct(1) }}</td>
       </tr>
-      {% if h.quarterly_summary %}
-      <tr>
-        <td colspan="13">
-          <strong>Quarterly read{% if h.quarterly_thesis_impact %} ({{ h.quarterly_thesis_impact }}){% endif %}:</strong>
-          {{ h.quarterly_summary }}
-          {% if h.quarterly_sector_model %}
-            <div class="sub-line">Sector model: {{ h.quarterly_sector_model }}</div>
-          {% endif %}
-          {% if h.quarterly_flags %}
-            <div class="sub-line">Flags: {{ h.quarterly_flags | join(', ') }}</div>
-          {% endif %}
-        </td>
-      </tr>
-      {% endif %}
       {% endfor %}
     </tbody>
   </table>
   {% else %}
     <p class="empty">
-      No holdings recorded. Once the fund runs and trades are executed, positions
-      appear here.
+      No holdings recorded for <code>{{ current_persona }}</code>.
+      Once the fund runs and trades execute, positions appear here.
     </p>
   {% endif %}
 </div>
 
+{% if sectors %}
 <div class="panel">
   <div class="panel-head">
     <h2>Sector exposure</h2>
@@ -111,43 +152,9 @@
   </div>
   {{ sector_chart | safe }}
 </div>
+{% endif %}
 
 {% if holdings %}
-<div class="panel">
-  <div class="panel-head">
-    <h2>Quarterly trends</h2>
-    <span class="note">Stored report history from previous runs plus the latest fresh analysis</span>
-  </div>
-  {% if quarterly_cards %}
-    {% for card in quarterly_cards %}
-    <div class="proposal-card">
-      <h3>{{ card.symbol }}{% if card.latest_quarter %} · {{ card.latest_quarter }}{% endif %}</h3>
-      <p class="note">{{ card.quarterly_summary or 'No quarterly summary recorded yet.' }}</p>
-      {% if card.quarterly_sector_model %}
-      <p class="note">Sector model: {{ card.quarterly_sector_model }}</p>
-      {% endif %}
-      {% if card.quarterly_flags %}
-      <p class="note">Flags: {{ card.quarterly_flags | join(', ') }}</p>
-      {% endif %}
-      {% if card.revenue_chart %}
-      <h4>Revenue by quarter</h4>
-      {{ card.revenue_chart | safe }}
-      {% endif %}
-      {% if card.profit_chart %}
-      <h4>Net profit by quarter</h4>
-      {{ card.profit_chart | safe }}
-      {% endif %}
-      {% if card.opm_chart %}
-      <h4>Operating margin trend</h4>
-      {{ card.opm_chart | safe }}
-      {% endif %}
-    </div>
-    {% endfor %}
-  {% else %}
-    <p class="empty">No quarterly report history has been stored yet.</p>
-  {% endif %}
-</div>
-
 <div class="panel">
   <h2>Why the fund owns these</h2>
   <table>
@@ -162,5 +169,7 @@
     </tbody>
   </table>
 </div>
+{% endif %}
+
 {% endif %}
 {% endblock %}

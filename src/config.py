@@ -346,6 +346,26 @@ def _load_persona_overlays(settings_dir: Path) -> Dict[str, Any]:
     return personas
 
 
+_BENCHMARK_SYMBOL_LABELS = {
+    "^GSPC": "S&P 500",
+    "^CRSLDX": "Nifty 500",
+}
+
+
+def _sync_mandate_from_fund(raw: Dict[str, Any]) -> None:
+    """Keep mandate benchmark aligned with persona fund overrides."""
+    fund = raw.get("fund") or {}
+    if not isinstance(fund, dict):
+        return
+    mandate = raw.setdefault("mandate", {})
+    symbol = fund.get("benchmark_symbol")
+    label = fund.get("benchmark_label") or _BENCHMARK_SYMBOL_LABELS.get(symbol or "")
+    if label:
+        mandate["benchmark_label"] = label
+    if symbol:
+        mandate["benchmark_symbol"] = symbol
+
+
 def _apply_policy_defaults(raw: Dict[str, Any]) -> None:
     """Backfill mandate and analytics blocks for older configs."""
     fund = raw.setdefault("fund", {})
@@ -464,6 +484,7 @@ def get_persona_config(
     base_raw = {k: v for k, v in base.raw.items() if k != "personas"}
     merged = _deep_merge(base_raw, overrides)
     merged["personas"] = base.raw.get("personas", {})
+    _sync_mandate_from_fund(merged)
 
     secrets = base.secrets
     capital = persona_def.get("capital_inr")

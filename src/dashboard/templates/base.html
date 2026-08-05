@@ -474,10 +474,10 @@
         <a href="/intraday" class="{{ 'active' if page == 'intraday' }}">Intraday</a>
         <a href="/journal{{ qs }}" class="{{ 'active' if page == 'journal' }}">Journal</a>
       </nav>
-      {% if personas|length > 1 %}
+      {% if show_persona_selector and personas|length > 1 %}
       <div class="persona-select">
         <span class="persona-label">Persona</span>
-        <select onchange="if(this.value){window.location.search='?persona='+this.value}else{window.location.search=''}">
+        <select onchange="(function(sel){var p=sel.value,path=window.location.pathname,params=new URLSearchParams(window.location.search);if(path.indexOf('/intraday/')===0&&p){window.location.href='/intraday/'+p+(params.get('region')?'?region='+params.get('region'):'');}else if(p){window.location.search='?persona='+p;}else{window.location.search='';}})(this)">
           {% for p in personas %}
             <option value="{{ p.id }}" {{ 'selected' if p.id == current_persona }}>{{ p.description }}</option>
           {% endfor %}

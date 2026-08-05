@@ -23,7 +23,7 @@
     </div>
     <div>
       <div class="label">Order value</div>
-      <div class="value">{{ p.estimated_value | money }}</div>
+      <div class="value">{{ p.estimated_value | money_currency(currency) }}</div>
     </div>
     {% if p.target_price %}
     <div>
@@ -58,10 +58,10 @@
 
   {% if p.status == 'pending' %}
     <div class="actions">
-      <form method="post" action="/proposals/{{ p.id }}/approve">
+      <form method="post" action="/proposals/{{ p.id }}/approve{{ persona_qs }}">
         <button type="submit" class="primary">Approve</button>
       </form>
-      <form method="post" action="/proposals/{{ p.id }}/reject" class="inline">
+      <form method="post" action="/proposals/{{ p.id }}/reject{{ persona_qs }}" class="inline">
         <input type="text" name="reason" placeholder="Reason for rejecting (optional)">
         <button type="submit" class="danger">Reject</button>
       </form>

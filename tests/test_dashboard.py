@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.dashboard.app import create_app
-from src.dashboard.service import DashboardService
+from src.dashboard.service import DashboardService, pct
 from src.journal.repository import JournalRepository
 from src.models import (
     Action,
@@ -178,6 +178,21 @@ def test_overview_shows_the_pending_proposal_and_memo(client, repo) -> None:
     assert "WIPRO" in body
     assert "awaiting your decision" in body
     assert "Market view" in body
+
+
+def test_pct_signed_zero_omits_plus() -> None:
+    assert pct(0.0, 2, True) == "0.00%"
+    assert pct(1.25, 2, True) == "+1.25%"
+
+
+def test_overview_total_return_uses_nav_history(service, repo) -> None:
+    seed_run(repo)
+    seed_history(repo, days=20)
+    overview = service.overview()
+    perf = service.performance()
+    assert overview["total_return_pct"] is not None
+    assert overview["total_return_pct"] == perf["total_return_pct"]
+    assert overview["total_return_pct"] > 0
 
 
 def test_proposal_card_shows_rationale_thesis_and_warnings(client, repo) -> None:
@@ -474,6 +489,120 @@ def test_intraday_detail_renders_saved_summary(client, temp_config) -> None:
     assert "NVDA" in body
     assert "trailing_stop" in body
     assert "United States" in body or "region-us" in body
+
+
+def test_overview_shows_intraday_us_trades(client, temp_config) -> None:
+    intraday_dir = temp_config.root / "data" / "intraday"
+    intraday_dir.mkdir(parents=True, exist_ok=True)
+    (intraday_dir / "calan_us_latest.json").write_text(
+        """{
+          "persona_id": "calan_us",
+          "start_date": "2026-08-05",
+          "end_date": "2026-08-05",
+          "starting_capital": 50000,
+          "total_net_pnl": 42.5,
+          "total_return_pct": 0.09,
+          "total_trades": 1,
+          "win_rate_pct": 100.0,
+          "expectancy_r": 0.5,
+          "active": false,
+          "last_scan_at": "2026-08-05 16:00:00",
+          "watchlist": [{"symbol": "INTC", "confidence": 0.72, "catalyst_class": "gap", "rationale": "ORB setup"}],
+          "trades": [{
+            "symbol": "INTC",
+            "strategy": "opening_range_breakout",
+            "side": "BUY",
+            "quantity": 100,
+            "entry_time": "2026-08-05 10:05:00",
+            "exit_time": "2026-08-05 11:00:00",
+            "entry_price": 21.5,
+            "exit_price": 21.92,
+            "net_pnl": 42.5,
+            "r_multiple": 0.5,
+            "exit_reason": "target"
+          }]
+        }""",
+        encoding="utf-8",
+    )
+
+    body = client.get("/?persona=calan_us").text
+    assert "<html" in body
+    assert "INTC" in body
+    assert "Completed trades" in body
+    assert "Watchlist" in body
+    assert "Intraday paper" in body
+
+
+def test_default_overview_lists_intraday_sessions(client, temp_config) -> None:
+    intraday_dir = temp_config.root / "data" / "intraday"
+    intraday_dir.mkdir(parents=True, exist_ok=True)
+    (intraday_dir / "calan_us_latest.json").write_text(
+        """{
+          "persona_id": "calan_us",
+          "start_date": "2026-08-05",
+          "end_date": "2026-08-05",
+          "total_net_pnl": 0,
+          "total_return_pct": 0,
+          "total_trades": 0,
+          "win_rate_pct": 0,
+          "active": true
+        }""",
+        encoding="utf-8",
+    )
+
+    body = client.get("/").text
+    assert "<html" in body
+    assert "Intraday sessions" in body
+    assert "calan_us" in body
+
+
+def test_proposals_page_us_persona_shows_sp500_not_nifty(client) -> None:
+    body = client.get("/proposals?persona=balanced_us").text
+    assert "P 500" in body and "S&amp;P" in body
+    assert "Nifty 500" not in body
+
+
+def test_proposals_page_intraday_skips_swing_mandate(client) -> None:
+    body = client.get("/proposals?persona=calan_us").text
+    assert "Persona Constitution" not in body
+    assert "Intraday personas do not use the swing approval gate" in body
+    assert "Nifty 500" not in body
+
+
+def test_us_overview_uses_dollar_formatting(client) -> None:
+    body = client.get("/?persona=balanced_us").text
+    assert "S&amp;P 500" in body or "United States" in body
+    assert "Rs " not in body
+
+
+def test_intraday_news_page_shows_watchlist(client, temp_config) -> None:
+    intraday_dir = temp_config.root / "data" / "intraday"
+    intraday_dir.mkdir(parents=True, exist_ok=True)
+    (intraday_dir / "calan_us_latest.json").write_text(
+        """{
+          "persona_id": "calan_us",
+          "start_date": "2026-08-05",
+          "end_date": "2026-08-05",
+          "active": true,
+          "watchlist": [{"symbol": "INTC", "confidence": 0.7, "catalyst_class": "gap", "rationale": "ORB setup"}]
+        }""",
+        encoding="utf-8",
+    )
+    body = client.get("/news?persona=calan_us").text
+    assert "Watchlist catalysts" in body
+    assert "INTC" in body
+    assert "Session scan" in body
+
+
+def test_personas_page_hides_persona_dropdown(client) -> None:
+    body = client.get("/personas").text
+    assert "Trade Bot Dashboard" in body
+    assert 'class="persona-select"' not in body
+
+
+def test_intraday_list_hides_persona_dropdown(client) -> None:
+    body = client.get("/intraday").text
+    assert 'class="persona-select"' not in body
 
 
 def test_api_personas_returns_regions(client) -> None:

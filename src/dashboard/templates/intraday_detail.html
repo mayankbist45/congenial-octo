@@ -28,7 +28,23 @@
   <span class="tag tag-intraday">Live paper</span>
   {% if summary.active %}Session active{% else %}Session ended{% endif %}
   {% if summary.last_scan_at %} &middot; last scan {{ summary.last_scan_at }}{% endif %}
+  {% if summary.lockout_reason %} &middot; <span class="warn-text">{{ summary.lockout_reason }}</span>{% endif %}
 </p>
+{% endif %}
+
+{% if summary.total_trades == 0 and not summary.open_positions %}
+<div class="panel">
+  <p class="muted" style="margin:0">
+    No trades today.
+    {% if summary.skipped_signals %}
+      {{ summary.skipped_signals | length }} signal(s) were vetoed or skipped — see below.
+    {% elif summary.watchlist or summary.top_candidates %}
+      Watchlist and candidates updated; no rule signal cleared the gate yet.
+    {% else %}
+      Session may still be scanning or market data was limited.
+    {% endif %}
+  </p>
+</div>
 {% endif %}
 
 <div class="stats">
@@ -112,6 +128,28 @@
         <td>{{ c.in_play }}</td>
         <td>{{ c.trend_cleanliness | number(2) }}</td>
         <td>{{ c.volume_expansion | number(2) }}x</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if summary.skipped_signals %}
+<div class="panel">
+  <h2>Skipped / vetoed signals</h2>
+  <table class="data-table">
+    <thead>
+      <tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Side</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      {% for s in summary.skipped_signals %}
+      <tr>
+        <td>{{ s.time or '—' }}</td>
+        <td><strong>{{ s.symbol }}</strong></td>
+        <td>{{ s.strategy }}</td>
+        <td>{{ s.side }}</td>
+        <td class="muted small">{{ s.reason or '' }}</td>
       </tr>
       {% endfor %}
     </tbody>
