@@ -3,15 +3,80 @@
 
 {% block content %}
 <h1>Performance</h1>
+
+{% if is_intraday %}
 <p class="subtitle">
+  <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
+  Intraday session performance — not the swing NAV series.
+  <a href="/intraday/{{ current_persona }}">Full intraday view</a>
+</p>
+
+{% if performance.start_date %}
+<div class="stats">
+  <div class="stat">
+    <div class="label">Net P&amp;L</div>
+    <div class="value {{ performance.realised_pnl | sign }}">
+      {{ performance.realised_pnl | money_currency(currency) }}
+    </div>
+    <div class="sub">{{ performance.start_date }} to {{ performance.end_date }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Return</div>
+    <div class="value {{ performance.total_return_pct | sign }}">
+      {{ performance.total_return_pct | pct(2, true) }}
+    </div>
+    <div class="sub">on {{ performance.starting_value | money_currency(currency) }} capital</div>
+  </div>
+  <div class="stat">
+    <div class="label">Trades</div>
+    <div class="value">{{ performance.total_trades }}</div>
+    <div class="sub">{{ performance.win_rate_pct | pct(1) }} win rate</div>
+  </div>
+  <div class="stat">
+    <div class="label">Expectancy</div>
+    <div class="value {{ performance.expectancy_r | sign }}">
+      {{ performance.expectancy_r | number(3) }}R
+    </div>
+  </div>
+</div>
+
+{% if performance.strategy_pnl %}
+<div class="panel">
+  <h2>By strategy</h2>
+  <div class="bars">
+    {% for name, pnl in performance.strategy_pnl.items() %}
+    <div class="bar-row">
+      <span class="bar-label">{{ name }}</span>
+      <span class="bar-value {{ pnl | sign }}">{{ pnl | money_currency(currency) }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="panel">
+  <p class="empty" style="margin:0">
+    No intraday performance saved yet for <code>{{ current_persona }}</code>.
+  </p>
+  <code class="cmd">python run_daily.py watch --persona {{ current_persona }}</code>
+</div>
+{% endif %}
+
+{% else %}
+
+<p class="subtitle">
+  <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
   {% if performance.start_date %}
     {{ performance.start_date }} to {{ performance.end_date }}
     &middot; {{ performance.days }} days &middot; {{ performance.observations }} observations
+    &middot; vs {{ benchmark_label }}
   {% else %}
-    No history recorded yet.
+    No history recorded yet for <code>{{ current_persona }}</code>.
   {% endif %}
 </p>
 
+{% if performance.start_date %}
 <div class="stats">
   <div class="stat">
     <div class="label">Total return</div>
@@ -92,8 +157,8 @@
         <tr><td>Best day</td><td class="num up">{{ performance.best_day_pct | pct(2, true) }}</td></tr>
         <tr><td>Worst day</td><td class="num down">{{ performance.worst_day_pct | pct(2, true) }}</td></tr>
         <tr><td>Current drawdown</td><td class="num">{{ performance.current_drawdown_pct | pct(2) }}</td></tr>
-        <tr><td>Realised P&amp;L</td><td class="num {{ performance.realised_pnl | sign }}">{{ performance.realised_pnl | money }}</td></tr>
-        <tr><td>Unrealised P&amp;L</td><td class="num {{ performance.unrealised_pnl | sign }}">{{ performance.unrealised_pnl | money }}</td></tr>
+        <tr><td>Realised P&amp;L</td><td class="num {{ performance.realised_pnl | sign }}">{{ performance.realised_pnl | money_currency(currency) }}</td></tr>
+        <tr><td>Unrealised P&amp;L</td><td class="num {{ performance.unrealised_pnl | sign }}">{{ performance.unrealised_pnl | money_currency(currency) }}</td></tr>
       </tbody>
     </table>
   </div>
@@ -106,32 +171,17 @@
         <tr><td>Portfolio beta</td><td class="num">{{ risk.portfolio_beta | number(2) }}</td></tr>
         <tr><td>Portfolio volatility</td><td class="num">{{ risk.portfolio_vol | pct(1) }}</td></tr>
         <tr><td>Tracking error</td><td class="num">{{ risk.tracking_error_pct | pct(1) }}</td></tr>
-        <tr>
-          <td>&nbsp;&nbsp;from stock selection</td>
-          <td class="num">{{ risk.active_selection_share_pct | pct(1) }}</td>
-        </tr>
-        <tr>
-          <td>&nbsp;&nbsp;from factor and sector tilts</td>
-          <td class="num">{{ risk.active_factor_share_pct | pct(1) }}</td>
-        </tr>
         <tr><td>Active share</td><td class="num">{{ risk.active_share_pct | pct(1) }}</td></tr>
         <tr><td>Top 5 concentration</td><td class="num">{{ risk.concentration_top5_pct | pct(1) }}</td></tr>
-        <tr><td>Effective positions</td><td class="num">{{ risk.effective_positions | number(1) }}</td></tr>
-        <tr><td>Average correlation</td><td class="num">{{ risk.avg_pairwise_correlation | number(2) }}</td></tr>
       </tbody>
     </table>
-    {% if risk.warnings %}
-      <div class="warnings" style="margin-top:14px">
-        <strong>Risk limits breached:</strong>
-        <ul>{% for warning in risk.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
-      </div>
-    {% endif %}
     {% else %}
       <p class="empty">No risk profile recorded yet.</p>
     {% endif %}
   </div>
 </div>
 
+{% if attribution_chart %}
 <div class="panel">
   <div class="panel-head">
     <h2>Contribution to return</h2>
@@ -139,31 +189,16 @@
   </div>
   {{ attribution_chart | safe }}
 </div>
+{% endif %}
 
-{% if attribution %}
+{% else %}
 <div class="panel">
-  <h2>Attribution detail</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Stock</th><th>Sector</th><th class="num">Weight</th>
-        <th class="num">Return</th><th class="num">P&amp;L</th>
-        <th class="num">Contribution</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in attribution %}
-      <tr>
-        <td><span class="sym">{{ row.symbol }}</span></td>
-        <td class="sub-line">{{ row.sector }}</td>
-        <td class="num">{{ row.weight_pct | pct(2) }}</td>
-        <td class="num {{ row.return_pct | sign }}">{{ row.return_pct | pct(1, true) }}</td>
-        <td class="num {{ row.pnl | sign }}">{{ row.pnl | money }}</td>
-        <td class="num {{ row.contribution_pct | sign }}">{{ row.contribution_pct | pct(3, true) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <p class="empty" style="margin:0">
+    Run the daily analyse pass to start recording NAV history for this persona.
+  </p>
+  <code class="cmd">python run_daily.py analyse --persona {{ current_persona }}</code>
 </div>
+{% endif %}
+
 {% endif %}
 {% endblock %}

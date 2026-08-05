@@ -362,7 +362,8 @@ def test_symbols_for_poll_includes_watchlist(calan_config):
         symbols=["AAPL", "MSFT", "NVDA", "GOOGL", "AMD", "META"],
     )
     state = PaperState(
-        trade_date=datetime(2026, 8, 5).date(),
+        persona_id="calan",
+        trading_date=datetime(2026, 8, 5).date(),
         watchlist=[
             {"symbol": "AMD", "in_play": True},
             {"symbol": "GOOGL", "in_play": True},
@@ -570,4 +571,59 @@ def test_trade_confidence_quant_fallback(calan_config):
     conf = agent._trade_confidence(None, ranked)
     assert conf >= 0.55
 
+
+def test_naive_exchange_dt_unifies_aware_and_naive():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from src.intraday.watch import _naive_exchange_dt
+
+    tz = ZoneInfo("America/New_York")
+    aware = datetime(2026, 8, 5, 11, 0, tzinfo=tz)
+    naive = datetime(2026, 8, 5, 10, 30)
+    assert _naive_exchange_dt(aware, tz) >= _naive_exchange_dt(naive, tz)
+
+
+def test_exit_for_position_handles_aware_now(calan_config):
+    from datetime import datetime
+    from unittest.mock import MagicMock
+    from zoneinfo import ZoneInfo
+
+    import pandas as pd
+
+    from src.intraday.models import PaperPosition
+    from src.intraday.watch import IntradayWatchEngine
+
+    calan_config.raw.setdefault("connectors", {})["market_region"] = "US"
+    engine = IntradayWatchEngine(
+        calan_config,
+        data_service=MagicMock(),
+        symbols=["AAPL"],
+    )
+    position = PaperPosition(
+        symbol="AAPL",
+        strategy="scalping",
+        side="BUY",
+        quantity=10,
+        entry_time=datetime(2026, 8, 5, 10, 0),
+        entry_price=100.0,
+        stop_price=99.0,
+        target_price=101.0,
+        max_exit_time=datetime(2026, 8, 5, 10, 15),
+        reason="test",
+    )
+    frame = pd.DataFrame(
+        {
+            "open": [100.0],
+            "high": [100.5],
+            "low": [99.5],
+            "close": [100.2],
+            "volume": [1000],
+        },
+        index=pd.DatetimeIndex([datetime(2026, 8, 5, 10, 5)]),
+    )
+    now = datetime(2026, 8, 5, 10, 20, tzinfo=ZoneInfo("America/New_York"))
+    result = engine._exit_for_position(position, frame, now)
+    assert result is not None
+    assert result["exit_reason"] in ("max_hold", "paper_time_exit_no_candle")
 

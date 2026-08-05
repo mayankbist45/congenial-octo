@@ -13,7 +13,7 @@ is a single-operator tool for a personal fund. Do not expose it to a network.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -34,6 +34,7 @@ from src.dashboard.service import (
     money,
     number,
     pct,
+    persona_currency,
     region_label,
     sign_class,
 )
@@ -74,11 +75,23 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             for pid in enabled_personas()
         ]
 
+    def _persona_context(
+        persona: Optional[str],
+    ) -> Tuple[DashboardService, Config, bool, Optional[Dict[str, Any]]]:
+        svc = _get_service(persona)
+        pcfg = get_persona_config(persona, base=config) if persona else config
+        is_intraday = bool(pcfg.get("intraday.enabled", False))
+        intraday_summary = svc.intraday_summary() if is_intraday else None
+        return svc, pcfg, is_intraday, intraday_summary
+
     def render(
         request: Request,
         template: str,
         context: Dict[str, Any],
         service: Optional[DashboardService] = None,
+        *,
+        show_persona_selector: Optional[bool] = None,
+        header_fund_name: Optional[str] = None,
     ) -> HTMLResponse:
         svc = service or default_service
         try:
@@ -86,14 +99,31 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         except Exception:
             pending_count = 0
         persona_id = svc.persona_id
+        region = svc._config.market_region
+        currency = persona_currency(svc._config, region)
+        is_intraday = bool(svc._config.get("intraday.enabled", False))
+        persona_qs = (
+            f"?persona={persona_id}"
+            if persona_id and persona_id != "balanced"
+            else ""
+        )
+        page = context.get("page", "")
+        if show_persona_selector is None:
+            show_persona_selector = page not in ("personas", "intraday")
         base = {
-            "fund_name": svc.fund_name,
+            "fund_name": header_fund_name or svc.fund_name,
             "benchmark_label": svc.benchmark_label,
             "is_dry_run": svc.is_dry_run,
             "pending_count": pending_count,
             "current_persona": persona_id,
             "persona_description": persona_description(persona_id),
             "personas": _persona_nav_items(),
+            "currency": currency,
+            "region": region,
+            "region_label": region_label(region),
+            "is_intraday": is_intraday,
+            "persona_qs": persona_qs,
+            "show_persona_selector": show_persona_selector,
         }
         base.update(context)
         return templates.TemplateResponse(request, template, base)
@@ -105,23 +135,57 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def overview(
         request: Request, persona: Optional[str] = Query(default=None)
     ) -> HTMLResponse:
-        svc = _get_service(persona)
-        series = svc.nav_series()
+        svc, pcfg, is_intraday, intraday_summary = _persona_context(persona)
+
+        if is_intraday and intraday_summary:
+            overview_data = svc.intraday_dashboard_overview(intraday_summary)
+            performance_data = {
+                "total_return_pct": overview_data["total_return_pct"],
+                "excess_return_pct": None,
+                "benchmark_return_pct": None,
+            }
+            chart_html = charts.line_chart([], [], [], svc.benchmark_label)
+        elif is_intraday:
+            overview_data = {"has_data": False, "is_intraday": True}
+            performance_data = {
+                "total_return_pct": None,
+                "excess_return_pct": None,
+                "benchmark_return_pct": None,
+            }
+            chart_html = charts.line_chart([], [], [], svc.benchmark_label)
+        else:
+            overview_data = svc.overview()
+            performance_data = {
+                "total_return_pct": overview_data.get("total_return_pct"),
+                "excess_return_pct": overview_data.get("excess_return_pct"),
+                "benchmark_return_pct": svc.performance().get("benchmark_return_pct"),
+            }
+            series = svc.nav_series()
+            chart_html = charts.line_chart(
+                series["dates"],
+                series["fund"],
+                series["benchmark"],
+                svc.benchmark_label,
+            )
+
+        intraday_books = (
+            []
+            if is_intraday
+            else default_service.intraday_personas()
+        )
+
         return render(
             request,
             "overview.html",
             {
                 "page": "overview",
-                "overview": svc.overview(),
-                "proposals": svc.pending_proposals(),
-                "performance": svc.performance(),
-                "chart": charts.line_chart(
-                    series["dates"],
-                    series["fund"],
-                    series["benchmark"],
-                    svc.benchmark_label,
-                ),
-                "digest": svc.digest(),
+                "overview": overview_data,
+                "proposals": svc.pending_proposals() if not is_intraday else [],
+                "performance": performance_data,
+                "chart": chart_html,
+                "digest": svc.digest() if not is_intraday else None,
+                "intraday_books": intraday_books,
+                "region_labels": {"IN": region_label("IN"), "US": region_label("US")},
             },
             service=svc,
         )
@@ -130,17 +194,18 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def proposals(
         request: Request, persona: Optional[str] = Query(default=None)
     ) -> HTMLResponse:
-        svc = _get_service(persona)
+        svc, pcfg, is_intraday, intraday_summary = _persona_context(persona)
         return render(
             request,
             "proposals.html",
             {
                 "page": "proposals",
-                "proposals": svc.pending_proposals(),
-                "approved": svc.approved_proposals(),
-                "history": svc.recent_decisions(),
+                "proposals": [] if is_intraday else svc.pending_proposals(),
+                "approved": [] if is_intraday else svc.approved_proposals(),
+                "history": [] if is_intraday else svc.recent_decisions(),
                 "mandate": svc.mandate_summary(),
                 "analytics": svc.analytics_summary(),
+                "intraday_summary": intraday_summary,
             },
             service=svc,
         )
@@ -149,20 +214,29 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def holdings(
         request: Request, persona: Optional[str] = Query(default=None)
     ) -> HTMLResponse:
-        svc = _get_service(persona)
-        sectors = svc.sector_weights()
-        pcfg = get_persona_config(persona, base=config) if persona else config
+        svc, pcfg, is_intraday, intraday_summary = _persona_context(persona)
+        sectors = [] if is_intraday else svc.sector_weights()
+        holdings_rows = svc.holdings() if not is_intraday else []
+        open_positions = (
+            (intraday_summary or {}).get("open_positions") or []
+            if is_intraday
+            else []
+        )
         return render(
             request,
             "holdings.html",
             {
                 "page": "holdings",
-                "holdings": svc.holdings(),
+                "holdings": holdings_rows,
+                "open_positions": open_positions,
+                "intraday_summary": intraday_summary,
                 "sectors": sectors,
                 "sector_chart": charts.bar_chart(
                     [s["sector"] for s in sectors],
                     [s["weight_pct"] or 0.0 for s in sectors],
-                ),
+                )
+                if sectors
+                else "",
                 "max_sector_pct": pcfg.get("risk.max_sector_pct"),
                 "max_position_pct": pcfg.get("risk.max_position_pct"),
                 "mandate": svc.mandate_summary(),
@@ -175,36 +249,65 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def news(
         request: Request, persona: Optional[str] = Query(default=None)
     ) -> HTMLResponse:
-        svc = _get_service(persona)
+        svc, pcfg, is_intraday, intraday_summary = _persona_context(persona)
         return render(
-            request, "news.html", {"page": "news", "digest": svc.digest()}, service=svc
+            request,
+            "news.html",
+            {
+                "page": "news",
+                "digest": None if is_intraday else svc.digest(),
+                "intraday_news": svc.intraday_news_context(intraday_summary)
+                if is_intraday
+                else None,
+            },
+            service=svc,
         )
 
     @app.get("/performance", response_class=HTMLResponse)
     def performance(
         request: Request, persona: Optional[str] = Query(default=None)
     ) -> HTMLResponse:
-        svc = _get_service(persona)
-        series = svc.nav_series()
-        attribution = svc.attribution()
+        svc, pcfg, is_intraday, intraday_summary = _persona_context(persona)
+
+        if is_intraday and intraday_summary:
+            perf = svc.intraday_performance(intraday_summary)
+            chart_html = charts.line_chart([], [], [], svc.benchmark_label)
+            attribution: List[Dict[str, Any]] = []
+            attribution_chart = ""
+            risk = None
+        elif is_intraday:
+            perf = {"is_intraday": True, "start_date": None, "end_date": None}
+            chart_html = charts.line_chart([], [], [], svc.benchmark_label)
+            attribution = []
+            attribution_chart = ""
+            risk = None
+        else:
+            perf = svc.performance()
+            series = svc.nav_series()
+            chart_html = charts.line_chart(
+                series["dates"],
+                series["fund"],
+                series["benchmark"],
+                svc.benchmark_label,
+            )
+            attribution = svc.attribution()
+            attribution_chart = charts.bar_chart(
+                [row["symbol"] for row in attribution[:15]],
+                [row["contribution_pct"] or 0.0 for row in attribution[:15]],
+            )
+            risk = svc.risk_profile()
+
         return render(
             request,
             "performance.html",
             {
                 "page": "performance",
-                "performance": svc.performance(),
-                "chart": charts.line_chart(
-                    series["dates"],
-                    series["fund"],
-                    series["benchmark"],
-                    svc.benchmark_label,
-                ),
+                "performance": perf,
+                "chart": chart_html,
                 "attribution": attribution,
-                "attribution_chart": charts.bar_chart(
-                    [row["symbol"] for row in attribution[:15]],
-                    [row["contribution_pct"] or 0.0 for row in attribution[:15]],
-                ),
-                "risk": svc.risk_profile(),
+                "attribution_chart": attribution_chart,
+                "risk": risk,
+                "intraday_summary": intraday_summary,
             },
             service=svc,
         )
@@ -260,13 +363,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                     "US": region_label("US"),
                 },
             },
+            header_fund_name="Trade Bot Dashboard",
         )
 
     @app.get("/intraday", response_class=HTMLResponse)
     def intraday_page(
         request: Request,
         region: Optional[str] = None,
-        persona: Optional[str] = Query(default=None),
     ) -> HTMLResponse:
         active = region.upper() if region else None
         if active and active not in {"IN", "US"}:
@@ -289,7 +392,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                     "US": region_label("US"),
                 },
             },
-            service=_get_service(persona),
+            header_fund_name="Trade Bot Dashboard",
         )
 
     @app.get("/intraday/{persona_id}", response_class=HTMLResponse)
@@ -304,7 +407,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         persona_svc = DashboardService(config=pcfg)
         summary = persona_svc.intraday_summary()
         region = pcfg.market_region
-        currency = str(pcfg.get("fund.base_currency", "INR" if region == "IN" else "USD"))
+        currency = persona_currency(pcfg, region)
         capital = pcfg.secrets.initial_capital
         persona = {
             "persona_id": persona_id,
@@ -324,6 +427,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "summary": summary,
             },
             service=persona_svc,
+            header_fund_name="Trade Bot Dashboard",
         )
 
     # ------------------------------------------------------------------

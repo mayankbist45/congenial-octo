@@ -2,9 +2,99 @@
 {% block title %}News &middot; {{ fund_name }}{% endblock %}
 
 {% block content %}
-<h1>News digest</h1>
-{% if digest %}
+<h1>{% if is_intraday %}Session scan{% else %}News digest{% endif %}</h1>
+
+{% if is_intraday %}
+<p class="subtitle">
+  <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
+  Intraday catalyst and scan notes from the live watch loop — not the swing news digest.
+  <a href="/intraday/{{ current_persona }}">Full intraday view</a>
+</p>
+
+{% if intraday_news and intraday_news.has_data %}
   <p class="subtitle">
+    {{ intraday_news.run_date or 'Today' }}
+    {% if intraday_news.active %} &middot; session active{% else %} &middot; session ended{% endif %}
+    {% if intraday_news.last_scan_at %} &middot; last scan {{ intraday_news.last_scan_at }}{% endif %}
+  </p>
+
+  {% if intraday_news.watchlist %}
+  <div class="panel">
+    <h2>Watchlist catalysts</h2>
+    <table class="data-table">
+      <thead>
+        <tr><th>Symbol</th><th>Confidence</th><th>Catalyst</th><th>Rationale</th></tr>
+      </thead>
+      <tbody>
+        {% for w in intraday_news.watchlist %}
+        <tr>
+          <td><strong>{{ w.symbol }}</strong></td>
+          <td>{{ w.confidence | number(2) if w.confidence is defined else '—' }}</td>
+          <td>{{ w.catalyst_class or '—' }}</td>
+          <td class="muted small">{{ w.rationale or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if intraday_news.top_candidates %}
+  <div class="panel">
+    <h2>Top candidates in play</h2>
+    <table class="data-table">
+      <thead>
+        <tr><th>Symbol</th><th>Score</th><th>In play</th><th>Trend</th><th>RVOL</th></tr>
+      </thead>
+      <tbody>
+        {% for c in intraday_news.top_candidates[:12] %}
+        <tr>
+          <td><strong>{{ c.symbol }}</strong></td>
+          <td>{{ c.score | number(1) }}</td>
+          <td>{{ c.in_play }}</td>
+          <td>{{ c.trend_cleanliness | number(2) }}</td>
+          <td>{{ c.volume_expansion | number(2) }}x</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if intraday_news.skipped_signals %}
+  <div class="panel">
+    <h2>Skipped / vetoed signals</h2>
+    <table class="data-table">
+      <thead>
+        <tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Side</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+        {% for s in intraday_news.skipped_signals %}
+        <tr>
+          <td>{{ s.time or '—' }}</td>
+          <td><strong>{{ s.symbol }}</strong></td>
+          <td>{{ s.strategy }}</td>
+          <td>{{ s.side }}</td>
+          <td class="muted small">{{ s.reason or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+{% else %}
+  <div class="panel">
+    <p class="empty" style="margin:0">
+      No intraday scan data saved yet for <code>{{ current_persona }}</code>.
+    </p>
+    <code class="cmd">python run_daily.py watch --persona {{ current_persona }}</code>
+  </div>
+{% endif %}
+
+{% elif digest %}
+  <p class="subtitle">
+    <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
     {{ digest.run_date }} &middot; {{ digest.article_count }} articles reviewed,
     {{ digest.high_impact_count }} high impact &middot;
     {{ 'summarised by the language model' if digest.generated_by_llm else 'keyword digest (no model available)' }}
@@ -72,8 +162,18 @@
     {% endif %}
   </div>
 {% else %}
+  <p class="subtitle">
+    <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
+    No digest recorded yet for <code>{{ current_persona }}</code>.
+  </p>
   <div class="panel">
-    <p class="empty">No digest recorded yet. It is produced during the daily run.</p>
+    <p class="empty" style="margin:0">
+      News is produced during the daily swing run.
+      {% if region == 'US' %}
+      US personas use CNBC, MarketWatch, and Yahoo Finance feeds configured in <code>personas_us.yaml</code>.
+      {% endif %}
+    </p>
+    <code class="cmd">python run_daily.py analyse --persona {{ current_persona }}</code>
   </div>
 {% endif %}
 {% endblock %}

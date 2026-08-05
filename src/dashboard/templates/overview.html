@@ -3,21 +3,221 @@
 
 {% block content %}
 <h1>Overview</h1>
-{% if overview.run %}
+
+{% if overview.is_intraday %}
   <p class="subtitle">
-    Last run {{ overview.run.run_date }}
+    <span class="region-badge region-{{ overview.region | lower }}">{{ overview.region_label }}</span>
+    Intraday paper &middot; {{ overview.broker_label }}
+    {% if overview.has_data %}
+      &middot; {{ overview.start_date }} to {{ overview.end_date }}
+      &middot; {% if overview.active %}Session active{% else %}Session ended{% endif %}
+      {% if overview.last_scan_at %} &middot; last scan {{ overview.last_scan_at }}{% endif %}
+    {% endif %}
+    &middot; <a href="/intraday/{{ current_persona }}">Full intraday view</a>
+  </p>
+{% elif overview.run %}
+  <p class="subtitle">
+    <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
+    {{ benchmark_label }} benchmark
+    &middot; Last run {{ overview.run.run_date }}
     {%- if overview.run.is_deep_review %} (quarterly deep review){% endif %}
     &middot; {{ overview.run.status }}
     &middot; {{ 'decision layer active' if overview.run.llm_used else 'rules only' }}
   </p>
 {% else %}
-  <p class="subtitle">No runs recorded yet.</p>
+  <p class="subtitle">
+    {% if region != 'IN' %}
+    <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
+    {{ benchmark_label }} benchmark &middot;
+    {% endif %}
+    No runs recorded yet{% if current_persona != 'balanced' %} for <code>{{ current_persona }}</code>{% endif %}.
+  </p>
 {% endif %}
 
-{% if not overview.has_data %}
+{% if overview.is_intraday %}
+  {% if not overview.has_data %}
   <div class="panel">
     <p class="empty">
-      The fund has not run yet. Start it with <code>python run_daily.py</code>,
+      No intraday paper result saved yet for <code>{{ current_persona }}</code>.
+    </p>
+    <code class="cmd">python run_daily.py watch --persona {{ current_persona }}</code>
+  </div>
+  {% else %}
+
+  {% if overview.total_trades == 0 and not overview.open_positions %}
+  <div class="panel">
+    <p class="muted" style="margin:0">
+      No trades today.
+      {% if overview.skipped_signals %}
+        {{ overview.skipped_signals | length }} signal(s) were vetoed or skipped — see below.
+      {% elif overview.watchlist or overview.top_candidates %}
+        Watchlist and candidates updated; no rule signal cleared the gate yet.
+      {% else %}
+        Session may still be scanning or market data was limited.
+      {% endif %}
+    </p>
+  </div>
+  {% endif %}
+
+  <div class="stats">
+    <div class="stat">
+      <div class="label">Net P&amp;L</div>
+      <div class="value {{ overview.total_net_pnl | sign }}">
+        {{ overview.total_net_pnl | money_currency(overview.currency) }}
+      </div>
+      <div class="sub">{{ overview.start_date }} to {{ overview.end_date }}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Return</div>
+      <div class="value {{ overview.total_return_pct | sign }}">
+        {{ overview.total_return_pct | pct(2, true) }}
+      </div>
+      <div class="sub">on {{ overview.starting_capital | money_currency(overview.currency) }} capital</div>
+    </div>
+    <div class="stat">
+      <div class="label">Trades</div>
+      <div class="value">{{ overview.total_trades }}</div>
+      <div class="sub">{{ overview.win_rate_pct | pct(1) }} win rate</div>
+    </div>
+    <div class="stat">
+      <div class="label">Expectancy</div>
+      <div class="value {{ overview.expectancy_r | sign }}">
+        {{ overview.expectancy_r | number(3) }}R
+      </div>
+      {% if overview.lockout_reason %}
+      <div class="sub warn-text">{{ overview.lockout_reason }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if overview.watchlist %}
+  <div class="panel">
+    <h2>Watchlist</h2>
+    <table class="data-table">
+      <thead>
+        <tr><th>Symbol</th><th>Confidence</th><th>Catalyst</th><th>Rationale</th></tr>
+      </thead>
+      <tbody>
+        {% for w in overview.watchlist %}
+        <tr>
+          <td><strong>{{ w.symbol }}</strong></td>
+          <td>{{ w.confidence | number(2) if w.confidence is defined else '—' }}</td>
+          <td>{{ w.catalyst_class or '—' }}</td>
+          <td class="muted small">{{ w.rationale or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if overview.top_candidates %}
+  <div class="panel">
+    <h2>Top candidates</h2>
+    <table class="data-table">
+      <thead>
+        <tr><th>Symbol</th><th>Score</th><th>In play</th><th>Trend</th><th>RVOL</th></tr>
+      </thead>
+      <tbody>
+        {% for c in overview.top_candidates[:8] %}
+        <tr>
+          <td><strong>{{ c.symbol }}</strong></td>
+          <td>{{ c.score | number(1) }}</td>
+          <td>{{ c.in_play }}</td>
+          <td>{{ c.trend_cleanliness | number(2) }}</td>
+          <td>{{ c.volume_expansion | number(2) }}x</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if overview.open_positions %}
+  <div class="panel">
+    <h2>Open positions</h2>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Symbol</th><th>Strategy</th><th>Side</th><th>Qty</th>
+          <th>Entry</th><th>Stop</th><th>Target</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in overview.open_positions %}
+        <tr>
+          <td><strong>{{ t.symbol }}</strong></td>
+          <td>{{ t.strategy }}</td>
+          <td>{{ t.side }}</td>
+          <td>{{ t.quantity }}</td>
+          <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+          <td>{{ t.stop_price | number(2) }}</td>
+          <td>{{ t.target_price | number(2) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if overview.trades %}
+  <div class="panel">
+    <h2>Completed trades</h2>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Symbol</th><th>Strategy</th><th>Side</th><th>Qty</th>
+          <th>Entry</th><th>Exit</th><th>Net P&amp;L</th><th>R</th><th>Exit reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in overview.trades %}
+        <tr>
+          <td><strong>{{ t.symbol }}</strong></td>
+          <td>{{ t.strategy }}</td>
+          <td>{{ t.side }}</td>
+          <td>{{ t.quantity }}</td>
+          <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+          <td>{{ t.exit_time }} @ {{ t.exit_price | number(2) }}</td>
+          <td class="{{ t.net_pnl | sign }}">{{ t.net_pnl | money_currency(overview.currency) }}</td>
+          <td class="{{ t.r_multiple | sign }}">{{ t.r_multiple | number(3) }}</td>
+          <td>{{ t.exit_reason }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if overview.skipped_signals %}
+  <div class="panel">
+    <h2>Skipped / vetoed signals</h2>
+    <table class="data-table">
+      <thead>
+        <tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Side</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+        {% for s in overview.skipped_signals %}
+        <tr>
+          <td>{{ s.time or '—' }}</td>
+          <td><strong>{{ s.symbol }}</strong></td>
+          <td>{{ s.strategy }}</td>
+          <td>{{ s.side }}</td>
+          <td class="muted small">{{ s.reason or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% endif %}
+
+{% elif not overview.has_data %}
+  <div class="panel">
+    <p class="empty">
+      The fund has not run yet for <code>{{ current_persona }}</code>.
+      Start it with <code>python run_daily.py analyse --persona {{ current_persona }}</code>,
       then reload this page to review what it proposes.
     </p>
   </div>
@@ -26,7 +226,7 @@
 <div class="stats">
   <div class="stat">
     <div class="label">Fund value</div>
-    <div class="value">{{ overview.total_value | money }}</div>
+    <div class="value">{{ overview.total_value | money_currency(currency) }}</div>
     {% if overview.daily_change_pct is not none %}
       <div class="sub {{ overview.daily_change_pct | sign }}">
         {{ overview.daily_change_pct | pct(2, true) }} on the day
@@ -35,24 +235,24 @@
   </div>
   <div class="stat">
     <div class="label">Fund return</div>
-    <div class="value {{ performance.total_return_pct | sign }}">
-      {{ performance.total_return_pct | pct(2, true) }}
+    <div class="value {{ overview.total_return_pct | sign }}">
+      {{ overview.total_return_pct | pct(2, true) }}
     </div>
     <div class="sub">whole fund since first NAV, after cash drag</div>
-    {% if performance.excess_return_pct is not none %}
-      <div class="sub {{ performance.excess_return_pct | sign }}">
-        {{ performance.excess_return_pct | pct(2, true) }} vs {{ benchmark_label }}
+    {% if overview.excess_return_pct is not none %}
+      <div class="sub {{ overview.excess_return_pct | sign }}">
+        {{ overview.excess_return_pct | pct(2, true) }} vs {{ benchmark_label }}
       </div>
     {% endif %}
   </div>
   <div class="stat">
     <div class="label">Positions</div>
     <div class="value">{{ overview.position_count }}</div>
-    <div class="sub">{{ overview.invested_value | money }} invested</div>
+    <div class="sub">{{ overview.invested_value | money_currency(currency) }} invested</div>
   </div>
   <div class="stat">
     <div class="label">Cash</div>
-    <div class="value">{{ overview.cash | money }}</div>
+    <div class="value">{{ overview.cash | money_currency(currency) }}</div>
     <div class="sub">{{ overview.cash_pct | pct(1) }} of the fund</div>
   </div>
   <div class="stat">
@@ -197,4 +397,56 @@
 </div>
 
 {% endif %}
+
+{% if intraday_books %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Intraday sessions</h2>
+    <span class="note"><a href="/intraday">All intraday</a></span>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Persona</th>
+        <th>Region</th>
+        <th>Broker</th>
+        <th>Net P&amp;L</th>
+        <th>Return</th>
+        <th>Trades</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in intraday_books %}
+      {% set s = p.intraday_summary %}
+      <tr>
+        <td>
+          <strong>{{ p.persona_id }}</strong>
+          <div class="muted small">{{ p.description }}</div>
+        </td>
+        <td>
+          <span class="region-badge region-{{ p.region | lower }}">{{ p.region_label }}</span>
+        </td>
+        <td>{{ p.broker_label }}</td>
+        {% if s %}
+        <td class="{{ s.total_net_pnl | sign }}">{{ s.total_net_pnl | money_currency(p.currency) }}</td>
+        <td class="{{ s.total_return_pct | sign }}">{{ s.total_return_pct | pct(2, true) }}</td>
+        <td>{{ s.total_trades }}</td>
+        <td class="muted small">
+          {% if s.active %}Active{% else %}Ended{% endif %}
+          {% if s.last_scan_at %}<br>{{ s.last_scan_at }}{% endif %}
+        </td>
+        <td><a href="/intraday/{{ p.persona_id }}">Details</a></td>
+        {% else %}
+        <td colspan="4" class="muted">No saved run</td>
+        <td><a href="/intraday/{{ p.persona_id }}">Setup</a></td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% endblock %}

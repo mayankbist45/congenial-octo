@@ -41,6 +41,13 @@ def _ts_for_index(when: datetime, index: pd.DatetimeIndex, config: Config) -> pd
     return ts
 
 
+def _naive_exchange_dt(when: datetime, tz) -> datetime:
+    """Normalize to exchange-local naive time for safe datetime comparisons."""
+    if when.tzinfo is not None:
+        return when.astimezone(tz).replace(tzinfo=None)
+    return when
+
+
 class IntradayWatchEngine:
     def __init__(
         self,
@@ -460,8 +467,10 @@ class IntradayWatchEngine:
                     },
                 }
 
+        now_cmp = _naive_exchange_dt(now, self._tz)
         if force_exit or (
-            leg_a.max_exit_time and now >= leg_a.max_exit_time
+            leg_a.max_exit_time
+            and now_cmp >= _naive_exchange_dt(leg_a.max_exit_time, self._tz)
         ):
             last_ts = common[-1]
             return {
@@ -483,7 +492,10 @@ class IntradayWatchEngine:
         force_exit = now.time() >= parse_hhmm(
             str(self._config.get("intraday.force_exit_time", "15:15"))
         )
-        max_hold_exit = position.max_exit_time is not None and now >= position.max_exit_time
+        now_cmp = _naive_exchange_dt(now, self._tz)
+        max_hold_exit = position.max_exit_time is not None and now_cmp >= _naive_exchange_dt(
+            position.max_exit_time, self._tz
+        )
         if frame is None or frame.empty:
             if force_exit or max_hold_exit:
                 return {

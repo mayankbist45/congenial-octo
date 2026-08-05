@@ -25,6 +25,12 @@ def test_persona_config_exposes_richer_mandate_fields() -> None:
     ]
 
 
+def test_us_persona_mandate_inherits_sp500_benchmark() -> None:
+    cfg = get_persona_config("steady_compounder_us")
+    assert cfg.mandate["benchmark_label"] == "S&P 500"
+    assert cfg.mandate["benchmark_symbol"] == "^GSPC"
+
+
 def test_legacy_config_gets_default_mandate_and_analytics(tmp_path, config) -> None:
     raw = copy.deepcopy(config.raw)
     raw.pop("mandate", None)
