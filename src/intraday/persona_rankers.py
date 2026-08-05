@@ -313,7 +313,7 @@ def load_ranker(config: Config) -> IntradayRanker:
 
 
 def filter_ranked_for_persona(config: Config, ranked: List[RankedStock]) -> List[RankedStock]:
-    """Pre-catalyst universe filter; calan keeps in_play names only."""
-    if config.persona_id == "calan":
+    """Pre-catalyst universe filter; calan personas keep in_play names only."""
+    if config.persona_id in ("calan", "calan_us"):
         return [r for r in ranked if r.in_play]
     return ranked

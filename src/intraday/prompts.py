@@ -368,7 +368,8 @@ def validate_catalyst_payload(payload: Any) -> Optional[dict]:
         if catalyst not in CATALYST_CLASSES:
             catalyst = "none"
         row["catalyst_class"] = catalyst
-        row["in_play"] = bool(item.get("in_play", False))
+        # LLM often omits in_play; a watchlist name is intended to be tradable.
+        row["in_play"] = bool(item.get("in_play", True))
         cleaned.append(row)
     return {
         "session_view": str(payload.get("session_view", "")).strip(),
