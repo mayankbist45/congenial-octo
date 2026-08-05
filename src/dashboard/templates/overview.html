@@ -34,10 +34,11 @@
     {% endif %}
   </div>
   <div class="stat">
-    <div class="label">Total return</div>
+    <div class="label">Fund return</div>
     <div class="value {{ performance.total_return_pct | sign }}">
       {{ performance.total_return_pct | pct(2, true) }}
     </div>
+    <div class="sub">whole fund since first NAV, after cash drag</div>
     {% if performance.excess_return_pct is not none %}
       <div class="sub {{ performance.excess_return_pct | sign }}">
         {{ performance.excess_return_pct | pct(2, true) }} vs {{ benchmark_label }}
@@ -144,7 +145,7 @@
     {% if overview.top_holdings %}
     <table>
       <thead>
-        <tr><th>Stock</th><th class="num">Weight</th><th class="num">Return</th></tr>
+        <tr><th>Stock</th><th class="num">Weight</th><th class="num">Position return</th></tr>
       </thead>
       <tbody>
         {% for h in overview.top_holdings %}
@@ -162,6 +163,10 @@
     {% else %}
       <p class="empty">The fund holds no positions yet.</p>
     {% endif %}
+    <p class="muted" style="font-size:13px;margin:10px 0 0">
+      Position return is each holding's move versus its own average cost. It will
+      not match the fund return above, which includes cash and all holdings together.
+    </p>
   </div>
 
   <div class="panel">

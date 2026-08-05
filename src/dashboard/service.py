@@ -182,6 +182,21 @@ class DashboardService:
     # ------------------------------------------------------------------
     # Overview
     # ------------------------------------------------------------------
+    def _reconstructed_book_totals(self, holdings: List[Dict[str, Any]]) -> Dict[str, float]:
+        capital = float(self._config.secrets.initial_capital)
+        net_deployed = self._repo.net_cash_deployed()
+        realised = self._repo.total_realised_pnl()
+        invested_value = sum(float(h["market_value"] or 0.0) for h in holdings)
+        unrealised_pnl = sum(float(h["unrealised_pnl"] or 0.0) for h in holdings)
+        cash = max(capital - net_deployed + realised, 0.0)
+        return {
+            "cash": cash,
+            "invested_value": invested_value,
+            "unrealised_pnl": unrealised_pnl,
+            "realised_pnl": realised,
+            "total_value": cash + invested_value,
+        }
+
     def overview(self) -> Dict[str, Any]:
         run = self._repo.latest_run()
         history = self._repo.nav_history()
@@ -203,16 +218,19 @@ class DashboardService:
         unrealised_pnl = float(latest["unrealised_pnl"] or 0.0) if latest else 0.0
 
         # If NAV still reflects a cash-only book but fills exist, prefer the
-        # reconstructed book so Overview matches Holdings.
+        # reconstructed or fresher holdings mark so Overview matches Holdings.
         holdings_invested = sum(float(h["market_value"] or 0.0) for h in holdings)
-        if invested_value <= 0 and holdings:
-            capital = float(self._config.secrets.initial_capital)
-            net_deployed = self._repo.net_cash_deployed()
-            realised = self._repo.total_realised_pnl()
-            cash = max(capital - net_deployed + realised, 0.0)
-            invested_value = holdings_invested
-            unrealised_pnl = sum(float(h["unrealised_pnl"] or 0.0) for h in holdings)
-            total_value = cash + invested_value
+        holdings_unrealised = sum(float(h["unrealised_pnl"] or 0.0) for h in holdings)
+        if holdings and (
+            invested_value <= 0
+            or abs(holdings_invested - invested_value) > 1.0
+            or abs(holdings_unrealised - unrealised_pnl) > 1.0
+        ):
+            reconciled = self._reconstructed_book_totals(holdings)
+            cash = reconciled["cash"]
+            invested_value = reconciled["invested_value"]
+            unrealised_pnl = reconciled["unrealised_pnl"]
+            total_value = reconciled["total_value"]
             daily_change_pct = None
 
         return {
@@ -438,6 +456,33 @@ class DashboardService:
     # ------------------------------------------------------------------
     def performance(self) -> Dict[str, Any]:
         report = self._performance.report()
+        history = self._repo.nav_history()
+        latest = history[-1] if history else None
+
+        # If the latest recorded NAV is stale versus the latest holdings mark,
+        # prefer the reconstructed book so Overview and Holdings stay consistent.
+        holdings = self.holdings()
+        if latest and holdings:
+            latest_invested = float(latest.get("invested_value") or 0.0)
+            latest_unrealised = float(latest.get("unrealised_pnl") or 0.0)
+            reconciled = self._reconstructed_book_totals(holdings)
+            if (
+                latest_invested <= 0
+                or abs(reconciled["invested_value"] - latest_invested) > 1.0
+                or abs(reconciled["unrealised_pnl"] - latest_unrealised) > 1.0
+            ):
+                report.current_value = reconciled["total_value"]
+                report.realised_pnl = reconciled["realised_pnl"]
+                report.unrealised_pnl = reconciled["unrealised_pnl"]
+            if report.starting_value > 0:
+                report.total_return_pct = (
+                    report.current_value / report.starting_value - 1.0
+                ) * 100.0
+                if report.benchmark_return_pct is not None:
+                    report.excess_return_pct = (
+                        report.total_return_pct - report.benchmark_return_pct
+                    )
+
         return {
             "start_date": report.start_date.isoformat() if report.start_date else None,
             "end_date": report.end_date.isoformat() if report.end_date else None,

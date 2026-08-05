@@ -25,6 +25,7 @@ from src.models import (
     TradeProposal,
 )
 from tests.conftest import make_diversified_portfolio, make_scores
+from tests.conftest import make_portfolio
 
 PAGES = [
     "/",
@@ -362,6 +363,62 @@ def test_sector_weights_sum_to_the_invested_share(service, repo) -> None:
     assert abs(total - invested_pct) < 0.5
 
 
+<<<<<<< Updated upstream
+=======
+def test_overview_exposes_market_regime(service, repo) -> None:
+    seed_run(repo)
+    seed_history(repo)
+
+    overview = service.overview()
+
+    assert overview["market_regime"]["regime"] == "elevated"
+    assert overview["market_regime"]["score"] == 48.2
+
+
+def test_performance_falls_back_to_reconstructed_book_when_nav_is_cash_only(
+    service, repo
+) -> None:
+    portfolio = make_diversified_portfolio(cash=100_000)
+    portfolio.positions[0].last_price = 120.0
+    start = date.today() - timedelta(days=5)
+    repo.record_nav(
+        run_date=start,
+        portfolio=make_portfolio([], cash=1_500_000),
+        benchmark_close=20_000.0,
+        daily_return_pct=0.0,
+        benchmark_return_pct=0.0,
+    )
+    repo.record_nav(
+        run_date=date.today(),
+        portfolio=make_portfolio([], cash=1_500_000),
+        benchmark_close=20_050.0,
+        daily_return_pct=0.0,
+        benchmark_return_pct=0.1,
+    )
+    repo.record_position_snapshot(
+        date.today(),
+        portfolio,
+        scores={p.symbol: make_scores(p.symbol) for p in portfolio.positions},
+        risk_profile=None,
+    )
+
+    perf = service.performance()
+
+    assert perf["current_value"] > perf["starting_value"]
+    assert perf["total_return_pct"] > 0
+
+
+def test_risk_profile_exposes_market_regime(service, repo) -> None:
+    seed_history(repo)
+
+    risk = service.risk_profile()
+
+    assert risk is not None
+    assert risk["market_regime"]["regime"] == "elevated"
+    assert risk["market_regime"]["evidence"]
+
+
+>>>>>>> Stashed changes
 def test_briefing_is_served_when_it_exists(service, temp_config) -> None:
     today = date.today()
     path = temp_config.briefing_dir / f"briefing_{today.isoformat()}.txt"
