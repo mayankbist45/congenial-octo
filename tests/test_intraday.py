@@ -627,3 +627,145 @@ def test_exit_for_position_handles_aware_now(calan_config):
     assert result is not None
     assert result["exit_reason"] in ("max_hold", "paper_time_exit_no_candle")
 
+
+def test_watch_stale_signal_is_rejected(calan_config):
+    from zoneinfo import ZoneInfo
+
+    from src.intraday.watch import IntradayWatchEngine
+
+    us_config = get_persona_config("calan_us")
+    engine = IntradayWatchEngine(
+        us_config,
+        data_service=MagicMock(),
+        symbols=["AAPL"],
+    )
+    now = datetime(2026, 8, 5, 11, 30, tzinfo=ZoneInfo("America/New_York"))
+    stale = IntradaySignal(
+        "AAPL",
+        "opening_range_breakout",
+        "BUY",
+        datetime(2026, 8, 5, 10, 0),
+        100.0,
+        99.0,
+        102.0,
+        "test",
+    )
+    assert engine._is_stale_signal(stale, now) is True
+
+    fresh = IntradaySignal(
+        "AAPL",
+        "opening_range_breakout",
+        "BUY",
+        datetime(2026, 8, 5, 11, 28),
+        100.0,
+        99.0,
+        102.0,
+        "test",
+    )
+    assert engine._is_stale_signal(fresh, now) is False
+
+
+def test_watch_skips_symbol_not_on_watchlist(calan_config):
+    from zoneinfo import ZoneInfo
+
+    from src.intraday.models import PaperState
+    from src.intraday.watch import IntradayWatchEngine
+
+    engine = IntradayWatchEngine(
+        calan_config,
+        data_service=MagicMock(),
+        symbols=["AAPL", "AMD", "GOOGL"],
+        agent=MagicMock(),
+    )
+    engine._broker_executor = MagicMock(return_value=None)
+    state = PaperState(
+        persona_id="calan",
+        trading_date=datetime(2026, 8, 5).date(),
+        watchlist=[{"symbol": "GOOGL", "in_play": True, "confidence": 0.8}],
+    )
+    amd_signal = IntradaySignal(
+        "AMD",
+        "opening_range_breakout",
+        "SELL",
+        datetime(2026, 8, 5, 11, 0),
+        100.0,
+        101.0,
+        98.0,
+        "ORB low break with volume below VWAP",
+    )
+    ranked = [
+        RankedStock(
+            symbol="AMD",
+            score=180.0,
+            turnover=1e9,
+            volume_expansion=2.0,
+            range_pct=2.0,
+            gap_pct=1.5,
+            vwap_distance_pct=0.5,
+            prior_level_distance_pct=0.5,
+            trend_cleanliness=0.5,
+            in_play=True,
+        )
+    ]
+    engine._rank_signals = MagicMock(return_value=[(180.0, amd_signal)])
+    frames = {"AMD": _sample_frame()}
+    now = datetime(2026, 8, 5, 11, 0, tzinfo=ZoneInfo("America/New_York"))
+    engine._open_new_positions(state, frames, ranked, now, {})
+    assert any(s["reason"] == "symbol not on watchlist" for s in state.skipped_signals)
+
+
+def test_filter_ranked_for_persona_includes_calan_us():
+    from src.intraday.persona_rankers import filter_ranked_for_persona
+
+    config = get_persona_config("calan_us")
+    ranked = [
+        RankedStock(
+            symbol="AMD",
+            score=180.0,
+            turnover=1e9,
+            volume_expansion=2.0,
+            range_pct=2.0,
+            gap_pct=1.5,
+            vwap_distance_pct=0.5,
+            prior_level_distance_pct=0.5,
+            trend_cleanliness=0.5,
+            in_play=True,
+        ),
+        RankedStock(
+            symbol="INTC",
+            score=120.0,
+            turnover=1e8,
+            volume_expansion=0.5,
+            range_pct=1.0,
+            gap_pct=0.2,
+            vwap_distance_pct=0.1,
+            prior_level_distance_pct=0.1,
+            trend_cleanliness=0.2,
+            in_play=False,
+        ),
+    ]
+    filtered = filter_ranked_for_persona(config, ranked)
+    assert [r.symbol for r in filtered] == ["AMD"]
+
+
+def test_catalyst_watchlist_defaults_in_play_true():
+    from src.intraday.prompts import validate_catalyst_payload
+
+    payload = validate_catalyst_payload(
+        {
+            "session_view": "test",
+            "trade_day_quality": "fair",
+            "watchlist": [
+                {
+                    "symbol": "GOOGL",
+                    "direction_bias": "long",
+                    "confidence": 0.7,
+                    "rationale": "gap",
+                    "catalyst_class": "technical_only",
+                }
+            ],
+        }
+    )
+    assert payload is not None
+    assert payload["watchlist"][0]["in_play"] is True
+

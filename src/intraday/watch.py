@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import time as time_module
 from dataclasses import asdict
-from datetime import date, datetime, time
-from typing import Callable, Dict, Iterable, List, Optional
+from datetime import date, datetime, time, timedelta
+from typing import Callable, Dict, Iterable, List, Optional, Set
 
 import pandas as pd
 
@@ -113,15 +113,20 @@ class IntradayWatchEngine:
                 pool = ranked
             catalyst = self._agent.catalyst_scan(pool or ranked, frames, now, state.daily_pnl)
             watchlist = list(catalyst.get("watchlist") or [])
-            if watchlist or not self._catalyst_scanned:
+            if watchlist:
+                state.watchlist = watchlist
+            elif not self._catalyst_scanned and not state.watchlist:
                 state.watchlist = watchlist
             self._catalyst_scanned = True
 
         if self._can_enter_new_trades(state, now):
-            watch_symbols = {str(w["symbol"]).upper() for w in state.watchlist if w.get("in_play")}
-            if watch_symbols and self._config.persona_id not in ("spread", "xstat"):
-                ranked = [r for r in ranked if r.symbol in watch_symbols]
-            self._open_new_positions(state, frames, ranked, now, previous_days)
+            watch_symbols = self._watchlist_symbols(state)
+            if self._uses_watchlist_gate():
+                if watch_symbols:
+                    ranked = [r for r in ranked if r.symbol in watch_symbols]
+                    self._open_new_positions(state, frames, ranked, now, previous_days)
+            else:
+                self._open_new_positions(state, frames, ranked, now, previous_days)
 
         self._apply_daily_lockout(state)
         self._save(state)
@@ -182,6 +187,12 @@ class IntradayWatchEngine:
         ranked_map = {r.symbol: r for r in ranked}
 
         for _, signal in signals:
+            if self._uses_watchlist_gate() and signal.symbol not in watch_map:
+                self._skip(state, signal, "symbol not on watchlist")
+                continue
+            if self._is_stale_signal(signal, now):
+                self._skip(state, signal, "stale signal (missed entry window)")
+                continue
             if state.trade_count >= max_trades:
                 self._skip(state, signal, "max trades reached")
                 continue
@@ -260,8 +271,8 @@ class IntradayWatchEngine:
         state: PaperState,
         previous_days: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> List[tuple[float, IntradaySignal]]:
-        if state.watchlist and self._config.persona_id not in ("spread", "xstat"):
-            watch_symbols = {str(w["symbol"]).upper() for w in state.watchlist if w.get("in_play")}
+        if self._uses_watchlist_gate():
+            watch_symbols = self._watchlist_symbols(state)
             if watch_symbols:
                 ranked = [r for r in ranked if r.symbol in watch_symbols]
         collected = collect_signals(self._config, frames, ranked, previous_days)
@@ -687,6 +698,27 @@ class IntradayWatchEngine:
             )
         )
         return self._costs(signal.entry_price, signal.target_price, max(qty, 1))
+
+    @staticmethod
+    def _watchlist_symbols(state: PaperState) -> Set[str]:
+        symbols: Set[str] = set()
+        for entry in state.watchlist:
+            if not entry.get("in_play"):
+                continue
+            symbol = str(entry.get("symbol", "")).upper()
+            if symbol:
+                symbols.add(symbol)
+        return symbols
+
+    def _uses_watchlist_gate(self) -> bool:
+        return self._config.persona_id not in ("spread", "xstat")
+
+    def _is_stale_signal(self, signal: IntradaySignal, now: datetime) -> bool:
+        poll = max(int(self._config.get("intraday.watch_poll_seconds", 300) or 300), 1)
+        max_age = timedelta(seconds=poll + 120)
+        signal_ts = _naive_exchange_dt(signal.entry_time, self._tz)
+        now_ts = _naive_exchange_dt(now, self._tz)
+        return now_ts - signal_ts > max_age
 
     def _can_enter_new_trades(self, state: PaperState, now: datetime) -> bool:
         if state.lockout_reason:
