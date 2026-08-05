@@ -349,6 +349,31 @@ def test_persona_prompt_bundle_unknown_falls_back_to_calan():
     assert bundle.catalyst_prompt == calan.catalyst_prompt
 
 
+def test_symbols_for_poll_includes_watchlist(calan_config):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from src.intraday.models import PaperState
+    from src.intraday.watch import IntradayWatchEngine
+
+    engine = IntradayWatchEngine(
+        calan_config,
+        data_service=MagicMock(),
+        symbols=["AAPL", "MSFT", "NVDA", "GOOGL", "AMD", "META"],
+    )
+    state = PaperState(
+        trade_date=datetime(2026, 8, 5).date(),
+        watchlist=[
+            {"symbol": "AMD", "in_play": True},
+            {"symbol": "GOOGL", "in_play": True},
+        ],
+    )
+    now = datetime(2026, 8, 5, 11, 0, tzinfo=ZoneInfo("America/New_York"))
+    polled = engine._symbols_for_poll(state, now)
+    assert "AMD" in polled
+    assert "GOOGL" in polled
+
+
 def test_revert_agent_regime_rules():
     config = get_persona_config("revert")
     config.raw.setdefault("intraday", {})["agent"] = {"enabled": False}
