@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from src.broker.angelone import AngelOneClient, AngelOneCredentials
 from src.broker.base import BrokerError
+from src.broker.candle_budget import CandleBudgetCoordinator
 from src.broker.candle_pool import AngelOneCandlePool
 from src.config import Config, Secrets
 
@@ -21,7 +20,10 @@ def _mock_config() -> Config:
         angelone_totp_secret="SECRET1",
         angelone_data2_api_key="k2",
     )
-    return Config(raw={"angelone": {"rate_limit_backoff_seconds": 45.0}}, secrets=secrets)
+    return Config(
+        raw={"angelone": {"rate_limit_backoff_seconds": 60.0}},
+        secrets=secrets,
+    )
 
 
 def test_secondary_credentials_reuse_primary_login():
@@ -66,12 +68,7 @@ def test_pool_failover_on_rate_limit():
     secondary.get_candles.assert_called_once()
 
 
-def test_was_rate_limited_detects_angel_message():
-    assert AngelOneClient.was_rate_limited("Access denied because of exceeding access rate")
-    assert not AngelOneClient.was_rate_limited("invalid symbol token")
-
-
-def test_pool_strict_alternates_keys_on_success():
+def test_pool_primary_first_on_success():
     config = _mock_config()
     primary = MagicMock(spec=AngelOneClient)
     primary.credential_label = "primary"
@@ -82,7 +79,6 @@ def test_pool_strict_alternates_keys_on_success():
 
     row = [{"timestamp": "2026-08-03 09:15", "close": 100.0}]
     primary.get_candles.return_value = row
-    secondary.get_candles.return_value = row
 
     pool = AngelOneCandlePool([primary, secondary], config=config)
     args = (
@@ -94,8 +90,34 @@ def test_pool_strict_alternates_keys_on_success():
     for symbol in ("RELIANCE", "TCS", "INFY", "HDFCBANK"):
         pool.get_candles(symbol, *args)
 
-    assert primary.get_candles.call_count == 2
-    assert secondary.get_candles.call_count == 2
-    # Turn order: primary → data2 → primary → data2
-    assert [c[0][0] for c in primary.get_candles.call_args_list] == ["RELIANCE", "INFY"]
-    assert [c[0][0] for c in secondary.get_candles.call_args_list] == ["TCS", "HDFCBANK"]
+    assert primary.get_candles.call_count == 4
+    secondary.get_candles.assert_not_called()
+
+
+def test_was_rate_limited_detects_angel_message():
+    assert AngelOneClient.was_rate_limited("Access denied because of exceeding access rate")
+    assert not AngelOneClient.was_rate_limited("invalid symbol token")
+
+
+def test_budget_coordinator_enforces_spacing(monkeypatch):
+    config = _mock_config()
+    config.raw["angelone"]["candle_budget_spacing_seconds"] = 0.05
+    inner = MagicMock()
+    inner.name = "MockBroker"
+    inner.get_candles.return_value = [{"timestamp": "2026-08-03 09:15", "close": 100.0}]
+    inner.connect.return_value = True
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("src.broker.candle_budget.time.sleep", lambda s: sleeps.append(s))
+
+    coord = CandleBudgetCoordinator(inner, config=config)
+    args = (
+        datetime(2026, 8, 3, 9, 15),
+        datetime(2026, 8, 3, 15, 30),
+        "FIVE_MINUTE",
+    )
+    coord.get_candles("RELIANCE", *args)
+    coord.get_candles("TCS", *args)
+
+    assert inner.get_candles.call_count == 2
+    assert len(sleeps) >= 1

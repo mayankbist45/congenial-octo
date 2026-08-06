@@ -657,4 +657,9 @@ PERSONA_PROMPTS: Dict[str, PersonaPromptBundle] = {
 
 def get_persona_prompt_bundle(persona_id: str) -> PersonaPromptBundle:
     """Return prompt bundle for persona; fall back to calan."""
-    return PERSONA_PROMPTS.get(persona_id, PERSONA_PROMPTS[DEFAULT_PERSONA_ID])
+    from src.market.registry import persona_strategy_type
+
+    strategy = persona_strategy_type(persona_id)
+    if strategy == "mayank":
+        strategy = "calan"
+    return PERSONA_PROMPTS.get(strategy, PERSONA_PROMPTS[DEFAULT_PERSONA_ID])

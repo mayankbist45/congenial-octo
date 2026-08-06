@@ -53,6 +53,8 @@ def _state_to_dict(state: PaperState) -> dict:
         "completed_trades": [_trade_to_dict(t) for t in state.completed_trades],
         "skipped_signals": state.skipped_signals,
         "top_candidates": state.top_candidates,
+        "style_profiles": state.style_profiles,
+        "style_params": state.style_params,
     }
 
 
@@ -69,6 +71,8 @@ def _state_from_dict(payload: dict) -> PaperState:
         completed_trades=[_trade_from_dict(t) for t in payload.get("completed_trades") or []],
         skipped_signals=list(payload.get("skipped_signals") or []),
         top_candidates=list(payload.get("top_candidates") or []),
+        style_profiles=dict(payload.get("style_profiles") or {}),
+        style_params=dict(payload.get("style_params") or {}),
     )
 
 

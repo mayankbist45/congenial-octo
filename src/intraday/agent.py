@@ -40,7 +40,8 @@ class IntradayAgent:
         as_of: datetime,
         daily_pnl: float = 0.0,
     ) -> dict:
-        if self.enabled and self._llm.available:
+        use_llm = bool(self._config.get("intraday.agent.catalyst_use_llm", True))
+        if use_llm and self.enabled and self._llm.available:
             result = self._catalyst_llm(ranked, frames, as_of, daily_pnl)
             if result is not None:
                 result = self._filter_calan_watchlist(result, ranked)
@@ -86,7 +87,9 @@ class IntradayAgent:
 
     def _filter_calan_watchlist(self, payload: dict, ranked: List[RankedStock]) -> dict:
         """Drop weak LLM picks that lack gap/rvol catalyst support."""
-        if self._config.persona_id not in ("calan", "calan_us"):
+        from src.market.registry import persona_strategy_type
+
+        if persona_strategy_type(self._config.persona_id) != "calan":
             return payload
         ranked_map = {r.symbol.upper(): r for r in ranked}
         sip = self._config.get("intraday.stocks_in_play", {}) or {}
@@ -179,6 +182,10 @@ class IntradayAgent:
 
     def _catalyst_rules(self, ranked: List[RankedStock]) -> dict:
         persona_id = self._config.persona_id
+        if persona_id == "mayank":
+            from src.intraday.mayank import mayank_catalyst_rules
+
+            return mayank_catalyst_rules(self._config, ranked)
         if persona_id == "revert":
             return self._revert_catalyst_rules(ranked)
         if persona_id == "flux":
@@ -495,6 +502,16 @@ class IntradayAgent:
         estimated_costs: float,
     ) -> dict:
         persona_id = self._config.persona_id
+        if persona_id == "mayank":
+            from src.intraday.mayank import REVERSION_STRATEGIES
+
+            if signal.strategy in REVERSION_STRATEGIES:
+                return self._revert_gate_rules(
+                    signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
+                )
+            return self._calan_gate_rules(
+                signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
+            )
         if persona_id == "revert":
             return self._revert_gate_rules(
                 signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs

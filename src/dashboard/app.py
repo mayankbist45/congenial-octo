@@ -27,6 +27,7 @@ from src.config import (
     persona_description,
 )
 from src.dashboard import charts
+from src.dashboard.market_ui import all_markets_summary, format_market_timestamp, market_label
 from src.dashboard.service import (
     DashboardService,
     broker_label,
@@ -51,6 +52,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     app = FastAPI(title=default_service.fund_name, docs_url="/api/docs")
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+    templates.env.globals["market_label"] = market_label
+    templates.env.globals["format_market_timestamp"] = format_market_timestamp
     templates.env.filters["money"] = money
     templates.env.filters["money_currency"] = format_money
     templates.env.filters["pct"] = pct
@@ -349,18 +352,37 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             service=svc,
         )
 
-    @app.get("/personas", response_class=HTMLResponse)
-    def personas_page(request: Request) -> HTMLResponse:
-        grouped = default_service.personas_by_region()
+    @app.get("/markets", response_class=HTMLResponse)
+    def markets_page(request: Request) -> HTMLResponse:
+        grouped = default_service.personas_by_market()
         return render(
             request,
             "personas.html",
             {
                 "page": "personas",
-                "regions": grouped,
+                "markets": all_markets_summary(),
+                "markets_grouped": grouped,
+                "regions": default_service.personas_by_region(),
                 "region_labels": {
-                    "IN": region_label("IN"),
-                    "US": region_label("US"),
+                    m["legacy_region"]: m["label"] for m in all_markets_summary()
+                },
+            },
+            header_fund_name="Trade Bot Dashboard",
+        )
+
+    @app.get("/personas", response_class=HTMLResponse)
+    def personas_page(request: Request) -> HTMLResponse:
+        grouped = default_service.personas_by_market()
+        return render(
+            request,
+            "personas.html",
+            {
+                "page": "personas",
+                "markets": all_markets_summary(),
+                "markets_grouped": grouped,
+                "regions": default_service.personas_by_region(),
+                "region_labels": {
+                    m["legacy_region"]: m["label"] for m in all_markets_summary()
                 },
             },
             header_fund_name="Trade Bot Dashboard",
@@ -370,27 +392,37 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def intraday_page(
         request: Request,
         region: Optional[str] = None,
+        market: Optional[str] = None,
     ) -> HTMLResponse:
-        active = region.upper() if region else None
-        if active and active not in {"IN", "US"}:
-            raise HTTPException(status_code=400, detail="region must be IN or US")
-        personas = default_service.intraday_personas(active)
-        by_region = default_service.personas_by_region()
+        markets = all_markets_summary()
+        active_region = region.upper() if region else None
+        active_market = market.strip() if market else None
+        if active_region and active_region not in {m["legacy_region"] for m in markets}:
+            raise HTTPException(status_code=400, detail="unknown region")
+        if active_market and active_market not in {m["id"] for m in markets}:
+            raise HTTPException(status_code=400, detail="unknown market")
+        if active_market:
+            personas = default_service.intraday_personas(market_id=active_market)
+        elif active_region:
+            personas = default_service.intraday_personas(active_region)
+        else:
+            personas = default_service.intraday_personas()
+        by_market = default_service.personas_by_market()
+        intraday_by_market = {
+            mid: [p for p in rows if p.get("intraday")]
+            for mid, rows in by_market.items()
+        }
         return render(
             request,
             "intraday.html",
             {
                 "page": "intraday",
                 "personas": personas,
-                "intraday_by_region": {
-                    "IN": [p for p in by_region.get("IN", []) if p.get("intraday")],
-                    "US": [p for p in by_region.get("US", []) if p.get("intraday")],
-                },
-                "active_region": active,
-                "region_labels": {
-                    "IN": region_label("IN"),
-                    "US": region_label("US"),
-                },
+                "markets": markets,
+                "intraday_by_market": intraday_by_market,
+                "active_region": active_region,
+                "active_market": active_market,
+                "region_labels": {m["legacy_region"]: m["label"] for m in markets},
             },
             header_fund_name="Trade Bot Dashboard",
         )
@@ -407,16 +439,18 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         persona_svc = DashboardService(config=pcfg)
         summary = persona_svc.intraday_summary()
         region = pcfg.market_region
+        market = pcfg.market
         currency = persona_currency(pcfg, region)
         capital = pcfg.secrets.initial_capital
         persona = {
             "persona_id": persona_id,
             "description": persona_description(persona_id),
+            "market_id": market.id,
             "region": region,
             "region_label": region_label(region),
             "currency": currency,
             "capital": capital,
-            "broker_label": broker_label(pcfg.broker_provider),
+            "broker_label": market.display.broker_label or broker_label(pcfg.broker_provider),
         }
         return render(
             request,
@@ -516,10 +550,19 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     @app.get("/api/personas")
     def api_personas() -> JSONResponse:
-        return JSONResponse(default_service.personas_by_region())
+        return JSONResponse(default_service.personas_by_market())
+
+    @app.get("/api/markets")
+    def api_markets() -> JSONResponse:
+        return JSONResponse(all_markets_summary())
 
     @app.get("/api/intraday")
-    def api_intraday(region: Optional[str] = None) -> JSONResponse:
+    def api_intraday(
+        region: Optional[str] = None,
+        market: Optional[str] = None,
+    ) -> JSONResponse:
+        if market:
+            return JSONResponse(default_service.intraday_personas(market_id=market))
         active = region.upper() if region else None
         return JSONResponse(default_service.intraday_personas(active))
 

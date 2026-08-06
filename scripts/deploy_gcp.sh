@@ -134,6 +134,7 @@ push() {
     ssh_vm "sudo mkdir -p '$REMOTE_DIR' &&
             tar -xzf ~/fund-src.tar.gz -C '$REMOTE_DIR' &&
             rm -f ~/fund-src.tar.gz &&
+            find '$REMOTE_DIR' -name '._*' -delete &&
             chmod +x '$REMOTE_DIR'/scripts/*.sh &&
             mkdir -p '$REMOTE_DIR/data'" || die "unpacking on the VM failed"
 

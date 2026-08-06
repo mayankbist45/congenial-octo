@@ -1,0 +1,41 @@
+id: india_equity
+label: "India Equity"
+legacy_region: IN
+asset_class: equity
+exchange: NSE
+timezone: Asia/Kolkata
+currency: INR
+currency_symbol: "Rs"
+session:
+  regular:
+    open: "09:15"
+    close: "15:30"
+broker:
+  provider: angelone
+  product_types: [CASH, MIS]
+data:
+  prices: yahoo
+  fundamentals: [screener, yahoo]
+  news: rss_india
+costs: india_equity
+prompts: india_equity
+fund:
+  benchmark_symbol: "^CRSLDX"
+  benchmark_label: "Nifty 500"
+  base_currency: INR
+universe:
+  file: "data/nifty500.csv"
+execution:
+  product_type: CASH
+  exchange: NSE
+scheduling:
+  swing_cycle: "08:15"
+  swing_close: "18:00"
+  intraday_watch:
+    personas: [calan, mayank]
+    start_offset_min: -5
+    stop_offset_min: 5
+display:
+  badge_class: region-in
+  broker_label: "Angel One"
+  exchange_label: "NSE"

@@ -11,6 +11,30 @@ from src.config import Config
 from src.intraday.fundamental_style import get_style_profile, load_style_profiles
 from src.intraday.models import IntradaySignal, RankedStock
 from src.intraday.ofi import ofi_divergence, ofi_z_proxy
+from src.market.calendar import calendar_for_config
+
+
+def _scan_header(config: Config, title: str, as_of: datetime) -> str:
+    cal = calendar_for_config(config)
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=cal.tz)
+    else:
+        as_of = as_of.astimezone(cal.tz)
+    return f"{title} — {cal.format_local(as_of)}"
+
+
+def _capital_lines(config: Config, daily_pnl: float) -> list[str]:
+    market = config.market
+    cap = config.secrets.initial_capital
+    if market.currency == "USD":
+        return [
+            f"Capital: ${cap:,.0f}",
+            f"Daily P&L so far: ${daily_pnl:,.2f}",
+        ]
+    return [
+        f"Capital: Rs {cap:,.0f}",
+        f"Daily P&L so far: Rs {daily_pnl:,.2f}",
+    ]
 
 
 def build_catalyst_briefing(
@@ -21,6 +45,8 @@ def build_catalyst_briefing(
     daily_pnl: float = 0.0,
 ) -> str:
     persona_id = config.persona_id
+    if persona_id == "mayank":
+        return _build_mayank_catalyst_briefing(config, ranked, frames, as_of, daily_pnl)
     if persona_id == "revert":
         return _build_revert_regime_briefing(config, ranked, frames, as_of, daily_pnl)
     if persona_id == "flux":
@@ -84,10 +110,9 @@ def _build_calan_catalyst_briefing(
     daily_pnl: float,
 ) -> str:
     lines = [
-        f"INTRADAY CATALYST SCAN — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+        _scan_header(config, "INTRADAY CATALYST SCAN", as_of),
         f"Persona: {config.persona_id}",
-        f"Capital: Rs {config.secrets.initial_capital:,.0f}",
-        f"Daily P&L so far: Rs {daily_pnl:,.2f}",
+        *_capital_lines(config, daily_pnl),
         "",
         "CANDIDATES (ranked by quant score):",
     ]
@@ -120,6 +145,45 @@ def _build_calan_catalyst_briefing(
     return "\n".join(lines)
 
 
+def _build_mayank_catalyst_briefing(
+    config: Config,
+    ranked: List[RankedStock],
+    frames: Dict[str, pd.DataFrame],
+    as_of: datetime,
+    daily_pnl: float,
+) -> str:
+    fund = config.get("intraday.fundamentals", {}) or {}
+    lines = [
+        _scan_header(config, "MAYANK HYBRID SCAN", as_of),
+        f"Persona: {config.persona_id}",
+        *_capital_lines(config, daily_pnl),
+        "",
+        "CLASSIFICATION PARAMS:",
+        f"  value P/E <= {fund.get('value_pe_threshold', 18)}",
+        f"  growth P/E >= {fund.get('value_pe_threshold', 18)} with EPS/revenue gr >= {fund.get('min_growth_pct', 8)}%",
+        f"  high P/E threshold: {fund.get('high_pe_threshold', 35)}",
+        f"  max PEG (growth): {fund.get('max_peg_growth', 2.5)}",
+        "  growth → momentum (ORB/VWAP/scalp); value → mean reversion (VWAP/gap fade)",
+        "",
+        "CANDIDATES (style + quant):",
+    ]
+    styles = load_style_profiles(config, [item.symbol for item in ranked[:20]])
+    for item in ranked[:20]:
+        profile = styles.get(item.symbol.upper())
+        style_line = profile.summary() if profile else "style=unknown"
+        lines.append(
+            f"  {item.symbol}: score={item.score:.1f} in_play={item.in_play} "
+            f"trend={item.trend_cleanliness:.2f} rvol={item.volume_expansion:.2f}x "
+            f"| {style_line}"
+        )
+    lines.append("")
+    lines.append(
+        "Route growth names to momentum setups and value names to fade setups. "
+        "Return JSON watchlist with playbook and fundamental_style fields."
+    )
+    return "\n".join(lines)
+
+
 def _build_revert_regime_briefing(
     config: Config,
     ranked: List[RankedStock],
@@ -129,10 +193,9 @@ def _build_revert_regime_briefing(
 ) -> str:
     avg_trend = sum(r.trend_cleanliness for r in ranked[:8]) / max(len(ranked[:8]), 1)
     lines = [
-        f"REVERT REGIME SCAN — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+        _scan_header(config, "REVERT REGIME SCAN", as_of),
         f"Persona: {config.persona_id}",
-        f"Capital: Rs {config.secrets.initial_capital:,.0f}",
-        f"Daily P&L so far: Rs {daily_pnl:,.2f}",
+        *_capital_lines(config, daily_pnl),
         f"Avg trend cleanliness (top 8): {avg_trend:.2f}",
         "",
         "FADE CANDIDATES (ranked by reversion score):",
@@ -162,10 +225,9 @@ def _build_flux_flow_briefing(
     daily_pnl: float,
 ) -> str:
     lines = [
-        f"FLUX FLOW SCAN — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+        _scan_header(config, "FLUX FLOW SCAN", as_of),
         f"Persona: {config.persona_id}",
-        f"Capital: Rs {config.secrets.initial_capital:,.0f}",
-        f"Daily P&L so far: Rs {daily_pnl:,.2f}",
+        *_capital_lines(config, daily_pnl),
         "",
         "FLOW CANDIDATES (ranked by |OFI z| × turnover):",
     ]
@@ -195,10 +257,9 @@ def _build_spread_analyst_briefing(
 ) -> str:
     pairs = config.get("intraday.pairs") or []
     lines = [
-        f"SPREAD ANALYST — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+        _scan_header(config, "SPREAD ANALYST", as_of),
         f"Persona: {config.persona_id}",
-        f"Capital: Rs {config.secrets.initial_capital:,.0f}",
-        f"Daily P&L so far: Rs {daily_pnl:,.2f}",
+        *_capital_lines(config, daily_pnl),
         "",
         "CONFIGURED PAIRS:",
     ]
@@ -226,10 +287,9 @@ def _build_slice_monitor_briefing(
 ) -> str:
     parent_orders = config.get("intraday.parent_orders") or []
     lines = [
-        f"SLICE MONITOR — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+        _scan_header(config, "SLICE MONITOR", as_of),
         f"Persona: {config.persona_id}",
-        f"Capital: Rs {config.secrets.initial_capital:,.0f}",
-        f"Daily P&L so far: Rs {daily_pnl:,.2f}",
+        *_capital_lines(config, daily_pnl),
         "",
         "PARENT ORDERS:",
     ]
@@ -277,15 +337,26 @@ def _build_calan_gate_briefing(
     if profile is not None:
         style_line = profile.summary()
 
+    cost_label = (
+        f"Estimated round-trip costs: ${estimated_costs:,.2f}"
+        if config.market.currency == "USD"
+        else f"Estimated round-trip costs: Rs {estimated_costs:,.2f}"
+    )
+    pnl_line = (
+        f"Daily P&L: ${daily_pnl:,.2f}  "
+        if config.market.currency == "USD"
+        else f"Daily P&L: Rs {daily_pnl:,.2f}  "
+    )
+
     lines = [
-        f"TRADE GATE — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+        _scan_header(config, "TRADE GATE", as_of),
         f"Symbol: {signal.symbol}",
         f"Strategy: {signal.strategy}",
         f"Side: {signal.side}",
         f"Entry: {signal.entry_price:.2f}  Stop: {signal.stop_price:.2f}  "
         f"Target: {signal.target_price:.2f}",
         f"R:R gross: {rr:.2f}",
-        f"Estimated round-trip costs: Rs {estimated_costs:,.2f}",
+        cost_label,
         f"VWAP: {vwap:.2f}  Last: {last:.2f}",
         f"Rank score: {ranked.score:.1f}  in_play: {ranked.in_play}  "
         f"trend: {ranked.trend_cleanliness:.2f}",
@@ -295,8 +366,8 @@ def _build_calan_gate_briefing(
         lines.append(f"Fundamentals: {style_line}")
     lines.extend(
         [
-            f"Daily P&L: Rs {daily_pnl:,.2f}  "
-            f"max daily loss: {config.get('intraday.max_daily_loss_pct', 1.5)}%",
+            pnl_line
+            + f"max daily loss: {config.get('intraday.max_daily_loss_pct', 1.5)}%",
             f"Reason: {signal.reason}",
             "",
             "Approve or veto this trade. Return JSON only.",
@@ -351,7 +422,7 @@ def _build_flux_gate_briefing(
 
     return "\n".join(
         [
-            f"TOXICITY GATE — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+            _scan_header(config, "TOXICITY GATE", as_of),
             f"Symbol: {signal.symbol}",
             f"Strategy: {signal.strategy}",
             f"Side: {signal.side}",
@@ -384,7 +455,7 @@ def _build_spread_gate_briefing(
     pair_id = str(watchlist_entry.get("pair_id", "n/a")) if watchlist_entry else "n/a"
     return "\n".join(
         [
-            f"CONVERGENCE GATE — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+            _scan_header(config, "CONVERGENCE GATE", as_of),
             f"Primary leg: {signal.symbol}",
             f"Pair: {pair_id}",
             f"Strategy: {signal.strategy}",
@@ -411,7 +482,7 @@ def _build_slice_gate_briefing(
 ) -> str:
     return "\n".join(
         [
-            f"SLICE GATE — {as_of.strftime('%Y-%m-%d %H:%M')} IST",
+            _scan_header(config, "SLICE GATE", as_of),
             f"Symbol: {signal.symbol}",
             f"Strategy: {signal.strategy}",
             f"Side: {signal.side}",

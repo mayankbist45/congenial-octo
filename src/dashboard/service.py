@@ -58,8 +58,14 @@ def format_money(value: Optional[float], currency: str = "INR") -> str:
 
 
 def region_label(region: str) -> str:
+    from src.market.registry import LEGACY_REGION_TO_MARKET, get_market
+
+    key = (region or "IN").upper()
+    market_id = LEGACY_REGION_TO_MARKET.get(key)
+    if market_id:
+        return get_market(market_id).label
     mapping = {"IN": "India", "US": "United States"}
-    return mapping.get((region or "IN").upper(), region)
+    return mapping.get(key, region)
 
 
 def broker_label(provider: str) -> str:
@@ -771,10 +777,13 @@ class DashboardService:
                 continue
             meta_keys = {
                 "enabled",
+                "capital",
                 "capital_inr",
                 "capital_usd",
                 "description",
                 "strategy_description",
+                "market",
+                "id",
             }
             overrides = {k: v for k, v in pdef.items() if k not in meta_keys}
             base_raw = {k: v for k, v in self._config.raw.items() if k != "personas"}
@@ -782,7 +791,9 @@ class DashboardService:
             merged["personas"] = personas
             _sync_mandate_from_fund(merged)
             secrets = self._config.secrets
-            capital = pdef.get("capital_inr")
+            capital = pdef.get("capital")
+            if capital is None:
+                capital = pdef.get("capital_inr")
             if capital is None:
                 capital = pdef.get("capital_usd")
             if capital is not None:
@@ -802,16 +813,19 @@ class DashboardService:
             )
             intraday_summary = svc.intraday_summary()
             region = pcfg.market_region
+            market = pcfg.market
             currency = persona_currency(pcfg, region)
             results.append({
                 "persona_id": pid,
                 "description": str(pdef.get("description", pid)),
                 "strategy_description": str(pdef.get("strategy_description", "")),
+                "market_id": market.id,
+                "market_label": market.label,
                 "region": region,
                 "region_label": region_label(region),
                 "currency": currency,
                 "broker": pcfg.broker_provider,
-                "broker_label": broker_label(pcfg.broker_provider),
+                "broker_label": market.display.broker_label or broker_label(pcfg.broker_provider),
                 "fund_name": str(pcfg.get("fund.name", pcfg.get("fund.benchmark_label", pid))),
                 "benchmark_label": str(
                     pcfg.get("fund.benchmark_label")
@@ -832,6 +846,20 @@ class DashboardService:
 
     def personas_by_region(self) -> Dict[str, List[Dict[str, Any]]]:
         """Group enabled personas by market region for the dashboard."""
+        return self.personas_by_market_legacy()
+
+    def personas_by_market(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Group enabled personas by market id."""
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in self.all_personas_overview():
+            market_id = row.get("market_id") or "india_equity"
+            grouped.setdefault(market_id, []).append(row)
+        for rows in grouped.values():
+            rows.sort(key=lambda r: (r.get("intraday", False), r.get("persona_id", "")))
+        return grouped
+
+    def personas_by_market_legacy(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Group personas by legacy IN/US region code."""
         grouped: Dict[str, List[Dict[str, Any]]] = {"IN": [], "US": []}
         for row in self.all_personas_overview():
             region = row.get("region", "IN")
@@ -840,13 +868,19 @@ class DashboardService:
             rows.sort(key=lambda r: (r.get("intraday", False), r.get("persona_id", "")))
         return grouped
 
-    def intraday_personas(self, region: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Intraday personas, optionally filtered to one market region."""
+    def intraday_personas(
+        self,
+        region: Optional[str] = None,
+        market_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Intraday personas, optionally filtered to one market."""
         rows = [
             row for row in self.all_personas_overview()
             if row.get("intraday")
         ]
-        if region:
+        if market_id:
+            rows = [row for row in rows if row.get("market_id") == market_id]
+        elif region:
             rows = [row for row in rows if row.get("region") == region.upper()]
         return rows
 

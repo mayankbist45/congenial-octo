@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.config import Config
 from src.intraday.models import IntradaySignal, RankedStock
+from src.intraday.mayank import is_mayank_persona
 from src.intraday.strategies import load_strategies, scan_cross_signals, scan_pair_signals
 
 
@@ -76,6 +77,11 @@ def collect_signals(
                 out.append((signal_score(signal, item, frame), signal, item))
         out.sort(key=lambda row: (-row[0], row[1].entry_time))
         return out
+
+    if is_mayank_persona(config):
+        from src.intraday.mayank import collect_mayank_signals
+
+        return collect_mayank_signals(config, frames, ranked, previous_days, signal_score)
 
     for item in ranked:
         frame = frames.get(item.symbol)

@@ -1,10 +1,7 @@
 """Route Angel One getCandleData across multiple API keys.
 
-Angel One throttles historical candle fetches per API app. A second SmartAPI
-app (same or different account) gets its own quota. This pool strictly
-alternates candle requests across keys (A, B, A, B, …) so each app sees half
-the load, and fails over immediately when the preferred key is rate-limited
-instead of sleeping 45s on a single key.
+Uses primary-first failover: try the primary key until rate-limited, then
+secondary. Fail-fast on throttle (no 45s sleep) so the pool can hand off quickly.
 """
 
 from __future__ import annotations
@@ -29,11 +26,9 @@ class AngelOneCandlePool(BrokerClient):
             raise ValueError("AngelOneCandlePool requires at least two clients")
         self._config = config or get_config()
         self._clients = clients
-        # Index of the client whose turn it is for the next candle request.
-        self._next_index = 0
         self._cooldown_until: Dict[str, float] = {}
         self._backoff = float(
-            self._config.get("angelone.rate_limit_backoff_seconds", 45.0) or 45.0
+            self._config.get("angelone.rate_limit_backoff_seconds", 60.0) or 60.0
         )
 
     @property
@@ -44,12 +39,6 @@ class AngelOneCandlePool(BrokerClient):
     @property
     def primary(self) -> AngelOneClient:
         return self._clients[0]
-
-    def _attempt_order(self) -> List[int]:
-        """Client indices: preferred (strict alternate turn) first, then the rest."""
-        count = len(self._clients)
-        start = self._next_index % count
-        return [(start + offset) % count for offset in range(count)]
 
     def connect(self) -> bool:
         ok = True
@@ -91,10 +80,8 @@ class AngelOneCandlePool(BrokerClient):
     ):
         errors: List[str] = []
         now = time.time()
-        preferred_idx = self._next_index % len(self._clients)
 
-        for offset, idx in enumerate(self._attempt_order()):
-            client = self._clients[idx]
+        for idx, client in enumerate(self._clients):
             label = client.credential_label
             if now < self._cooldown_until.get(label, 0.0):
                 logger.debug(
@@ -125,14 +112,7 @@ class AngelOneCandlePool(BrokerClient):
                 )
                 continue
 
-            self._next_index = (idx + 1) % len(self._clients)
-            if idx == preferred_idx:
-                logger.debug(
-                    "Candles for %s via Angel One [%s] (strict alternate)",
-                    symbol,
-                    label,
-                )
-            else:
+            if idx > 0:
                 logger.info(
                     "Candles for %s served by Angel One [%s] after failover",
                     symbol,

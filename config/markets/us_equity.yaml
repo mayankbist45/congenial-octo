@@ -1,0 +1,41 @@
+id: us_equity
+label: "United States Equity"
+legacy_region: US
+asset_class: equity
+exchange: US
+timezone: America/New_York
+currency: USD
+currency_symbol: "$"
+session:
+  regular:
+    open: "09:30"
+    close: "16:00"
+broker:
+  provider: alpaca
+  product_types: [CASH]
+data:
+  prices: yahoo
+  fundamentals: [yahoo]
+  news: rss_us
+costs: us_equity
+prompts: us_equity
+fund:
+  benchmark_symbol: "^GSPC"
+  benchmark_label: "S&P 500"
+  base_currency: USD
+universe:
+  file: "data/us_liquid.csv"
+execution:
+  product_type: CASH
+  exchange: US
+scheduling:
+  swing_cycle: "08:00"
+  swing_close: "16:30"
+  intraday_watch:
+    personas: [calan_us, revert_us, flux_us, spread_us, slice_us]
+    start_offset_min: -10
+    stop_offset_min: 15
+display:
+  badge_class: region-us
+  broker_label: "Alpaca"
+  exchange_label: "NYSE/NASDAQ"

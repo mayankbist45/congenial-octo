@@ -7,13 +7,17 @@
   All enabled strategies grouped by market. India books use Angel One; US books route through Alpaca paper.
 </p>
 
-{% for region, rows in regions.items() %}
+{% for market in markets %}
+  {% set rows = markets_grouped.get(market.id, []) if markets_grouped is defined else [] %}
+  {% if not rows and regions is defined %}
+    {% set rows = regions.get(market.legacy_region, []) %}
+  {% endif %}
   {% if rows %}
   <div class="panel">
     <div class="panel-head">
       <h2>
-        <span class="region-badge region-{{ region | lower }}">{{ region_labels[region] }}</span>
-        {% if region == 'IN' %}NSE &middot; Angel One{% else %}NYSE/NASDAQ &middot; Alpaca{% endif %}
+        <span class="region-badge {{ market.badge_class }}">{{ market.label }}</span>
+        {{ market.exchange_label }} &middot; {{ market.broker_label }}
       </h2>
       <span class="note">{{ rows | length }} persona{{ 's' if rows | length != 1 }}</span>
     </div>
@@ -39,6 +43,7 @@
         </dl>
 
         {% if p.intraday %}
+          <a class="persona-link" href="/intraday/{{ p.persona_id }}">View intraday &rarr;</a>
           {% if p.intraday_has_results %}
             {% set s = p.intraday_summary %}
             <div class="persona-stats">
@@ -48,10 +53,8 @@
               <span>{{ s.total_trades }} trades</span>
               <span>{{ s.win_rate_pct | pct(1) }} win</span>
             </div>
-            <a class="persona-link" href="/intraday/{{ p.persona_id }}">View intraday &rarr;</a>
           {% else %}
-            <p class="muted">No intraday paper run saved yet.</p>
-            <code class="cmd">python run_daily.py analyse --persona {{ p.persona_id }}</code>
+            <p class="muted">No saved run yet — backtest or watch to populate results.</p>
           {% endif %}
         {% else %}
           {% if p.has_data %}

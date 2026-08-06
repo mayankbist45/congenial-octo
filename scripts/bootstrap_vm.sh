@@ -128,27 +128,56 @@ echo "  virtualenv ready ($("$PROJECT_DIR/.venv/bin/python" --version))"
 chmod +x "$PROJECT_DIR"/scripts/*.sh
 
 # --- Schedule ---------------------------------------------------------------
-# Same two jobs as launchd on the laptop, plus a nightly dump. Times are local,
-# which is IST because of the timezone set above. The close waits until 18:00
-# because the free price feed publishes the official close with a lag.
-cat >/etc/cron.d/mutualfund <<CRON
-# AI Mutual Fund Manager - weekdays, Asia/Kolkata. Managed by bootstrap_vm.sh.
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-MAILTO=""
-
-15 8 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/run_scheduled.sh cycle
-# India Calan intraday paper watch (NSE, IST).
-20 9 * * 1-5 root systemctl start mutualfund-calan-watch
-25 15 * * 1-5 root systemctl stop mutualfund-calan-watch
-# US intraday watches (NYSE/NASDAQ): ~19:05 IST start, ~01:35 IST stop (next calendar day).
-5 19 * * 1-5 root systemctl start mutualfund-us-intraday-watch
-35 1 * * 2-6 root systemctl stop mutualfund-us-intraday-watch
-0 18 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/run_scheduled.sh close
-30 19 * * 1-5 $APP_USER cd $PROJECT_DIR && ./scripts/backup_journal.sh >> data/backup.log 2>&1
-CRON
+# Generated from config/markets/*.yaml so US watch times track DST.
+chmod +x "$PROJECT_DIR/scripts/run_market_intraday_watches.sh"
+chmod +x "$PROJECT_DIR/scripts/run_intraday_watch.sh"
+GENERATED_CRON="$PROJECT_DIR/data/generated_cron.txt"
+as_app "$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/scripts/generate_schedule.py" \
+    --vm-tz "$TZ_NAME" \
+    --app-user "$APP_USER" \
+    --project-dir "$PROJECT_DIR" \
+    --cron-only >"$GENERATED_CRON"
+cat "$GENERATED_CRON" >/etc/cron.d/mutualfund
 chmod 644 /etc/cron.d/mutualfund
-echo "  cron installed: 08:15 cycle, 09:20 IN watch, 19:05 US watch, 18:00 close, 19:30 backup"
+echo "  cron installed from config/markets (see data/generated_cron.txt)"
+
+# Intraday watch systemd units (one per market with intraday personas).
+for market_id in india_equity us_equity; do
+    market_unit="${market_id//_/-}"
+    unit_file="/etc/systemd/system/mutualfund-${market_unit}-intraday-watch.service"
+    as_app "$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/scripts/generate_schedule.py" \
+        --app-user "$APP_USER" \
+        --project-dir "$PROJECT_DIR" \
+        --systemd-only \
+        --market "$market_id" >"$unit_file"
+    systemctl disable "mutualfund-${market_unit}-intraday-watch" >/dev/null 2>&1 || true
+done
+systemctl daemon-reload
+echo "  intraday watch services installed (cron starts them on session days)"
+
+# Legacy calan-only unit kept for backward compatibility during migration.
+chmod +x "$PROJECT_DIR/scripts/run_calan_watch.sh"
+cat >/etc/systemd/system/mutualfund-calan-watch.service <<UNIT
+[Unit]
+Description=Calan intraday paper watch (deprecated — use india-equity unit)
+After=network.target
+
+[Service]
+Type=simple
+User=$APP_USER
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$PROJECT_DIR/scripts/run_calan_watch.sh
+Restart=no
+TimeoutStopSec=60
+KillMode=mixed
+StandardOutput=append:$PROJECT_DIR/data/calan_watch.log
+StandardError=append:$PROJECT_DIR/data/calan_watch.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl disable mutualfund-calan-watch >/dev/null 2>&1 || true
 
 cat >/etc/logrotate.d/mutualfund <<ROTATE
 $PROJECT_DIR/data/*.log {
@@ -189,59 +218,6 @@ systemctl daemon-reload
 systemctl enable --now mutualfund-dashboard >/dev/null 2>&1 &&
     echo "  dashboard service up on 127.0.0.1:8000 (reach it via the SSH tunnel)" ||
     echo "  note: dashboard service failed; check journalctl -u mutualfund-dashboard"
-
-# --- Calan intraday watch (market hours only) -------------------------------
-# Long-running paper loop; cron starts it at 09:20 IST and stops it at 15:25.
-# Not enabled on boot — weekends and overnight should not leave it running.
-chmod +x "$PROJECT_DIR/scripts/run_calan_watch.sh"
-chmod +x "$PROJECT_DIR/scripts/run_intraday_watch.sh"
-chmod +x "$PROJECT_DIR/scripts/run_us_intraday_watches.sh"
-cat >/etc/systemd/system/mutualfund-calan-watch.service <<UNIT
-[Unit]
-Description=Calan intraday paper watch (market hours)
-After=network.target
-
-[Service]
-Type=simple
-User=$APP_USER
-WorkingDirectory=$PROJECT_DIR
-ExecStart=$PROJECT_DIR/scripts/run_calan_watch.sh
-Restart=no
-TimeoutStopSec=60
-KillMode=mixed
-StandardOutput=append:$PROJECT_DIR/data/calan_watch.log
-StandardError=append:$PROJECT_DIR/data/calan_watch.log
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-systemctl daemon-reload
-systemctl disable mutualfund-calan-watch >/dev/null 2>&1 || true
-echo "  calan-watch service installed (cron starts it weekdays 09:20 IST)"
-
-# --- US intraday watches (NYSE session, ~19:05–01:35 IST) -------------------
-cat >/etc/systemd/system/mutualfund-us-intraday-watch.service <<UNIT
-[Unit]
-Description=US intraday paper watches (calan_us, revert_us, flux_us, spread_us, slice_us)
-After=network.target
-
-[Service]
-Type=simple
-User=$APP_USER
-WorkingDirectory=$PROJECT_DIR
-ExecStart=$PROJECT_DIR/scripts/run_us_intraday_watches.sh
-Restart=no
-TimeoutStopSec=120
-KillMode=mixed
-StandardOutput=append:$PROJECT_DIR/data/us_intraday_watch.log
-StandardError=append:$PROJECT_DIR/data/us_intraday_watch.log
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-systemctl daemon-reload
-systemctl disable mutualfund-us-intraday-watch >/dev/null 2>&1 || true
-echo "  US intraday-watch service installed (cron starts weekdays 19:05 IST)"
 
 # --- Cloud Logging ----------------------------------------------------------
 # The fund runs unattended, so the record of why a trade fired must outlive the

@@ -32,6 +32,7 @@ class IntradayDataService:
         self._broker = broker
         self._now = now or datetime.now
         self._cache: Dict[str, pd.DataFrame] = {}
+        self._prior_day_cache: Dict[str, Dict[str, float]] = {}
 
     @property
     def _cache_path(self) -> Path:
@@ -120,11 +121,20 @@ class IntradayDataService:
         if cached is not None and not cached.empty and not frame.empty:
             frame = _merge_candles(cached, frame)
         elif cached is not None and not cached.empty and frame.empty:
+            logger.debug(
+                "Using cached candles for %s after empty broker response", symbol
+            )
             return cached
 
         if use_cache and not frame.empty:
             self._cache[key] = frame
             self._save_cache()
+        if frame.empty and cached is not None and not cached.empty:
+            if self._cache_is_acceptably_stale(cached, interval):
+                logger.debug(
+                    "Using stale cache for %s (broker returned no new bars)", symbol
+                )
+                return cached
         return _strip_index_timezone(frame).copy()
 
     def _resolve_broker(self) -> Optional[BrokerClient]:
@@ -154,6 +164,16 @@ class IntradayDataService:
             stale_minutes = float(self._interval_minutes(interval)) + 1.0
         age = self._now() - frame.index.max().to_pydatetime()
         return age.total_seconds() <= stale_minutes * 60.0
+
+    def _cache_is_acceptably_stale(self, frame: pd.DataFrame, interval: str) -> bool:
+        """Return cached bars on broker failure when not too old for ranking."""
+        if frame.empty:
+            return False
+        ok_minutes = float(
+            self._config.get("angelone.candle_stale_ok_minutes", 15.0) or 15.0
+        )
+        age = self._now() - frame.index.max().to_pydatetime()
+        return age.total_seconds() <= ok_minutes * 60.0
 
     def candles_range(
         self,
@@ -200,15 +220,47 @@ class IntradayDataService:
         else:
             return None
 
-        frame = self.candles(symbol, prior, interval=interval, use_cache=True)
-        if frame.empty:
-            frame = self.candles(symbol, prior, interval=interval, use_cache=False)
+        cache_key = f"{symbol.upper()}|{prior.isoformat()}"
+        if cache_key in self._prior_day_cache:
+            return self._prior_day_cache[cache_key]
+
+        stats = self._prior_day_from_daily(symbol, prior)
+        if stats is None:
+            frame = self.candles(symbol, prior, interval=interval, use_cache=True)
+            if frame.empty:
+                frame = self.candles(symbol, prior, interval=interval, use_cache=False)
+            if frame.empty:
+                return None
+            stats = {
+                "close": float(frame["close"].iloc[-1]),
+                "high": float(frame["high"].max()),
+                "low": float(frame["low"].min()),
+            }
+
+        self._prior_day_cache[cache_key] = stats
+        return stats
+
+    def _prior_day_from_daily(
+        self, symbol: str, prior: date
+    ) -> Optional[Dict[str, float]]:
+        """One ONE_DAY bar for prior session — cheaper than full intraday history."""
+        broker = self._resolve_broker()
+        if broker is None:
+            return None
+        from_dt = datetime.combine(prior, time(9, 15))
+        to_dt = datetime.combine(prior, time(15, 30))
+        try:
+            raw = broker.get_candles(symbol, from_dt, to_dt, "ONE_DAY")
+        except Exception:
+            return None
+        frame = normalize_candles(raw)
         if frame.empty:
             return None
+        row = frame.iloc[-1]
         return {
-            "close": float(frame["close"].iloc[-1]),
-            "high": float(frame["high"].max()),
-            "low": float(frame["low"].min()),
+            "close": float(row["close"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
         }
 
     def previous_day_stats_batch(

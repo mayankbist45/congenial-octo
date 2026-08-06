@@ -243,13 +243,16 @@ execution:
 
 angelone:
   # Historical getCandleData is throttled per SmartAPI app. A second API key
-  # (ANGELONE_DATA2_* in .env) doubles throughput: AngelOneCandlePool alternates
-  # every candle request across keys (A, B, A, B, …) and failovers on throttle.
+  # (ANGELONE_DATA2_* in .env) doubles throughput via candle_pool + budget coordinator.
   min_call_interval_seconds: 1.0
-  candle_call_interval_seconds: 2.0
-  rate_limit_backoff_seconds: 45.0
+  candle_call_interval_seconds: 4.0
+  candle_budget_spacing_seconds: 4.0
+  candle_max_requests_per_minute: 12
+  rate_limit_backoff_seconds: 60.0
   # Watch mode skips API when cache is this fresh (defaults to bar size + 1 min).
-  candle_cache_stale_minutes: 6
+  candle_cache_stale_minutes: 12
+  # On throttle, return cache up to this age rather than empty frames.
+  candle_stale_ok_minutes: 15.0
 
 alpaca:
   # US equities via Alpaca Markets (paper-api.alpaca.markets by default).
@@ -507,8 +510,10 @@ personas:
       trade_window_start: "09:45"
       trade_window_end: "14:30"
       force_exit_time: "15:15"
-      watch_poll_seconds: 300
-      watch_scan_size: 12
+      watch_poll_seconds: 600
+      watch_scan_size: 8
+      watch_discovery_scan_size: 8
+      watch_active_scan_size: 6
       ranked_universe_size: 8
       max_trades_per_day: 3
       max_open_positions: 2

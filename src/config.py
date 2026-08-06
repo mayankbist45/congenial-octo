@@ -241,7 +241,25 @@ class Config:
 
     @property
     def market_region(self) -> str:
-        return str(self.get("connectors.market_region", "IN")).upper()
+        """Legacy region code (IN/US). Prefer :attr:`market_id`."""
+        return self.market.legacy_region
+
+    @property
+    def market_id(self) -> str:
+        from src.market.registry import resolve_market_id
+
+        personas = self.raw.get("personas", {}) or {}
+        persona_def = personas.get(self.persona_id, {}) if isinstance(personas, dict) else {}
+        legacy = str(self.get("connectors.market_region", "IN")).upper()
+        if isinstance(persona_def, dict):
+            return resolve_market_id(self.persona_id, persona_def, legacy_region=legacy)
+        return resolve_market_id(self.persona_id, legacy_region=legacy)
+
+    @property
+    def market(self):
+        from src.market.registry import get_market
+
+        return get_market(self.market_id)
 
     @property
     def intraday_dir(self) -> Path:
@@ -343,6 +361,21 @@ def _load_persona_overlays(settings_dir: Path) -> Dict[str, Any]:
         block_personas = block.get("personas", block)
         if isinstance(block_personas, dict):
             personas.update(block_personas)
+
+    personas_dir = settings_dir / "personas"
+    if personas_dir.is_dir():
+        for market_dir in sorted(personas_dir.iterdir()):
+            if not market_dir.is_dir():
+                continue
+            market_id = market_dir.name
+            for persona_path in sorted(market_dir.glob("*.yaml")):
+                with open(persona_path, "r", encoding="utf-8") as handle:
+                    block = yaml.safe_load(handle) or {}
+                if not isinstance(block, dict):
+                    continue
+                persona_id = str(block.get("id") or persona_path.stem)
+                block.setdefault("market", market_id)
+                personas[persona_id] = block
     return personas
 
 
@@ -479,7 +512,16 @@ def get_persona_config(
             f"Persona {persona_id!r} must be a mapping, got {type(persona_def).__name__}"
         )
 
-    meta_keys = {"enabled", "capital_inr", "capital_usd", "description", "strategy_description"}
+    meta_keys = {
+        "enabled",
+        "capital",
+        "capital_inr",
+        "capital_usd",
+        "description",
+        "strategy_description",
+        "market",
+        "id",
+    }
     overrides = {k: v for k, v in persona_def.items() if k not in meta_keys}
     base_raw = {k: v for k, v in base.raw.items() if k != "personas"}
     merged = _deep_merge(base_raw, overrides)
@@ -487,7 +529,9 @@ def get_persona_config(
     _sync_mandate_from_fund(merged)
 
     secrets = base.secrets
-    capital = persona_def.get("capital_inr")
+    capital = persona_def.get("capital")
+    if capital is None:
+        capital = persona_def.get("capital_inr")
     if capital is None:
         capital = persona_def.get("capital_usd")
     if capital is not None:
