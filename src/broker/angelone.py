@@ -196,7 +196,13 @@ class AngelOneClient(BrokerClient):
             time.sleep(interval - elapsed)
         self._last_call_at = time.time()
 
-    def _call(self, method_name: str, *args, **kwargs) -> Dict[str, Any]:
+    def _call(
+        self,
+        method_name: str,
+        *args,
+        fail_fast: bool = False,
+        **kwargs,
+    ) -> Dict[str, Any]:
         """Invoke a SmartAPI method with throttling and bounded retries."""
         api = self._ensure_connected()
         method = getattr(api, method_name)
@@ -219,6 +225,10 @@ class AngelOneClient(BrokerClient):
                 )
                 if self.was_rate_limited(last_error):
                     self._last_rate_limit = True
+                    if fail_fast:
+                        raise BrokerError(
+                            f"{method_name} failed [{self._credentials.label}]: {last_error}"
+                        ) from exc
                     backoff = self._rate_limit_backoff()
                     logger.warning(
                         "Angel One [%s] rate limited on %s; sleeping %.0fs before retry",
@@ -242,6 +252,10 @@ class AngelOneClient(BrokerClient):
                 )
                 if self.was_rate_limited(str(last_error)):
                     self._last_rate_limit = True
+                    if fail_fast:
+                        raise BrokerError(
+                            f"{method_name} failed [{self._credentials.label}]: {last_error}"
+                        )
                     backoff = self._rate_limit_backoff()
                     logger.warning(
                         "Angel One [%s] rate limited on %s; sleeping %.0fs before retry",
@@ -398,7 +412,9 @@ class AngelOneClient(BrokerClient):
         """Historical OHLCV. Angel One caps each request by interval, so long
         ranges are fetched in windows and concatenated."""
         try:
-            return self._fetch_candles(symbol, from_date, to_date, interval)
+            return self._fetch_candles(
+                symbol, from_date, to_date, interval, fail_fast=strict
+            )
         except BrokerError:
             if strict:
                 raise
@@ -410,6 +426,7 @@ class AngelOneClient(BrokerClient):
         from_date: datetime,
         to_date: datetime,
         interval: str = "ONE_DAY",
+        fail_fast: bool = False,
     ) -> List[Dict[str, Any]]:
         instrument = self._instruments.get(symbol)
         if instrument is None:
@@ -431,7 +448,7 @@ class AngelOneClient(BrokerClient):
                 "todate": chunk_end.strftime("%Y-%m-%d %H:%M"),
             }
             try:
-                response = self._call("getCandleData", params)
+                response = self._call("getCandleData", params, fail_fast=fail_fast)
             except BrokerError as exc:
                 logger.warning(
                     "Candle fetch failed [%s] for %s: %s",

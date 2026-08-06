@@ -166,6 +166,7 @@ personas:
         min_rr_vwap: 1.35
       agent:
         enabled: true
+        gate_use_llm: false
         veto_scalping: true
         min_watch_confidence: 0.55
         min_trade_confidence: 0.55

@@ -619,17 +619,23 @@ def test_default_overview_lists_intraday_sessions(client, temp_config) -> None:
     assert "calan_us" in body
 
 
+def _main_html(body: str) -> str:
+    return body.split("<main>", 1)[1].split("</main>", 1)[0]
+
+
 def test_proposals_page_us_persona_shows_sp500_not_nifty(client) -> None:
     body = client.get("/proposals?persona=balanced_us").text
-    assert "P 500" in body and "S&amp;P" in body
-    assert "Nifty 500" not in body
+    main = _main_html(body)
+    assert "P 500" in main and "S&amp;P" in main
+    assert "Nifty 500" not in main
 
 
 def test_proposals_page_intraday_skips_swing_mandate(client) -> None:
     body = client.get("/proposals?persona=calan_us").text
-    assert "Persona Constitution" not in body
-    assert "Intraday personas do not use the swing approval gate" in body
-    assert "Nifty 500" not in body
+    main = _main_html(body)
+    assert "Persona Constitution" not in main
+    assert "Intraday personas do not use the swing approval gate" in main
+    assert "Nifty 500" not in main
 
 
 def test_us_overview_uses_dollar_formatting(client) -> None:
@@ -668,8 +674,8 @@ def test_intraday_list_hides_persona_dropdown(client) -> None:
     assert 'class="persona-select"' not in body
 
 
-def test_api_personas_returns_regions(client) -> None:
+def test_api_personas_returns_markets(client) -> None:
     payload = client.get("/api/personas").json()
-    assert "IN" in payload
-    assert "US" in payload
-    assert any(row["persona_id"] == "calan_us" for row in payload["US"])
+    assert "india_equity" in payload
+    assert "us_equity" in payload
+    assert any(row["persona_id"] == "calan_us" for row in payload["us_equity"])

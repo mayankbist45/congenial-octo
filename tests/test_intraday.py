@@ -305,6 +305,32 @@ def test_candles_incremental_refresh_uses_cache(calan_config):
     broker.get_candles.assert_not_called()
 
 
+def test_previous_day_stats_session_cache(calan_config):
+    from datetime import date
+    from src.intraday.data import IntradayDataService
+
+    broker = MagicMock()
+    broker.get_candles.return_value = [
+        {
+            "timestamp": "2026-08-05",
+            "open": 100,
+            "high": 102,
+            "low": 99,
+            "close": 101,
+            "volume": 1000,
+        }
+    ]
+    service = IntradayDataService(calan_config, broker=broker)
+    day = date(2026, 8, 6)
+
+    first = service.previous_day_stats("RELIANCE", day)
+    second = service.previous_day_stats("RELIANCE", day)
+
+    assert first == second
+    assert first["close"] == 101.0
+    broker.get_candles.assert_called_once()
+
+
 def test_persona_prompt_bundle_calan(calan_config):
     from src.intraday.prompts import get_persona_prompt_bundle
 

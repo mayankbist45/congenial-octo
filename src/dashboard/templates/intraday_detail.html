@@ -2,7 +2,7 @@
 {% block title %}{{ persona.persona_id }} intraday &middot; {{ fund_name }}{% endblock %}
 
 {% block content %}
-<p class="subtitle"><a href="/intraday{% if persona.region == 'US' %}?region=US{% elif persona.region == 'IN' %}?region=IN{% endif %}">&larr; Intraday</a></p>
+<p class="subtitle"><a href="/intraday{% if persona.market_id %}?market={{ persona.market_id }}{% elif persona.region == 'US' %}?region=US{% elif persona.region == 'IN' %}?region=IN{% endif %}">&larr; Intraday</a></p>
 
 <h1>{{ persona.persona_id }}</h1>
 <p class="subtitle">
@@ -92,20 +92,61 @@
 </div>
 {% endif %}
 
+{% if summary.style_params %}
+<div class="panel">
+  <h2>Growth / value classification</h2>
+  <p class="muted small" style="margin-top:0">
+    Growth names use momentum (ORB, VWAP pullback, scalping).
+    Value names use mean reversion (VWAP fade, gap fade).
+  </p>
+  <div class="stats" style="margin-bottom:12px">
+    <div class="stat">
+      <div class="label">Value P/E ≤</div>
+      <div class="value">{{ summary.style_params.value_pe_threshold }}</div>
+    </div>
+    <div class="stat">
+      <div class="label">High P/E ≥</div>
+      <div class="value">{{ summary.style_params.high_pe_threshold }}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Min growth %</div>
+      <div class="value">{{ summary.style_params.min_growth_pct }}%</div>
+    </div>
+    <div class="stat">
+      <div class="label">Max PEG</div>
+      <div class="value">{{ summary.style_params.max_peg_growth }}</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if summary.watchlist %}
 <div class="panel">
   <h2>Watchlist</h2>
   <table class="data-table">
     <thead>
-      <tr><th>Symbol</th><th>Confidence</th><th>Catalyst</th><th>Rationale</th></tr>
+      <tr>
+        <th>Symbol</th>
+        <th>Style</th>
+        <th>Playbook</th>
+        <th>P/E</th>
+        <th>Confidence</th>
+        <th>Rationale</th>
+      </tr>
     </thead>
     <tbody>
       {% for w in summary.watchlist %}
       <tr>
         <td><strong>{{ w.symbol }}</strong></td>
+        <td>
+          {% if w.fundamental_style %}
+          <span class="tag tag-{{ w.fundamental_style }}">{{ w.fundamental_style }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>{{ w.playbook or w.catalyst_class or '—' }}</td>
+        <td>{{ w.pe_ratio | number(1) if w.pe_ratio is defined and w.pe_ratio is not none else '—' }}</td>
         <td>{{ w.confidence | number(2) if w.confidence is defined else '—' }}</td>
-        <td>{{ w.catalyst_class or '—' }}</td>
-        <td class="muted small">{{ w.rationale or '' }}</td>
+        <td class="muted small">{{ w.rationale or w.fundamental_summary or '' }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -118,12 +159,28 @@
   <h2>Top candidates</h2>
   <table class="data-table">
     <thead>
-      <tr><th>Symbol</th><th>Score</th><th>In play</th><th>Trend</th><th>RVOL</th></tr>
+      <tr>
+        <th>Symbol</th>
+        <th>Style</th>
+        <th>Bias</th>
+        <th>P/E</th>
+        <th>Score</th>
+        <th>In play</th>
+        <th>Trend</th>
+        <th>RVOL</th>
+      </tr>
     </thead>
     <tbody>
-      {% for c in summary.top_candidates[:8] %}
+      {% for c in summary.top_candidates[:12] %}
       <tr>
         <td><strong>{{ c.symbol }}</strong></td>
+        <td>
+          {% if c.fundamental_style %}
+          <span class="tag tag-{{ c.fundamental_style }}">{{ c.fundamental_style }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>{{ c.intraday_bias or '—' }}</td>
+        <td>{{ c.pe_ratio | number(1) if c.pe_ratio is defined and c.pe_ratio is not none else '—' }}</td>
         <td>{{ c.score | number(1) }}</td>
         <td>{{ c.in_play }}</td>
         <td>{{ c.trend_cleanliness | number(2) }}</td>
@@ -199,6 +256,7 @@
     <thead>
       <tr>
         <th>Symbol</th>
+        <th>Style</th>
         <th>Strategy</th>
         <th>Side</th>
         <th>Qty</th>
@@ -213,6 +271,11 @@
       {% for t in trades %}
       <tr>
         <td><strong>{{ t.symbol }}</strong></td>
+        <td>
+          {% if t.fundamental_style %}
+          <span class="tag tag-{{ t.fundamental_style }}">{{ t.fundamental_style }}</span>
+          {% else %}—{% endif %}
+        </td>
         <td>{{ t.strategy }}</td>
         <td>{{ t.side }}</td>
         <td>{{ t.quantity }}</td>

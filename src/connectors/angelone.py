@@ -70,6 +70,7 @@ class AngelOneConnector(BrokerConnector):
             return SimulatedBroker(config, price_lookup=PriceService(config))
 
         from src.broker.angelone import AngelOneClient
+        from src.broker.candle_budget import CandleBudgetCoordinator
         from src.broker.candle_pool import AngelOneCandlePool
 
         primary = AngelOneClient(config)
@@ -80,10 +81,11 @@ class AngelOneConnector(BrokerConnector):
                 "Using Angel One candle pool (primary + data2 API keys) for intraday data"
                 + (" (DRY_RUN; orders not routed here)" if secrets.dry_run else "")
             )
-            return AngelOneCandlePool([primary, secondary], config=config)
-
-        logger.info(
-            "Using Angel One for market data"
-            + (" (DRY_RUN; orders not routed here)" if secrets.dry_run else "")
-        )
-        return primary
+            inner = AngelOneCandlePool([primary, secondary], config=config)
+        else:
+            logger.info(
+                "Using Angel One for market data"
+                + (" (DRY_RUN; orders not routed here)" if secrets.dry_run else "")
+            )
+            inner = primary
+        return CandleBudgetCoordinator(inner, config=config)

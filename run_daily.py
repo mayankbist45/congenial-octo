@@ -121,6 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="run only this persona (default: all enabled personas)",
     )
+    parser.add_argument(
+        "--market",
+        metavar="ID",
+        help="run only personas belonging to this market (e.g. india_equity, us_equity)",
+    )
     return parser
 
 
@@ -186,8 +191,24 @@ def _clear_pending(manager, args) -> None:
 def _resolve_personas(args) -> List[str]:
     """Which personas to run: the one from --persona, or all enabled ones."""
     if args.persona:
-        return [args.persona]
-    return enabled_personas()
+        personas = [args.persona]
+    else:
+        personas = enabled_personas()
+    if getattr(args, "market", None):
+        market_id = args.market.strip()
+        from src.config import get_persona_config
+
+        base = get_config()
+        filtered = []
+        for pid in personas:
+            try:
+                pcfg = get_persona_config(pid, base=base)
+            except ValueError:
+                continue
+            if pcfg.market_id == market_id:
+                filtered.append(pid)
+        return filtered
+    return personas
 
 
 def _run_learning_for(config, as_of: Optional[date] = None) -> None:

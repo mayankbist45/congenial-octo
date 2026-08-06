@@ -158,8 +158,10 @@ personas:
       trade_window_start: "09:45"
       trade_window_end: "14:30"
       force_exit_time: "15:15"
-      watch_poll_seconds: 300
-      watch_scan_size: 12
+      watch_poll_seconds: 600
+      watch_scan_size: 8
+      watch_discovery_scan_size: 8
+      watch_active_scan_size: 6
       ranked_universe_size: 8
       max_trades_per_day: 3
       max_open_positions: 2
@@ -211,6 +213,95 @@ personas:
         block_momentum_on_value: true
         growth_confidence_boost: 0.05
         value_confidence_penalty: 0.08
+      costs:
+        brokerage_pct: 0.03
+        brokerage_cap_per_order: 20.0
+        stt_sell_pct: 0.025
+        exchange_txn_pct: 0.00325
+        sebi_pct: 0.0001
+        stamp_buy_pct: 0.003
+        gst_pct: 18.0
+
+  mayank:
+    enabled: true
+    description: "Mayank — Nifty 500 hybrid (growth→momentum, value→fade)"
+    strategy_description: >
+      Indian intraday book on Nifty 500. Classifies names as growth vs value
+      using P/E, PEG, and earnings growth, then routes growth to momentum
+      strategies (ORB/VWAP/scalping) and value to mean-reversion fades.
+    capital_inr: 500000
+    universe:
+      file: "data/nifty500.csv"
+      min_avg_daily_turnover_inr: 50000000
+    execution:
+      product_type: "INTRADAY"
+      order_type: "LIMIT"
+      auto_approve: false
+    intraday:
+      enabled: true
+      mode: "paper"
+      strategies:
+        - opening_range_breakout
+        - vwap_pullback
+        - scalping
+        - vwap_fade
+        - opening_gap_fade
+      default_interval: "FIVE_MINUTE"
+      trade_window_start: "09:45"
+      trade_window_end: "14:30"
+      force_exit_time: "15:15"
+      watch_poll_seconds: 300
+      watch_scan_size: 15
+      ranked_universe_size: 12
+      max_trades_per_day: 4
+      max_open_positions: 2
+      risk_per_trade_pct: 0.35
+      max_daily_loss_pct: 1.5
+      max_position_value_pct: 20.0
+      min_avg_volume: 100000
+      min_avg_turnover_inr: 50000000
+      min_atr_pct: 0.6
+      min_fade_vwap_pct: 1.0
+      volume_spike_multiple: 1.2
+      opening_range_minutes: 15
+      stop_buffer_pct: 0.05
+      target_r_multiple: 1.5
+      trailing_stop_pct: 0.25
+      slippage_bps_per_side: 2.0
+      scalping_target_pct: 0.50
+      scalping_stop_pct: 0.15
+      scalping_min_net_edge_bps: 30.0
+      scalping_max_hold_minutes: 15
+      stocks_in_play:
+        min_gap_pct: 0.8
+        min_rvol: 2.0
+        min_trend_cleanliness: 0.5
+        min_trend_at_signal: 0.40
+        min_watchlist_trend: 0.40
+        min_stop_pct: 0.20
+        min_or_range_pct: 0.35
+        min_rr_orb: 1.35
+        min_rr_vwap: 1.5
+        min_rr_scalping: 1.25
+      agent:
+        enabled: true
+        catalyst_use_llm: false
+        gate_use_llm: false
+        veto_scalping: false
+        min_watch_confidence: 0.55
+        min_trade_confidence: 0.58
+      fundamentals:
+        enabled: true
+        cache_only: true
+        high_pe_threshold: 35
+        value_pe_threshold: 18
+        min_growth_pct: 8
+        max_peg_growth: 2.5
+        allow_value_trap: false
+        block_value_trap: true
+        block_momentum_on_value: false
+        growth_confidence_boost: 0.05
+        value_confidence_penalty: 0.05
       costs:
         brokerage_pct: 0.03
         brokerage_cap_per_order: 20.0

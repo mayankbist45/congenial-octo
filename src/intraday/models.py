@@ -115,6 +115,8 @@ class PaperState:
     skipped_signals: List[Dict[str, object]] = field(default_factory=list)
     top_candidates: List[Dict[str, object]] = field(default_factory=list)
     watchlist: List[Dict[str, object]] = field(default_factory=list)
+    style_profiles: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    style_params: Dict[str, object] = field(default_factory=dict)
 
     @property
     def trade_count(self) -> int:

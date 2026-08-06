@@ -14,6 +14,11 @@ from src.intraday.agent import IntradayAgent
 from src.intraday.broker_execution import IntradayBrokerExecutor, intraday_uses_broker
 from src.intraday.data import IntradayDataService
 from src.intraday.engine_helpers import collect_signals
+from src.intraday.mayank import (
+    build_style_context,
+    enrich_candidates_with_style,
+    is_mayank_persona,
+)
 from src.intraday.models import IntradaySignal, IntradayTrade, PaperPosition, PaperState, RankedStock
 from src.intraday.pair_exits import is_pair_strategy, z_at_bar, pair_exit_reason, pair_z_config_keys
 from src.intraday.persona_rankers import filter_ranked_for_persona, load_ranker
@@ -105,6 +110,12 @@ class IntradayWatchEngine:
         ranked = ranked[:limit]
         state.top_candidates = [asdict(item) for item in ranked]
 
+        if is_mayank_persona(self._config):
+            profiles, params = build_style_context(self._config, ranked)
+            state.style_profiles = profiles
+            state.style_params = params
+            enrich_candidates_with_style(state.top_candidates, profiles)
+
         if now.time() >= self._catalyst_scan_time() and (
             not self._catalyst_scanned or (not state.watchlist and any(r.in_play for r in ranked))
         ):
@@ -133,15 +144,38 @@ class IntradayWatchEngine:
         return state
 
     def _symbols_for_poll(self, state: PaperState, now: datetime) -> List[str]:
-        scan_size = int(self._config.get("intraday.watch_scan_size", 12) or 12)
         must = [p.symbol for p in state.open_positions]
         must.extend(
             str(w["symbol"]).upper()
             for w in state.watchlist
             if w.get("in_play") and w.get("symbol")
         )
+        must = list(dict.fromkeys(must))
+
         if not self._symbols:
-            return list(dict.fromkeys(must))
+            return must
+
+        # Active phase: after catalyst, poll watchlist + positions only.
+        if self._catalyst_scanned and must:
+            active_cap = int(
+                self._config.get("intraday.watch_active_scan_size", 6) or 6
+            )
+            return must[:active_cap]
+
+        # Empty watchlist after catalyst: limited discovery retry, not full universe.
+        if self._catalyst_scanned and not state.watchlist:
+            scan_size = int(
+                self._config.get("intraday.watch_discovery_scan_size", 8) or 8
+            )
+        else:
+            scan_size = int(
+                self._config.get(
+                    "intraday.watch_discovery_scan_size",
+                    self._config.get("intraday.watch_scan_size", 8),
+                )
+                or 8
+            )
+
         poll = max(int(self._config.get("intraday.watch_poll_seconds", 300) or 300), 1)
         offset = int(now.timestamp() // poll) % len(self._symbols)
         rotated = self._symbols[offset:] + self._symbols[:offset]
@@ -780,15 +814,16 @@ class IntradayWatchEngine:
 
     @staticmethod
     def _skip(state: PaperState, signal: IntradaySignal, reason: str) -> None:
-        state.skipped_signals.append(
-            {
-                "symbol": signal.symbol,
-                "strategy": signal.strategy,
-                "side": signal.side,
-                "time": signal.entry_time.isoformat(),
-                "reason": reason,
-            }
-        )
+        row = {
+            "symbol": signal.symbol,
+            "strategy": signal.strategy,
+            "side": signal.side,
+            "time": signal.entry_time.isoformat(),
+            "reason": reason,
+        }
+        if signal.symbol.upper() in state.style_profiles:
+            row.update(state.style_profiles[signal.symbol.upper()])
+        state.skipped_signals.append(row)
 
     def _save(self, state: PaperState) -> None:
         self._state_store.save(state)

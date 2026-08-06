@@ -5,16 +5,20 @@
 <h1>Intraday</h1>
 <p class="subtitle">
   Paper and backtest results for intraday personas.
-  {% if active_region %}
+  {% if active_market %}
+    Showing <strong>{{ market_label(active_market) }}</strong> only.
+    <a href="/intraday">Show all markets</a>
+  {% elif active_region %}
     Showing <strong>{{ region_labels[active_region] }}</strong> only.
-    <a href="/intraday">Show all regions</a>
+    <a href="/intraday">Show all markets</a>
   {% endif %}
 </p>
 
 <div class="region-tabs">
-  <a href="/intraday" class="{{ 'active' if not active_region }}">All</a>
-  <a href="/intraday?region=IN" class="{{ 'active' if active_region == 'IN' }}">India</a>
-  <a href="/intraday?region=US" class="{{ 'active' if active_region == 'US' }}">United States</a>
+  <a href="/intraday" class="{{ 'active' if not active_market and not active_region }}">All</a>
+  {% for m in markets %}
+  <a href="/intraday?market={{ m.id }}" class="{{ 'active' if active_market == m.id }}">{{ m.label }}</a>
+  {% endfor %}
 </div>
 
 {% if not personas %}
@@ -23,13 +27,13 @@
 </div>
 {% else %}
 
-{% for region in ['IN', 'US'] %}
-  {% set rows = intraday_by_region[region] %}
-  {% if rows and (not active_region or active_region == region) %}
+{% for m in markets %}
+  {% set rows = intraday_by_market.get(m.id, []) %}
+  {% if rows and (not active_market or active_market == m.id) and (not active_region or active_region == m.legacy_region) %}
   <div class="panel">
     <div class="panel-head">
       <h2>
-        <span class="region-badge region-{{ region | lower }}">{{ region_labels[region] }}</span>
+        <span class="region-badge {{ m.badge_class }}">{{ m.label }}</span>
         Intraday
       </h2>
     </div>
@@ -67,7 +71,7 @@
           <td>{{ s.win_rate_pct | pct(1) }}</td>
           <td class="muted small">
             {% if s.active %}Active{% else %}Ended{% endif %}
-            {% if s.last_scan_at %}<br>{{ s.last_scan_at }}{% endif %}
+            {% if s.last_scan_at %}<br>{{ format_market_timestamp(s.last_scan_at, p.market_id) }}{% endif %}
           </td>
           <td><a href="/intraday/{{ p.persona_id }}">Details</a></td>
           {% else %}

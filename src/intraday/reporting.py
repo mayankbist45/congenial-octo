@@ -6,8 +6,30 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-from src.config import Config
+from src.config import Config, get_persona_config
 from src.intraday.models import IntradayBacktestResult, PaperState
+
+
+def _enrich_mayank_summary(summary: Dict[str, Any], persona_id: str) -> Dict[str, Any]:
+    if persona_id != "mayank":
+        return summary
+    from src.intraday.fundamental_style import get_style_profile
+    from src.intraday.mayank import profile_to_dict, style_params_snapshot
+
+    config = get_persona_config(persona_id)
+    summary = dict(summary)
+    summary["style_params"] = style_params_snapshot(config)
+    profiles: Dict[str, Any] = {}
+    for trade_row in summary.get("trades", []):
+        sym = str(trade_row.get("symbol", "")).upper()
+        if sym and sym not in profiles:
+            profile = get_style_profile(config, sym)
+            if profile is not None:
+                profiles[sym] = profile_to_dict(profile)
+        if sym in profiles:
+            trade_row.update(profiles[sym])
+    summary["style_profiles"] = profiles
+    return summary
 
 
 def summarize_result(result: IntradayBacktestResult) -> Dict[str, Any]:
@@ -36,8 +58,9 @@ def summarize_result(result: IntradayBacktestResult) -> Dict[str, Any]:
         "daily_pnl": {k: round(v, 2) for k, v in result.daily_pnl.items()},
         "trades": [_trade_dict(t) for t in result.trades],
         "pair_trades": _aggregate_pair_trades(result.trades),
+        "label": "backtest",
     }
-    return summary
+    return _enrich_mayank_summary(summary, result.persona_id)
 
 
 def _aggregate_pair_trades(trades) -> list:
@@ -76,7 +99,7 @@ def summarize_state(config: Config, state: PaperState) -> Dict[str, Any]:
     win_rate = (len(wins) / total * 100.0) if total else 0.0
     expectancy = sum(t.r_multiple for t in trades) / total if total else 0.0
     capital = float(config.secrets.initial_capital)
-    return {
+    summary: Dict[str, Any] = {
         "persona_id": state.persona_id,
         "start_date": state.trading_date.isoformat(),
         "end_date": state.trading_date.isoformat(),
@@ -97,8 +120,16 @@ def summarize_state(config: Config, state: PaperState) -> Dict[str, Any]:
         "completed_trades": [_trade_dict(t) for t in trades],
         "skipped_signals": state.skipped_signals,
         "top_candidates": state.top_candidates,
+        "style_profiles": state.style_profiles,
+        "style_params": state.style_params,
         "state_path": str(config.intraday_dir / f"{config.persona_id}_state.json"),
     }
+    if state.style_profiles:
+        for trade_row in summary["completed_trades"]:
+            sym = str(trade_row.get("symbol", "")).upper()
+            if sym in state.style_profiles:
+                trade_row.update(state.style_profiles[sym])
+    return _enrich_mayank_summary(summary, state.persona_id)
 
 
 def save_summary(config: Config, summary: Dict[str, Any]) -> Path:
