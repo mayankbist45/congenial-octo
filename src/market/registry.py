@@ -156,6 +156,8 @@ def load_markets() -> Dict[str, Market]:
     if not MARKETS_DIR.exists():
         return markets
     for path in sorted(MARKETS_DIR.glob("*.yaml")):
+        if path.name.startswith("._") or path.name.startswith("."):
+            continue
         market = _load_market_yaml(path)
         markets[market.id] = market
     return markets
