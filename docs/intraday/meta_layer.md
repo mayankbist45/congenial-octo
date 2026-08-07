@@ -257,6 +257,7 @@ Replace fixed `risk_per_trade_pct` sizing in watch/simulator when
 | 2 | MetaLabelAgent stub (rules: take if backtest win rate > 50%) | Phase 1 |
 | 3 | Purged CV in backtest script | Phase 1 |
 | 4 | Trained classifier from exported labels | Phases 1–3, two personas |
+| 4b | Bootstrap train + shadow gate (`scripts/train_meta_model.py`) | Implemented |
 | 5 | Kelly bet sizing | Phase 4 |
 
 ---
@@ -267,6 +268,7 @@ Replace fixed `risk_per_trade_pct` sizing in watch/simulator when
 intraday:
   meta:
     enabled: false
+    log_decisions: false   # set true on apprentice / research personas
     min_meta_confidence: 0.55
     use_llm_fallback: true
     bet_sizing: false
@@ -276,6 +278,64 @@ intraday:
     labels_path: "data/intraday/meta_labels.csv"
     model_path: "data/intraday/meta_model.pkl"
 ```
+
+Decisions are stored in PostgreSQL (or SQLite in tests) in **`meta_decisions`** — see §9 below. CSV export remains optional for offline sklearn.
+
+---
+
+## 9. `meta_decisions` table (implemented)
+
+Canonical log for intraday gate take/skip decisions. Schema is applied automatically on first DB connect (`src/journal/db.py`).
+
+| Column | Purpose |
+|--------|---------|
+| `decision_id` | UUID per gate evaluation |
+| `persona_id`, `symbol`, `decision_ts` | Who / what / when |
+| `strategy`, `side` | Rule signal context |
+| `gate_decision` | `take` or `skip` |
+| `gate_method` | `rules`, `llm`, or `model` |
+| `model_version`, `model_score` | Lightweight classifier (future) |
+| `features` | JSON feature vector for training |
+| `rationale`, `news_refs`, `gate_reason` | Human/LLM context |
+| `outcome_label`, `meta_label`, `net_pnl`, `exit_reason`, `labeled_at` | Filled post-session |
+
+**Enable logging** on a persona:
+
+```yaml
+intraday:
+  meta:
+    log_decisions: true
+```
+
+Gate hook: `IntradayAgent.gate_trade()` → `src/intraday/meta_log.py`.
+
+**Label unlabeled rows:**
+
+```bash
+python scripts/label_meta_decisions.py --persona apprentice
+```
+
+**Apply schema on VM** after deploy: restart dashboard or run:
+
+```bash
+cd /opt/fund && .venv/bin/python -c "from src.journal.db import connect; connect()"
+```
+
+### Bootstrap / retrain model
+
+```bash
+# From historical candles (bootstrap)
+python scripts/train_meta_model.py --persona calan \
+  --start 2026-07-28 --end 2026-08-05 --cache-only --backtest-only
+
+# After live labels accumulate (journal + backtest)
+python scripts/train_meta_model.py --persona calan --cache-only
+```
+
+Artifacts: `data/intraday/meta_model_{persona}.pkl`
+
+Calan / calan_us: `meta.enabled: true`, `shadow: true` (scores + logs, does not veto yet).
+Set `shadow: false` to let the model veto takes below `min_meta_confidence`.
 
 ---
 

@@ -286,6 +286,32 @@ CREATE TABLE IF NOT EXISTS learning_lessons (
     UNIQUE (persona_id, label)
 );
 
+CREATE TABLE IF NOT EXISTS meta_decisions (
+    id {ID_PK},
+    decision_id TEXT NOT NULL,
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    symbol TEXT NOT NULL,
+    decision_ts TEXT NOT NULL,
+    strategy TEXT,
+    side TEXT,
+    gate_decision TEXT NOT NULL,
+    gate_method TEXT,
+    model_version TEXT,
+    model_score {REAL},
+    features TEXT,
+    rationale TEXT,
+    news_refs TEXT,
+    gate_reason TEXT,
+    outcome_label INTEGER,
+    meta_label INTEGER,
+    net_pnl {REAL},
+    exit_reason TEXT,
+    labeled_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (persona_id, decision_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -303,6 +329,10 @@ CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_run_date ON quarterly_r
 CREATE INDEX IF NOT EXISTS idx_decision_reviews_persona ON decision_reviews(persona_id);
 CREATE INDEX IF NOT EXISTS idx_decision_reviews_label ON decision_reviews(label);
 CREATE INDEX IF NOT EXISTS idx_learning_lessons_persona ON learning_lessons(persona_id);
+CREATE INDEX IF NOT EXISTS idx_meta_decisions_persona ON meta_decisions(persona_id);
+CREATE INDEX IF NOT EXISTS idx_meta_decisions_ts ON meta_decisions(decision_ts);
+CREATE INDEX IF NOT EXISTS idx_meta_decisions_symbol ON meta_decisions(symbol);
+CREATE INDEX IF NOT EXISTS idx_meta_decisions_labeled ON meta_decisions(labeled_at);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -320,6 +350,7 @@ TABLES = (
     "quarterly_report_analyses",
     "decision_reviews",
     "learning_lessons",
+    "meta_decisions",
 )
 
 # Tables whose primary key is a generated integer, so a migration that carries
@@ -332,6 +363,7 @@ SEQUENCE_TABLES = (
     "quarterly_report_analyses",
     "decision_reviews",
     "learning_lessons",
+    "meta_decisions",
 )
 
 DbTarget = Union[None, str, Path, Config]
@@ -666,7 +698,8 @@ def truncate_all(target: DbTarget = None) -> None:
             conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name IN "
                 "('runs','proposals','trades','quarterly_reports',"
-                "'quarterly_report_analyses','decision_reviews','learning_lessons')"
+                "'quarterly_report_analyses','decision_reviews','learning_lessons',"
+                "'meta_decisions')"
             )
 
 

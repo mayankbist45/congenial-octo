@@ -204,6 +204,11 @@ personas:
         veto_scalping: false
         min_watch_confidence: 0.55
         min_trade_confidence: 0.60
+      meta:
+        enabled: true
+        log_decisions: true
+        shadow: true
+        min_meta_confidence: 0.55
       fundamentals:
         enabled: true
         cache_only: true
