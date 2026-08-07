@@ -63,14 +63,21 @@ class IntradayAgent:
             signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
         )
         if rules["decision"] == "veto":
+            self._maybe_log_meta_decision(
+                signal, ranked, watchlist_entry, estimated_costs, rules
+            )
             return rules
         use_llm = self._config.get("intraday.agent.gate_use_llm", True)
+        candidate = rules
         if use_llm and self.enabled and self._llm.available:
             llm = self._gate_llm(
                 signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
             )
             if llm is not None:
                 if llm.get("decision") == "veto":
+                    self._maybe_log_meta_decision(
+                        signal, ranked, watchlist_entry, estimated_costs, llm
+                    )
                     return llm
                 merged = dict(rules)
                 for key in ("adjusted_stop", "adjusted_target", "rationale", "confidence"):
@@ -82,8 +89,91 @@ class IntradayAgent:
                     merged["trailing_stop_pct"] = llm["trailing_stop_pct"]
                 merged["decision"] = "approve"
                 merged["generated_by_llm"] = True
-                return merged
-        return rules
+                candidate = merged
+
+        result = self._apply_meta_model(
+            signal, ranked, watchlist_entry, estimated_costs, candidate
+        )
+        self._maybe_log_meta_decision(
+            signal, ranked, watchlist_entry, estimated_costs, result
+        )
+        return result
+
+    def _apply_meta_model(
+        self,
+        signal: IntradaySignal,
+        ranked: RankedStock,
+        watchlist_entry: Optional[Dict[str, object]],
+        estimated_costs: float,
+        candidate: dict,
+    ) -> dict:
+        """Score with lightweight meta model; optionally veto or shadow-log."""
+        if not bool(self._config.get("intraday.meta.enabled", False)):
+            return candidate
+        if candidate.get("decision") != "approve":
+            return candidate
+        from src.intraday.meta_log import build_gate_features
+        from src.intraday.meta_model import load_meta_model
+
+        model = getattr(self, "_meta_model", None)
+        if model is None and not getattr(self, "_meta_model_checked", False):
+            self._meta_model = load_meta_model(self._config)
+            self._meta_model_checked = True
+            model = self._meta_model
+        if model is None or not model.ready:
+            return candidate
+
+        features = build_gate_features(
+            self._config,
+            signal,
+            ranked,
+            estimated_costs=estimated_costs,
+            watchlist_entry=watchlist_entry,
+        )
+        min_conf = float(
+            self._config.get("intraday.meta.min_meta_confidence", 0.55) or 0.55
+        )
+        score = model.should_take(features, min_confidence=min_conf)
+        out = dict(candidate)
+        out["model_version"] = score.model_version
+        out["model_score"] = score.confidence
+        out["gate_method"] = "model"
+        shadow = bool(self._config.get("intraday.meta.shadow", False))
+        if shadow:
+            out["rationale"] = (
+                f"{candidate.get('rationale') or 'rules'}; "
+                f"shadow meta p={score.confidence:.3f}"
+            )
+            return out
+        if not score.take:
+            out["decision"] = "veto"
+            out["rationale"] = score.rationale
+            return out
+        out["rationale"] = (
+            f"{candidate.get('rationale') or 'rules'}; {score.rationale}"
+        )
+        return out
+
+    def _maybe_log_meta_decision(
+        self,
+        signal: IntradaySignal,
+        ranked: RankedStock,
+        watchlist_entry: Optional[Dict[str, object]],
+        estimated_costs: float,
+        gate: dict,
+    ) -> None:
+        from src.intraday.meta_log import log_gate_decision
+
+        log_gate_decision(
+            self._config,
+            signal,
+            ranked,
+            gate,
+            watchlist_entry=watchlist_entry,
+            estimated_costs=estimated_costs,
+            model_version=gate.get("model_version"),
+            model_score=gate.get("model_score"),
+        )
 
     def _filter_calan_watchlist(self, payload: dict, ranked: List[RankedStock]) -> dict:
         """Drop weak LLM picks that lack gap/rvol catalyst support."""
