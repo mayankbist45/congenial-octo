@@ -280,6 +280,15 @@ dashboard:
   host: "127.0.0.1"
   port: 8000
 
+# End-of-day persona digests → WhatsApp (Twilio). Credentials live in .env.
+notify:
+  whatsapp:
+    enabled: true
+    # Cron fires ~5 minutes after each market's intraday watch stop.
+    # See scripts/send_daily_persona_report.py and .env.example.
+
+
+
 database:
   # The journal is the fund's durable record, so it runs on a real server.
   # Overridden by DATABASE_URL in .env when that is set, which is where a DSN
