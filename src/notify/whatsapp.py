@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -18,8 +18,9 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True)
 class WhatsAppConfig:
-    account_sid: str
-    auth_token: str
+    account_sid: str  # must be AC...
+    auth_user: str  # Account SID or API Key SID (SK...)
+    auth_password: str  # Auth Token or API Key Secret
     from_number: str  # whatsapp:+1...
     to_numbers: List[str]  # whatsapp:+91...
     enabled: bool = True
@@ -28,15 +29,16 @@ class WhatsAppConfig:
     def configured(self) -> bool:
         return bool(
             self.enabled
-            and self.account_sid
-            and self.auth_token
+            and self.account_sid.startswith("AC")
+            and self.auth_user
+            and self.auth_password
             and self.from_number
             and self.to_numbers
         )
 
 
 def _normalize_whatsapp_address(raw: str) -> str:
-    value = (raw or "").strip()
+    value = (raw or "").strip().strip('"').strip("'")
     if not value:
         return ""
     if value.startswith("whatsapp:"):
@@ -49,8 +51,12 @@ def _normalize_whatsapp_address(raw: str) -> str:
     return value
 
 
+def _clean(raw: Optional[str]) -> str:
+    return (raw or "").strip().strip('"').strip("'")
+
+
 def load_whatsapp_config() -> WhatsAppConfig:
-    load_dotenv(PROJECT_ROOT / ".env")
+    load_dotenv(PROJECT_ROOT / ".env", override=True)
     enabled_raw = (os.getenv("WHATSAPP_ENABLED") or "true").strip().lower()
     enabled = enabled_raw in {"1", "true", "yes", "on"}
     to_raw = os.getenv("WHATSAPP_TO") or os.getenv("TWILIO_WHATSAPP_TO") or ""
@@ -60,9 +66,33 @@ def load_whatsapp_config() -> WhatsAppConfig:
         if part.strip()
     ]
     recipients = [r for r in recipients if r]
+
+    account_sid = _clean(os.getenv("TWILIO_ACCOUNT_SID"))
+    api_key = _clean(os.getenv("TWILIO_API_KEY") or os.getenv("TWILIO_API_KEY_SID"))
+    auth_token = _clean(
+        os.getenv("TWILIO_AUTH_TOKEN") or os.getenv("TWILIO_API_SECRET") or os.getenv("TWILIO_API_KEY_SECRET")
+    )
+
+    # Common mistake: API Key SID (SK...) pasted into TWILIO_ACCOUNT_SID.
+    if account_sid.startswith("SK") and not api_key:
+        api_key = account_sid
+        account_sid = _clean(os.getenv("TWILIO_PARENT_ACCOUNT_SID"))
+        if not account_sid:
+            logger.error(
+                "TWILIO_ACCOUNT_SID is an API Key (SK…). Put the Account SID "
+                "(starts with AC) in TWILIO_ACCOUNT_SID, and set "
+                "TWILIO_API_KEY=SK… plus TWILIO_AUTH_TOKEN=<api key secret>."
+            )
+
+    if api_key.startswith("SK"):
+        auth_user, auth_password = api_key, auth_token
+    else:
+        auth_user, auth_password = account_sid, auth_token
+
     return WhatsAppConfig(
-        account_sid=(os.getenv("TWILIO_ACCOUNT_SID") or "").strip(),
-        auth_token=(os.getenv("TWILIO_AUTH_TOKEN") or "").strip(),
+        account_sid=account_sid,
+        auth_user=auth_user,
+        auth_password=auth_password,
         from_number=_normalize_whatsapp_address(
             os.getenv("TWILIO_WHATSAPP_FROM") or os.getenv("WHATSAPP_FROM") or ""
         ),
@@ -84,8 +114,9 @@ def send_whatsapp_message(
     cfg = config or load_whatsapp_config()
     if not cfg.configured:
         logger.warning(
-            "WhatsApp not configured (need TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, "
-            "TWILIO_WHATSAPP_FROM, WHATSAPP_TO); skipping send"
+            "WhatsApp not configured correctly. Need TWILIO_ACCOUNT_SID starting "
+            "with AC, TWILIO_AUTH_TOKEN (or API key secret), TWILIO_WHATSAPP_FROM, "
+            "WHATSAPP_TO. Skipping send."
         )
         return {"ok": False, "skipped": True, "reason": "not_configured"}
 
@@ -114,7 +145,7 @@ def send_whatsapp_message(
             response = requests.post(
                 url,
                 data={"From": cfg.from_number, "To": to, "Body": body},
-                auth=(cfg.account_sid, cfg.auth_token),
+                auth=(cfg.auth_user, cfg.auth_password),
                 timeout=30,
             )
         except requests.RequestException as exc:
