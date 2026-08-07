@@ -244,10 +244,12 @@ execution:
 angelone:
   # Historical getCandleData is throttled per SmartAPI app. A second API key
   # (ANGELONE_DATA2_* in .env) doubles throughput via candle_pool + budget coordinator.
+  # Set false to use primary key only when dual-key hits IP-level limits.
+  use_candle_pool: false
   min_call_interval_seconds: 1.0
   candle_call_interval_seconds: 4.0
-  candle_budget_spacing_seconds: 4.0
-  candle_max_requests_per_minute: 12
+  candle_budget_spacing_seconds: 6.0
+  candle_max_requests_per_minute: 8
   rate_limit_backoff_seconds: 60.0
   # Watch mode skips API when cache is this fresh (defaults to bar size + 1 min).
   candle_cache_stale_minutes: 12
