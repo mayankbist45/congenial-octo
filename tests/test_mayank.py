@@ -35,6 +35,15 @@ def test_mayank_persona_loads(mayank_config):
     assert mayank_config.path("universe.file").name == "nifty500.csv"
 
 
+def test_mayank_us_persona_loads():
+    config = get_persona_config("mayank_us")
+    assert config.persona_id == "mayank_us"
+    assert config.market_id == "us_equity"
+    assert is_mayank_persona(config)
+    assert config.get("connectors.broker") == "alpaca"
+    assert "vwap_fade" in config.get("intraday.strategies", [])
+
+
 def test_style_params_snapshot(mayank_config):
     params = style_params_snapshot(mayank_config)
     assert params["value_pe_threshold"] == 18

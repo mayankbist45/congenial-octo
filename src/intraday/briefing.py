@@ -44,16 +44,18 @@ def build_catalyst_briefing(
     as_of: datetime,
     daily_pnl: float = 0.0,
 ) -> str:
-    persona_id = config.persona_id
-    if persona_id == "mayank":
+    from src.market.registry import persona_strategy_type
+
+    strategy = persona_strategy_type(config.persona_id)
+    if strategy == "mayank":
         return _build_mayank_catalyst_briefing(config, ranked, frames, as_of, daily_pnl)
-    if persona_id == "revert":
+    if strategy == "revert":
         return _build_revert_regime_briefing(config, ranked, frames, as_of, daily_pnl)
-    if persona_id == "flux":
+    if strategy == "flux":
         return _build_flux_flow_briefing(config, ranked, frames, as_of, daily_pnl)
-    if persona_id == "spread":
+    if strategy == "spread":
         return _build_spread_analyst_briefing(config, ranked, frames, as_of, daily_pnl)
-    if persona_id == "slice":
+    if strategy == "slice":
         return _build_slice_monitor_briefing(config, ranked, frames, as_of, daily_pnl)
     return _build_calan_catalyst_briefing(config, ranked, frames, as_of, daily_pnl)
 
@@ -68,20 +70,22 @@ def build_trade_gate_briefing(
     watchlist_entry: Optional[Dict[str, object]] = None,
     estimated_costs: float = 0.0,
 ) -> str:
-    persona_id = config.persona_id
-    if persona_id == "revert":
+    from src.market.registry import persona_strategy_type
+
+    strategy = persona_strategy_type(config.persona_id)
+    if strategy == "revert":
         return _build_revert_gate_briefing(
             config, signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
         )
-    if persona_id == "flux":
+    if strategy == "flux":
         return _build_flux_gate_briefing(
             config, signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
         )
-    if persona_id == "spread":
+    if strategy == "spread":
         return _build_spread_gate_briefing(
             config, signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
         )
-    if persona_id == "slice":
+    if strategy == "slice":
         return _build_slice_gate_briefing(
             config, signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
         )

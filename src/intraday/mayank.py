@@ -20,7 +20,9 @@ REVERSION_STRATEGIES = frozenset(
 
 
 def is_mayank_persona(config: Config) -> bool:
-    return config.persona_id == "mayank"
+    from src.market.registry import persona_strategy_type
+
+    return persona_strategy_type(config.persona_id) == "mayank"
 
 
 def style_params_snapshot(config: Config) -> Dict[str, Any]:

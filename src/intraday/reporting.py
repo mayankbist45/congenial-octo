@@ -11,7 +11,9 @@ from src.intraday.models import IntradayBacktestResult, PaperState
 
 
 def _enrich_mayank_summary(summary: Dict[str, Any], persona_id: str) -> Dict[str, Any]:
-    if persona_id != "mayank":
+    from src.market.registry import persona_strategy_type
+
+    if persona_strategy_type(persona_id) != "mayank":
         return summary
     from src.intraday.fundamental_style import get_style_profile
     from src.intraday.mayank import profile_to_dict, style_params_snapshot

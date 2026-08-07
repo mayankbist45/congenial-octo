@@ -181,20 +181,22 @@ class IntradayAgent:
         return None
 
     def _catalyst_rules(self, ranked: List[RankedStock]) -> dict:
-        persona_id = self._config.persona_id
-        if persona_id == "mayank":
+        from src.market.registry import persona_strategy_type
+
+        strategy = persona_strategy_type(self._config.persona_id)
+        if strategy == "mayank":
             from src.intraday.mayank import mayank_catalyst_rules
 
             return mayank_catalyst_rules(self._config, ranked)
-        if persona_id == "revert":
+        if strategy == "revert":
             return self._revert_catalyst_rules(ranked)
-        if persona_id == "flux":
+        if strategy == "flux":
             return self._flux_catalyst_rules(ranked)
-        if persona_id == "spread":
+        if strategy == "spread":
             return self._spread_catalyst_rules(ranked)
-        if persona_id == "xstat":
+        if strategy == "xstat":
             return self._xstat_catalyst_rules(ranked)
-        if persona_id == "slice":
+        if strategy == "slice":
             return self._slice_catalyst_rules()
         return self._calan_catalyst_rules(ranked)
 
@@ -501,8 +503,10 @@ class IntradayAgent:
         watchlist_entry: Optional[Dict[str, object]],
         estimated_costs: float,
     ) -> dict:
-        persona_id = self._config.persona_id
-        if persona_id == "mayank":
+        from src.market.registry import persona_strategy_type
+
+        strategy = persona_strategy_type(self._config.persona_id)
+        if strategy == "mayank":
             from src.intraday.mayank import REVERSION_STRATEGIES
 
             if signal.strategy in REVERSION_STRATEGIES:
@@ -512,23 +516,23 @@ class IntradayAgent:
             return self._calan_gate_rules(
                 signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
             )
-        if persona_id == "revert":
+        if strategy == "revert":
             return self._revert_gate_rules(
                 signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
             )
-        if persona_id == "flux":
+        if strategy == "flux":
             return self._flux_gate_rules(
                 signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
             )
-        if persona_id == "spread":
+        if strategy == "spread":
             return self._spread_gate_rules(
                 signal, ranked, as_of, daily_pnl, watchlist_entry
             )
-        if persona_id == "xstat":
+        if strategy == "xstat":
             return self._xstat_gate_rules(
                 signal, ranked, as_of, daily_pnl, watchlist_entry
             )
-        if persona_id == "slice":
+        if strategy == "slice":
             return self._slice_gate_rules(signal, as_of, daily_pnl)
         return self._calan_gate_rules(
             signal, ranked, frame, as_of, daily_pnl, watchlist_entry, estimated_costs
