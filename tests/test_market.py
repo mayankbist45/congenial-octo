@@ -83,3 +83,14 @@ def test_us_watch_bounds_cross_midnight_ist():
     ist = ZoneInfo("Asia/Kolkata")
     assert start.astimezone(ist).hour in {18, 19, 20}
     assert stop.astimezone(ist).date() >= start.astimezone(ist).date()
+
+
+def test_enabled_intraday_personas_respects_market_schedule():
+    from src.market.scheduling import enabled_intraday_personas
+
+    india = enabled_intraday_personas("india_equity")
+    us = enabled_intraday_personas("us_equity")
+    assert india == ["calan", "mayank"]
+    assert "mayank_us" in us
+    assert "calan_us" in us
+    assert "flux" not in india

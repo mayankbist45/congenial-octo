@@ -19,6 +19,7 @@ PERSONA_MARKET_ALIASES: Dict[str, str] = {
     "steady_compounder_us": "us_equity",
     "momentum_rider_us": "us_equity",
     "calan_us": "us_equity",
+    "mayank_us": "us_equity",
     "revert_us": "us_equity",
     "flux_us": "us_equity",
     "spread_us": "us_equity",

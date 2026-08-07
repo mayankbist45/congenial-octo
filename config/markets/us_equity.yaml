@@ -32,7 +32,7 @@ scheduling:
   swing_cycle: "08:00"
   swing_close: "16:30"
   intraday_watch:
-    personas: [calan_us, revert_us, flux_us, spread_us, slice_us]
+    personas: [calan_us, mayank_us, revert_us, flux_us, spread_us, slice_us]
     start_offset_min: -10
     stop_offset_min: 15
 display:
