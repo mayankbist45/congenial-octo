@@ -81,7 +81,6 @@ class IntradayWatchEngine:
         self._broker_exec: Optional[IntradayBrokerExecutor] = None
 
     def run_until_close(self) -> PaperState:
-        poll_seconds = int(self._config.get("intraday.watch_poll_seconds", 300) or 300)
         force_exit = self._force_exit_time()
         while True:
             now = self._exchange_now(self._now())
@@ -90,7 +89,7 @@ class IntradayWatchEngine:
                 state.active = False
                 self._save(state)
                 return state
-            self._sleep(max(poll_seconds, 1))
+            self._sleep(self._poll_seconds(state))
 
     def run_once(self, now: Optional[datetime] = None) -> PaperState:
         now = self._exchange_now(now or self._now())
@@ -221,10 +220,12 @@ class IntradayWatchEngine:
         ranked_map = {r.symbol: r for r in ranked}
 
         for _, signal in signals:
+            if self._already_skipped(state, signal):
+                continue
             if self._uses_watchlist_gate() and signal.symbol not in watch_map:
                 self._skip(state, signal, "symbol not on watchlist")
                 continue
-            if self._is_stale_signal(signal, now):
+            if self._is_stale_signal(signal, now, state):
                 self._skip(state, signal, "stale signal (missed entry window)")
                 continue
             if state.trade_count >= max_trades:
@@ -747,10 +748,54 @@ class IntradayWatchEngine:
     def _uses_watchlist_gate(self) -> bool:
         return self._config.persona_id not in ("spread", "xstat")
 
-    def _is_stale_signal(self, signal: IntradaySignal, now: datetime) -> bool:
+    def _poll_seconds(self, state: PaperState) -> int:
+        base = max(int(self._config.get("intraday.watch_poll_seconds", 300) or 300), 1)
+        if self._catalyst_scanned and state.watchlist:
+            active = int(self._config.get("intraday.watch_active_poll_seconds", 0) or 0)
+            if active > 0:
+                return max(active, 1)
+        return base
+
+    def _bar_minutes(self) -> int:
+        interval = str(self._config.get("intraday.default_interval", "FIVE_MINUTE")).upper()
+        return {"ONE_MINUTE": 1, "FIVE_MINUTE": 5, "FIFTEEN_MINUTE": 15}.get(interval, 5)
+
+    @staticmethod
+    def _signal_key(signal: IntradaySignal) -> tuple:
+        return (
+            signal.symbol.upper(),
+            signal.strategy,
+            signal.side,
+            signal.entry_time.isoformat(),
+        )
+
+    @staticmethod
+    def _already_skipped(state: PaperState, signal: IntradaySignal) -> bool:
+        key = IntradayWatchEngine._signal_key(signal)
+        for row in state.skipped_signals:
+            row_key = (
+                str(row.get("symbol", "")).upper(),
+                str(row.get("strategy", "")),
+                str(row.get("side", "")),
+                str(row.get("time", "")),
+            )
+            if row_key == key:
+                return True
+        return False
+
+    def _is_stale_signal(
+        self, signal: IntradaySignal, now: datetime, state: PaperState
+    ) -> bool:
         poll = max(int(self._config.get("intraday.watch_poll_seconds", 300) or 300), 1)
-        max_age = timedelta(seconds=poll + 120)
-        signal_ts = _naive_exchange_dt(signal.entry_time, self._tz)
+        buffer_s = int(
+            self._config.get("intraday.signal_stale_buffer_seconds", 120) or 120
+        )
+        max_age = timedelta(seconds=poll + buffer_s)
+        # Age from bar close, not open — late watchlist discovery should not
+        # instantly stale a signal that fired on the prior completed bar.
+        signal_ts = _naive_exchange_dt(signal.entry_time, self._tz) + timedelta(
+            minutes=self._bar_minutes()
+        )
         now_ts = _naive_exchange_dt(now, self._tz)
         return now_ts - signal_ts > max_age
 

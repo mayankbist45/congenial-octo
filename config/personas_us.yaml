@@ -146,6 +146,7 @@ personas:
       trade_window_end: "15:00"
       force_exit_time: "15:45"
       watch_poll_seconds: 300
+      watch_active_poll_seconds: 120
       watch_scan_size: 12
       ranked_universe_size: 8
       max_trades_per_day: 3
@@ -167,6 +168,7 @@ personas:
       agent:
         enabled: true
         gate_use_llm: false
+        catalyst_use_llm: false
         veto_scalping: true
         min_watch_confidence: 0.55
         min_trade_confidence: 0.55

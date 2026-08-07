@@ -159,6 +159,7 @@ personas:
       trade_window_end: "14:30"
       force_exit_time: "15:15"
       watch_poll_seconds: 600
+      watch_active_poll_seconds: 120
       watch_scan_size: 8
       watch_discovery_scan_size: 8
       watch_active_scan_size: 6
@@ -199,6 +200,7 @@ personas:
       agent:
         enabled: true
         gate_use_llm: false
+        catalyst_use_llm: false
         veto_scalping: false
         min_watch_confidence: 0.55
         min_trade_confidence: 0.60

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 import pytest
@@ -657,6 +657,7 @@ def test_exit_for_position_handles_aware_now(calan_config):
 def test_watch_stale_signal_is_rejected(calan_config):
     from zoneinfo import ZoneInfo
 
+    from src.intraday.models import PaperState
     from src.intraday.watch import IntradayWatchEngine
 
     us_config = get_persona_config("calan_us")
@@ -665,6 +666,7 @@ def test_watch_stale_signal_is_rejected(calan_config):
         data_service=MagicMock(),
         symbols=["AAPL"],
     )
+    state = PaperState(persona_id="calan_us", trading_date=date(2026, 8, 5))
     now = datetime(2026, 8, 5, 11, 30, tzinfo=ZoneInfo("America/New_York"))
     stale = IntradaySignal(
         "AAPL",
@@ -676,7 +678,7 @@ def test_watch_stale_signal_is_rejected(calan_config):
         102.0,
         "test",
     )
-    assert engine._is_stale_signal(stale, now) is True
+    assert engine._is_stale_signal(stale, now, state) is True
 
     fresh = IntradaySignal(
         "AAPL",
@@ -688,7 +690,70 @@ def test_watch_stale_signal_is_rejected(calan_config):
         102.0,
         "test",
     )
-    assert engine._is_stale_signal(fresh, now) is False
+    assert engine._is_stale_signal(fresh, now, state) is False
+
+
+def test_watch_late_discovery_signal_not_instantly_stale(calan_config):
+    """Bar-close age: 11:45 signal evaluated at 11:58 should still be actionable."""
+    from zoneinfo import ZoneInfo
+
+    from src.intraday.models import PaperState
+    from src.intraday.watch import IntradayWatchEngine
+
+    config = get_persona_config("calan")
+    engine = IntradayWatchEngine(config, data_service=MagicMock(), symbols=["BAJFINANCE"])
+    engine._catalyst_scanned = True
+    state = PaperState(
+        persona_id="calan",
+        trading_date=date(2026, 8, 7),
+        watchlist=[{"symbol": "BAJFINANCE", "in_play": True}],
+    )
+    signal = IntradaySignal(
+        "BAJFINANCE",
+        "scalping",
+        "SELL",
+        datetime(2026, 8, 7, 11, 45),
+        100.0,
+        101.0,
+        99.0,
+        "test",
+    )
+    now = datetime(2026, 8, 7, 11, 58, tzinfo=ZoneInfo("Asia/Kolkata"))
+    assert engine._is_stale_signal(signal, now, state) is False
+
+
+def test_watch_dedupes_already_skipped_signals(calan_config):
+    from zoneinfo import ZoneInfo
+
+    from src.intraday.models import PaperState
+    from src.intraday.watch import IntradayWatchEngine
+
+    us_config = get_persona_config("calan_us")
+    engine = IntradayWatchEngine(us_config, data_service=MagicMock(), symbols=["AAPL"])
+    signal = IntradaySignal(
+        "AAPL",
+        "opening_range_breakout",
+        "BUY",
+        datetime(2026, 8, 5, 10, 0),
+        100.0,
+        99.0,
+        102.0,
+        "test",
+    )
+    state = PaperState(
+        persona_id="calan_us",
+        trading_date=date(2026, 8, 5),
+        skipped_signals=[
+            {
+                "symbol": "AAPL",
+                "strategy": "opening_range_breakout",
+                "side": "BUY",
+                "time": signal.entry_time.isoformat(),
+                "reason": "stale signal (missed entry window)",
+            }
+        ],
+    )
+    assert engine._already_skipped(state, signal) is True
 
 
 def test_watch_skips_symbol_not_on_watchlist(calan_config):

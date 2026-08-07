@@ -75,7 +75,8 @@ class AngelOneConnector(BrokerConnector):
 
         primary = AngelOneClient(config)
         secondary_creds = secrets.secondary_candle_credentials()
-        if secondary_creds and secondary_creds.is_complete:
+        use_pool = bool(config.get("angelone.use_candle_pool", True))
+        if use_pool and secondary_creds and secondary_creds.is_complete:
             secondary = AngelOneClient(config, credentials=secondary_creds)
             logger.info(
                 "Using Angel One candle pool (primary + data2 API keys) for intraday data"
@@ -83,6 +84,11 @@ class AngelOneConnector(BrokerConnector):
             )
             inner = AngelOneCandlePool([primary, secondary], config=config)
         else:
+            if secondary_creds and secondary_creds.is_complete and not use_pool:
+                logger.info(
+                    "Angel One data2 credentials present but candle pool disabled "
+                    "(angelone.use_candle_pool=false); using primary key only"
+                )
             logger.info(
                 "Using Angel One for market data"
                 + (" (DRY_RUN; orders not routed here)" if secrets.dry_run else "")
