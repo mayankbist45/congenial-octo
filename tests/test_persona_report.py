@@ -98,7 +98,8 @@ def test_collect_marks_missing_when_stale(tmp_path: Path):
 def test_whatsapp_dry_run_no_network():
     cfg = WhatsAppConfig(
         account_sid="ACxxx",
-        auth_token="token",
+        auth_user="ACxxx",
+        auth_password="token",
         from_number="whatsapp:+14155238886",
         to_numbers=["whatsapp:+919800000000"],
         enabled=True,
@@ -112,7 +113,8 @@ def test_whatsapp_dry_run_no_network():
 def test_whatsapp_skips_when_unconfigured():
     cfg = WhatsAppConfig(
         account_sid="",
-        auth_token="",
+        auth_user="",
+        auth_password="",
         from_number="",
         to_numbers=[],
         enabled=True,
