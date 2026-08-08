@@ -38,6 +38,10 @@ REMOTE_DIR="/opt/fund"
 # the VM keeps an ordinary ephemeral public address rather than routing through
 # Cloud NAT, which would put every run behind one shared, well-known IP.
 
+if [ -n "${CI:-}" ] || [ "${FUND_GCLOUD_QUIET:-0}" = "1" ]; then
+    export CLOUDSDK_CORE_DISABLE_PROMPTS=1
+fi
+
 die() {
     echo "error: $*" >&2
     exit 1
@@ -53,6 +57,14 @@ require_gcloud() {
 
 gc() { gcloud --project "$PROJECT" "$@"; }
 
+gc_quiet() {
+    if [ -n "${CI:-}" ] || [ "${FUND_GCLOUD_QUIET:-0}" = "1" ]; then
+        gc --quiet "$@"
+    else
+        gc "$@"
+    fi
+}
+
 _apply_shared_permissions() {
     ssh_vm "sudo groupadd fund 2>/dev/null || true &&
             sudo chown -R \$(id -un):fund '$REMOTE_DIR' &&
@@ -66,11 +78,11 @@ _apply_shared_permissions() {
 }
 
 ssh_vm() {
-    gc compute ssh "$INSTANCE" --zone "$ZONE" --command "$1"
+    gc_quiet compute ssh "$INSTANCE" --zone "$ZONE" --command "$1"
 }
 
 instance_exists() {
-    gc compute instances describe "$INSTANCE" --zone "$ZONE" >/dev/null 2>&1
+    gc_quiet compute instances describe "$INSTANCE" --zone "$ZONE" >/dev/null 2>&1
 }
 
 create() {
@@ -80,7 +92,7 @@ create() {
     fi
 
     echo "Creating $MACHINE_TYPE in $ZONE ($DISK_SIZE persistent disk)"
-    gc compute instances create "$INSTANCE" \
+    gc_quiet compute instances create "$INSTANCE" \
         --zone "$ZONE" \
         --machine-type "$MACHINE_TYPE" \
         --image-family debian-12 \
@@ -105,7 +117,11 @@ push() {
     instance_exists || die "$INSTANCE does not exist yet. Run: $0 deploy"
 
     local tarball
-    tarball="$(mktemp -t fund-src)".tar.gz
+    local tmpbase
+    tmpbase="$(mktemp "${TMPDIR:-/tmp}/fund-src.XXXXXX")" ||
+        die "could not allocate a temporary archive path"
+    tarball="${tmpbase}.tar.gz"
+    rm -f "$tmpbase"
     # Everything git would keep: tracked files plus new untracked ones that are
     # not gitignored, so a brand-new script reaches the VM before it is ever
     # committed. Taken from the working tree, so an uncommitted settings.yaml
@@ -127,7 +143,7 @@ push() {
         die "could not archive the working tree"
 
     echo "Pushing code to $INSTANCE:$REMOTE_DIR"
-    gc compute scp "$tarball" "$INSTANCE:~/fund-src.tar.gz" --zone "$ZONE" ||
+    gc_quiet compute scp "$tarball" "$INSTANCE:~/fund-src.tar.gz" --zone "$ZONE" ||
         die "scp of the source archive failed"
     rm -f "$tarball"
 
@@ -142,7 +158,7 @@ push() {
 
     if [ -f "$PROJECT_DIR/.env" ]; then
         echo "Pushing .env"
-        gc compute scp "$PROJECT_DIR/.env" "$INSTANCE:/tmp/fund.env" --zone "$ZONE" ||
+        gc_quiet compute scp "$PROJECT_DIR/.env" "$INSTANCE:/tmp/fund.env" --zone "$ZONE" ||
             die "scp of .env failed"
         # DATABASE_URL is dropped from the laptop copy (Homebrew DSN). Preserve
         # the VM's existing DATABASE_URL so deploy does not break the journal DB.
@@ -168,7 +184,7 @@ push() {
     # ~500 Screener requests at one second apart on the first run.
     if [ -d "$PROJECT_DIR/data/cache" ]; then
         echo "Pushing price and fundamentals caches"
-        gc compute scp --recurse "$PROJECT_DIR/data/cache" \
+        gc_quiet compute scp --recurse "$PROJECT_DIR/data/cache" \
             "$INSTANCE:$REMOTE_DIR/data/" --zone "$ZONE" ||
             echo "  warning: cache copy failed; the first run will rebuild it" >&2
     fi
@@ -186,11 +202,11 @@ bootstrap() {
 
 make_bucket() {
     [ -n "$BACKUP_BUCKET" ] || die "set GCP_BACKUP_BUCKET first"
-    if gc storage buckets describe "gs://$BACKUP_BUCKET" >/dev/null 2>&1; then
+    if gc_quiet storage buckets describe "gs://$BACKUP_BUCKET" >/dev/null 2>&1; then
         echo "  gs://$BACKUP_BUCKET already exists"
         return 0
     fi
-    gc storage buckets create "gs://$BACKUP_BUCKET" \
+    gc_quiet storage buckets create "gs://$BACKUP_BUCKET" \
         --location asia-south1 \
         --uniform-bucket-level-access ||
         die "bucket creation failed"
@@ -199,8 +215,8 @@ make_bucket() {
 
 snapshots() {
     local policy="${INSTANCE}-nightly"
-    if ! gc compute resource-policies describe "$policy" --region "${ZONE%-*}" >/dev/null 2>&1; then
-        gc compute resource-policies create snapshot-schedule "$policy" \
+    if ! gc_quiet compute resource-policies describe "$policy" --region "${ZONE%-*}" >/dev/null 2>&1; then
+        gc_quiet compute resource-policies create snapshot-schedule "$policy" \
             --region "${ZONE%-*}" \
             --max-retention-days 7 \
             --daily-schedule \
@@ -208,7 +224,7 @@ snapshots() {
             --on-source-disk-delete keep-auto-snapshots ||
             die "snapshot policy creation failed"
     fi
-    gc compute disks add-resource-policies "$INSTANCE" \
+    gc_quiet compute disks add-resource-policies "$INSTANCE" \
         --zone "$ZONE" --resource-policies "$policy" 2>/dev/null ||
         echo "  policy already attached"
     echo "  nightly snapshots at 21:00 UTC, 7 kept"
@@ -238,7 +254,7 @@ dashboard() {
     echo
     echo "Tunnelling http://127.0.0.1:8000 -> the VM. Open that in your browser."
     echo "Ctrl-C closes the tunnel; the dashboard keeps running on the VM."
-    gc compute ssh "$INSTANCE" --zone "$ZONE" -- -N -L 8000:127.0.0.1:8000
+    gc_quiet compute ssh "$INSTANCE" --zone "$ZONE" -- -N -L 8000:127.0.0.1:8000
 }
 
 case "${1:-help}" in
@@ -302,7 +318,7 @@ cloudlogs)
     # What the Ops Agent shipped, so it is readable even when the VM is down. The
     # agent files each log line under jsonPayload.message; textPayload is only
     # set for entries written some other way, so both are printed.
-    gc logging read \
+    gc_quiet logging read \
         'logName:"logs/fund_scheduled" OR logName:"logs/fund_app" OR logName:"logs/fund_backup"' \
         --limit "${2:-100}" --freshness "${3:-2d}" --order asc \
         --format 'value(timestamp.date("%Y-%m-%d %H:%M:%S"), jsonPayload.message, textPayload)'
@@ -325,25 +341,29 @@ dashboard)
 
 ssh)
     require_gcloud
-    gc compute ssh "$INSTANCE" --zone "$ZONE"
+    gc_quiet compute ssh "$INSTANCE" --zone "$ZONE"
     ;;
 
 stop)
     require_gcloud
-    gc compute instances stop "$INSTANCE" --zone "$ZONE"
+    gc_quiet compute instances stop "$INSTANCE" --zone "$ZONE"
     echo "Stopped. The disk still costs a few dollars a month; the vCPU does not."
     ;;
 
 start)
     require_gcloud
-    gc compute instances start "$INSTANCE" --zone "$ZONE"
+    gc_quiet compute instances start "$INSTANCE" --zone "$ZONE"
     ;;
 
 destroy)
     require_gcloud
-    read -r -p "Delete $INSTANCE and its disk in $ZONE? [y/N] " reply
+    if [ -n "${CI:-}" ] || [ "${FUND_CONFIRM_DESTROY:-0}" = "1" ]; then
+        reply="y"
+    else
+        read -r -p "Delete $INSTANCE and its disk in $ZONE? [y/N] " reply
+    fi
     [ "$reply" = "y" ] || exit 0
-    gc compute instances delete "$INSTANCE" --zone "$ZONE" --quiet
+    gc_quiet compute instances delete "$INSTANCE" --zone "$ZONE"
     echo "Gone. Restore from the pg_dump in gs://$BACKUP_BUCKET if you rebuild."
     ;;
 
