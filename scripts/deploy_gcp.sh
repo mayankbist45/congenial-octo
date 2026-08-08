@@ -29,7 +29,7 @@ set -uo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ZONE="${GCP_ZONE:-asia-south1-a}"
-INSTANCE="${GCP_INSTANCE:-fund-poc}"
+INSTANCE="${GCP_INSTANCE:-congenial-octo-fund-poc}"
 MACHINE_TYPE="${GCP_MACHINE_TYPE:-e2-medium}"
 DISK_SIZE="${GCP_DISK_SIZE:-30GB}"
 BACKUP_BUCKET="${GCP_BACKUP_BUCKET:-}"
@@ -116,7 +116,7 @@ create() {
         --metadata enable-oslogin=TRUE \
         --scopes https://www.googleapis.com/auth/devstorage.read_write,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write \
         --tags fund \
-        --labels purpose=fund-poc ||
+        --labels purpose=congenial-octo ||
         die "instance creation failed"
 
     echo "  waiting for SSH"

@@ -14,7 +14,7 @@ box — not a rewrite.
 ```
 Your Mac                          GCP project
 ─────────                         ─────────────────────────────────────
-deploy_gcp.sh ──scp/ssh──►  VM: fund-poc (e2-medium, asia-south1-a Mumbai)
+deploy_gcp.sh ──scp/ssh──►  VM: congenial-octo-fund-poc (e2-medium, asia-south1-a Mumbai)
      │                           │
      │ SSH tunnel :8000          ├── /opt/fund/              application
      ▼                           ├── PostgreSQL @ 127.0.0.1   journal (durable)
@@ -71,7 +71,7 @@ Default deploy settings (overridable via env vars in `deploy_gcp.sh`):
 | Setting | Default |
 | --- | --- |
 | GCP project | `gcloud config` project |
-| VM name | `fund-poc` |
+| VM name | `congenial-octo-fund-poc` |
 | Zone | `asia-south1-a` (Mumbai) |
 | Machine type | `e2-medium` (2 vCPU, 4 GB) |
 | Disk | 30 GB balanced persistent |

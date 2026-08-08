@@ -28,7 +28,7 @@ inputs:
 Set these shell variables first:
 
 ```bash
-export GCP_PROJECT_ID="your-project-id"
+export GCP_PROJECT_ID="congenial-octo"
 export GCP_PROJECT_NUMBER="$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')"
 export GITHUB_REPO="mayankbist45/congenial-octo"
 export WIF_POOL_ID="github-actions"
@@ -96,12 +96,12 @@ Add these repository variables in GitHub under Settings -> Secrets and variables
 -> Actions -> Variables:
 
 ```text
-GCP_PROJECT=your-project-id
+GCP_PROJECT=congenial-octo
 GCP_ZONE=asia-south1-a
-GCP_INSTANCE=fund-poc
-GCP_BACKUP_BUCKET=your-optional-backup-bucket
+GCP_INSTANCE=congenial-octo-fund-poc
+GCP_BACKUP_BUCKET=congenial-octo-fund-backups
 WORKLOAD_IDENTITY_PROVIDER=projects/123456789/locations/global/workloadIdentityPools/github-actions/providers/github-main
-GCP_SERVICE_ACCOUNT=github-actions-deployer@your-project-id.iam.gserviceaccount.com
+GCP_SERVICE_ACCOUNT=github-actions-deployer@congenial-octo.iam.gserviceaccount.com
 ```
 
 None of these values are secrets. The production `.env` remains on the VM.

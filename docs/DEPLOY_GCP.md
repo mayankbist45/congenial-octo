@@ -133,7 +133,7 @@ which keeps row ids — and therefore the links between runs, proposals and fill
 # on the laptop
 python scripts/migrate_journal.py --from postgresql:///mutualfund \
                                   --to sqlite://data/journal-export.db
-gcloud compute scp data/journal-export.db fund-poc:/opt/fund/data/ --zone asia-south1-a
+gcloud compute scp data/journal-export.db congenial-octo-fund-poc:/opt/fund/data/ --zone asia-south1-a
 
 # on the VM
 ./scripts/deploy_gcp.sh ssh
