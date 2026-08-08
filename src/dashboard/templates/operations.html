@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Operations &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<h1>Operations</h1>
+<p class="subtitle">
+  One page for machine health: scheduled runs, backups, intraday session coverage, and recent failures.
+</p>
+
+<style>
+  .ops-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .ops-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .ops-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .ops-title {
+    font-size: 15px;
+    font-weight: 620;
+  }
+  .ops-state {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .ops-state.healthy { background: #dcfce7; color: var(--up); }
+  .ops-state.late { background: #fef3c7; color: var(--warn); }
+  .ops-state.failed { background: #fee2e2; color: var(--down); }
+  .ops-state.unknown { background: #f3f4f6; color: var(--ink-soft); }
+  .ops-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 14px;
+    margin-top: 12px;
+  }
+  .ops-meta .label {
+    color: var(--ink-soft);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+  .ops-meta .value {
+    font-size: 13px;
+    word-break: break-word;
+  }
+  .ops-error {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #fff7ed;
+    color: #9a3412;
+    font-size: 13px;
+  }
+</style>
+
+<div class="stats">
+  {% for item in operations.freshness %}
+  <div class="stat">
+    <div class="label">{{ item.label }}</div>
+    <div class="value">{{ item.value | upper }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="ops-grid">
+  {% for card in operations.cards %}
+  <section class="ops-card">
+    <div class="ops-top">
+      <div class="ops-title">{{ card.label }}</div>
+      <span class="ops-state {{ card.current_state }}">{{ card.current_state }}</span>
+    </div>
+    <div class="sub-line">{{ card.expected_schedule }}</div>
+    {% if card.latest_note %}
+    <p class="muted" style="margin:10px 0 0">{{ card.latest_note }}</p>
+    {% endif %}
+    <div class="ops-meta">
+      <div>
+        <div class="label">Last start</div>
+        <div class="value">{{ card.last_start_time or '-' }}</div>
+      </div>
+      <div>
+        <div class="label">Last success</div>
+        <div class="value">{{ card.last_success_time or '-' }}</div>
+      </div>
+      <div>
+        <div class="label">Last failure</div>
+        <div class="value">{{ card.last_failure_time or '-' }}</div>
+      </div>
+      <div>
+        <div class="label">Kind</div>
+        <div class="value">{{ card.kind }}</div>
+      </div>
+    </div>
+    {% if card.latest_error %}
+    <div class="ops-error">{{ card.latest_error }}</div>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Recent incidents</h2>
+    <div class="note">Structured ops events + failed run stages</div>
+  </div>
+  {% if operations.incidents %}
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Source</th>
+        <th>Subject</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in operations.incidents %}
+      <tr>
+        <td>{{ row.time }}</td>
+        <td>{{ row.source }}</td>
+        <td>{{ row.subject }}</td>
+        <td>{{ row.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted" style="margin:0">No recent incidents recorded.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Logging Hint</h2>
+  </div>
+  <p class="muted" style="margin:0">{{ operations.log_hint }}</p>
+</section>
+{% endblock %}

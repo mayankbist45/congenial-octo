@@ -39,6 +39,7 @@ from src.dashboard.service import (
     sign_class,
 )
 from src.logging_setup import get_logger
+from src.operations import log_structured_event
 
 logger = get_logger(__name__)
 
@@ -62,6 +63,17 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     templates.env.globals["broker_label"] = broker_label
 
     _persona_services: Dict[str, DashboardService] = {}
+
+    def _log_dashboard_start() -> None:
+        log_structured_event(
+            logger,
+            "dashboard_service",
+            "start",
+            bind_host=str(config.get("dashboard.host", "0.0.0.0")),
+            bind_port=str(config.get("dashboard.port", 8000)),
+        )
+
+    app.add_event_handler("startup", _log_dashboard_start)
 
     def _get_service(persona: Optional[str] = None) -> DashboardService:
         if not persona:
@@ -349,6 +361,19 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "briefing": svc.briefing(run["run_date"]),
             },
             service=svc,
+        )
+
+    @app.get("/operations", response_class=HTMLResponse)
+    def operations_page(request: Request) -> HTMLResponse:
+        return render(
+            request,
+            "operations.html",
+            {
+                "page": "operations",
+                "operations": default_service.operations_overview(),
+            },
+            service=default_service,
+            show_persona_selector=False,
         )
 
     @app.get("/markets", response_class=HTMLResponse)

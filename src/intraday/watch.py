@@ -27,6 +27,7 @@ from src.intraday.state import PaperStateStore
 from src.intraday.strategies import load_strategies
 from src.logging_setup import get_logger
 from src.market.session import market_timezone, session_open_close
+from src.operations import log_structured_event
 
 logger = get_logger(__name__)
 
@@ -79,15 +80,24 @@ class IntradayWatchEngine:
         self._strategies = load_strategies(config)
         self._catalyst_scanned = False
         self._broker_exec: Optional[IntradayBrokerExecutor] = None
+        self._last_heartbeat_at: Optional[datetime] = None
+        self._heartbeat_interval_seconds = max(
+            int(self._config.get("observability.heartbeat_interval_seconds", 300) or 300),
+            30,
+        )
 
     def run_until_close(self) -> PaperState:
         force_exit = self._force_exit_time()
+        self._emit_heartbeat("starting", force=True)
         while True:
             now = self._exchange_now(self._now())
             state = self.run_once(now)
+            self._emit_heartbeat("running", now=now, state=state)
             if now.time() >= force_exit:
+                self._emit_heartbeat("stopping", now=now, state=state, force=True)
                 state.active = False
                 self._save(state)
+                self._emit_heartbeat("stopped", now=now, state=state, force=True)
                 return state
             self._sleep(self._poll_seconds(state))
 
@@ -873,3 +883,38 @@ class IntradayWatchEngine:
     def _save(self, state: PaperState) -> None:
         self._state_store.save(state)
         save_summary(self._config, summarize_state(self._config, state))
+
+    def _emit_heartbeat(
+        self,
+        session_state: str,
+        *,
+        now: Optional[datetime] = None,
+        state: Optional[PaperState] = None,
+        force: bool = False,
+    ) -> None:
+        when = self._exchange_now(now or self._now())
+        if (
+            not force
+            and self._last_heartbeat_at is not None
+            and (when - self._last_heartbeat_at).total_seconds() < self._heartbeat_interval_seconds
+        ):
+            return
+        self._last_heartbeat_at = when
+        payload: Dict[str, Any] = {
+            "persona_id": self._config.persona_id,
+            "market_id": self._config.market_id,
+            "session_state": session_state,
+            "exchange_time": when.isoformat(timespec="seconds"),
+            "heartbeat_interval_seconds": self._heartbeat_interval_seconds,
+        }
+        if state is not None:
+            payload.update(
+                {
+                    "active": bool(state.active),
+                    "open_positions": len(state.open_positions),
+                    "completed_trades": len(state.completed_trades),
+                    "daily_pnl": round(float(state.daily_pnl or 0.0), 2),
+                    "last_scan_at": state.last_scan_at,
+                }
+            )
+        log_structured_event(logger, "intraday_heartbeat", "heartbeat", **payload)

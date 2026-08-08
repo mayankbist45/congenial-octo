@@ -23,6 +23,30 @@ KEEP_DAYS="${FUND_BACKUP_KEEP_DAYS:-14}"
 # Homebrew's client on the laptop, Debian's in /usr/bin on the VM.
 export PATH="/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+LOG_PATH="${FUND_BACKUP_LOG_PATH:-$PROJECT_DIR/data/backup.log}"
+
+emit_event() {
+    local status="$1"
+    shift || true
+    python3 -m src.operations emit \
+        --log "$LOG_PATH" \
+        --event "backup_run" \
+        --status "$status" \
+        --field "source=backup_journal.sh" \
+        "$@"
+}
+
+emit_upload_event() {
+    local status="$1"
+    shift || true
+    python3 -m src.operations emit \
+        --log "$LOG_PATH" \
+        --event "backup_upload" \
+        --status "$status" \
+        --field "source=backup_journal.sh" \
+        "$@"
+}
+
 # Read the DSN the same way the application does: environment first, then .env.
 # Nothing is sourced, because .env is data, not shell.
 from_env_file() {
@@ -43,6 +67,7 @@ mkdir -p "$DEST_DIR"
 STAMP="$(date '+%Y-%m-%d')"
 ARCHIVE="$DEST_DIR/journal-$STAMP.dump"
 
+emit_event "start"
 echo "$(date '+%Y-%m-%d %H:%M:%S %Z')  dumping journal"
 # Custom format: compressed, and pg_restore can be selective about tables.
 if ! pg_dump --dbname="$DSN" --format=custom --file="$ARCHIVE"; then
@@ -50,19 +75,24 @@ if ! pg_dump --dbname="$DSN" --format=custom --file="$ARCHIVE"; then
     # as a backup in the directory listing.
     rm -f "$ARCHIVE"
     echo "  FAILED: pg_dump could not read the journal" >&2
+    emit_event "failure" --field "archive=$ARCHIVE" --field "error=pg_dump_failed"
     exit 1
 fi
 echo "  wrote $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1))"
+emit_event "success" --field "archive=$ARCHIVE"
 
 if [ -n "$BUCKET" ]; then
     if command -v gcloud >/dev/null 2>&1; then
         if gcloud storage cp "$ARCHIVE" "gs://$BUCKET/journal/" >/dev/null 2>&1; then
             echo "  copied to gs://$BUCKET/journal/"
+            emit_upload_event "success" --field "archive=$ARCHIVE" --field "bucket=$BUCKET"
         else
             echo "  warning: upload to gs://$BUCKET failed; dump kept locally" >&2
+            emit_upload_event "failure" --field "archive=$ARCHIVE" --field "bucket=$BUCKET" --field "error=upload_failed"
         fi
     else
         echo "  warning: gcloud not installed; dump kept locally only" >&2
+        emit_upload_event "failure" --field "archive=$ARCHIVE" --field "bucket=$BUCKET" --field "error=gcloud_missing"
     fi
 fi
 

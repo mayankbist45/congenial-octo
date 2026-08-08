@@ -20,6 +20,18 @@ mkdir -p "$PROJECT_DIR/data"
 
 export PATH="/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+emit_event() {
+    local status="$1"
+    shift || true
+    python3 -m src.operations emit \
+        --log "$LOG" \
+        --event "scheduled_run" \
+        --status "$status" \
+        --field "job=$COMMAND" \
+        --field "args=$*" \
+        --field "source=run_scheduled.sh"
+}
+
 {
     echo ""
     echo "=================================================================="
@@ -29,16 +41,20 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bi
 
 if [ ! -x "$PYTHON" ]; then
     echo "FATAL: no virtualenv at $PYTHON - run: python3 -m venv .venv && pip install -r requirements.txt" >>"$LOG"
+    emit_event "failure" "error=no_virtualenv"
     exit 1
 fi
 
+emit_event "start"
 "$PYTHON" run_daily.py "$COMMAND" "$@" >>"$LOG" 2>&1
 STATUS=$?
 
 if [ $STATUS -eq 0 ]; then
     echo "--- finished cleanly at $(date '+%H:%M:%S') ---" >>"$LOG"
+    emit_event "success" "exit_code=0"
 else
     echo "--- FAILED with exit $STATUS at $(date '+%H:%M:%S') ---" >>"$LOG"
+    emit_event "failure" "exit_code=$STATUS"
 fi
 
 exit $STATUS
