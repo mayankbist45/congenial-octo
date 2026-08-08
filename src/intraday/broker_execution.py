@@ -21,7 +21,7 @@ def intraday_uses_broker(config: Config) -> bool:
 
 def has_broker_credentials(config: Config) -> bool:
     provider = config.broker_provider
-    if provider == "alpaca":
+    if provider in {"alpaca", "alpaca_crypto"}:
         return config.secrets.has_alpaca_credentials
     if provider == "angelone":
         return config.secrets.has_broker_credentials

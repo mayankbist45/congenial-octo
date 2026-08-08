@@ -63,7 +63,7 @@ class SimulatedBroker(BrokerClient):
             holdings.append(
                 BrokerHolding(
                     symbol=symbol,
-                    quantity=int(lot["quantity"]),
+                    quantity=float(lot["quantity"]),
                     average_price=float(lot["avg_cost"]),
                     last_price=float(last_price),
                 )
@@ -109,10 +109,10 @@ class SimulatedBroker(BrokerClient):
             )
 
         logger.info(
-            "[SIMULATED] %s %s x%d @ %.2f",
+            "[SIMULATED] %s %s x%s @ %.2f",
             request.side,
             request.symbol,
-            request.quantity,
+            _format_quantity(request.quantity),
             price,
         )
         return OrderResult(
@@ -125,3 +125,9 @@ class SimulatedBroker(BrokerClient):
             status="filled",
             dry_run=True,
         )
+
+
+def _format_quantity(quantity: float) -> str:
+    if abs(quantity - round(quantity)) < 1e-9:
+        return str(int(round(quantity)))
+    return f"{quantity:.8f}".rstrip("0").rstrip(".")

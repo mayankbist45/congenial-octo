@@ -55,6 +55,8 @@ class SessionCalendar:
         return f"{dt.strftime(f'%Y-%m-%d %H:%M') if timespec == 'minutes' else dt.isoformat(timespec=timespec)} {self.tz_abbrev}"
 
     def is_trading_day(self, day: date) -> bool:
+        if self._market.session.trading_days == "all_days":
+            return True
         return day.weekday() < 5
 
     def session_window(

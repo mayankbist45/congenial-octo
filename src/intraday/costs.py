@@ -5,9 +5,11 @@ from __future__ import annotations
 from src.config import Config
 
 
-def round_trip_costs(config: Config, entry: float, exit: float, quantity: int) -> float:
+def round_trip_costs(config: Config, entry: float, exit: float, quantity: float) -> float:
     """Estimate INR costs for a round trip (entry + exit) on one leg."""
-    qty = max(int(quantity), 1)
+    qty = max(float(quantity), 0.0)
+    if qty <= 0:
+        return 0.0
     buy_value = entry * qty
     sell_value = exit * qty
     turnover = buy_value + sell_value
@@ -27,23 +29,25 @@ def passes_min_net_edge(
     config: Config,
     entry: float,
     target: float,
-    quantity: int,
+    quantity: float,
 ) -> bool:
     """Reject signals whose gross move cannot cover costs plus min edge bps."""
     min_bps = float(config.get("intraday.min_net_edge_bps", 0) or 0)
     if min_bps <= 0 or entry <= 0:
         return True
-    qty = max(int(quantity), 1)
+    qty = max(float(quantity), 0.0)
+    if qty <= 0:
+        return False
     gross = abs(target - entry) * qty
     costs = round_trip_costs(config, entry, target, qty)
     min_edge = entry * qty * min_bps / 10000.0
     return gross >= costs + min_edge
 
 
-def estimate_signal_quantity(config: Config, entry: float, risk_per_share: float, equity: float) -> int:
+def estimate_signal_quantity(config: Config, entry: float, risk_per_share: float, equity: float) -> float:
     """Position size used for cost-edge checks before fill."""
     if entry <= 0 or risk_per_share <= 0:
-        return 0
+        return 0.0
     risk_amount = equity * float(config.get("intraday.risk_per_trade_pct", 0.4) or 0.4) / 100.0
     max_value = equity * float(config.get("intraday.max_position_value_pct", 20.0) or 20.0) / 100.0
-    return int(min(risk_amount / risk_per_share, max_value / entry))
+    return min(risk_amount / risk_per_share, max_value / entry)

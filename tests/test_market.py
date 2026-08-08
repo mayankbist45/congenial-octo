@@ -21,6 +21,7 @@ def test_markets_load():
     markets = list_markets()
     assert "india_equity" in {m.id for m in markets}
     assert "us_equity" in {m.id for m in markets}
+    assert "crypto_spot_us" in {m.id for m in markets}
 
 
 def test_india_session_hours():
@@ -42,10 +43,13 @@ def test_us_session_hours():
 def test_persona_market_resolution():
     india = get_persona_config("calan")
     us = get_persona_config("calan_us")
+    crypto = get_persona_config("crypto_momentum_paper")
     assert india.market_id == "india_equity"
     assert us.market_id == "us_equity"
+    assert crypto.market_id == "crypto_spot_us"
     assert india.market_region == "IN"
     assert us.market_region == "US"
+    assert crypto.market_region == "US"
 
 
 def test_persona_strategy_type():
@@ -56,6 +60,7 @@ def test_persona_strategy_type():
 def test_resolve_market_id_alias():
     assert resolve_market_id("calan_us") == "us_equity"
     assert resolve_market_id("calan") == "india_equity"
+    assert resolve_market_id("crypto_momentum_paper") == "crypto_spot_us"
 
 
 def test_session_window_weekend():
@@ -63,6 +68,16 @@ def test_session_window_weekend():
     cal = calendar_for_config(config)
     # 2026-08-08 is Saturday
     assert cal.session_window(date(2026, 8, 8)) is None
+
+
+def test_crypto_session_window_weekend_is_open():
+    config = get_persona_config("crypto_momentum_paper")
+    cal = calendar_for_config(config)
+    window = cal.session_window(date(2026, 8, 8), now=datetime(2026, 8, 8, 12, 0, tzinfo=ZoneInfo("America/New_York")))
+    assert window is not None
+    start, end = window
+    assert start.hour == 9 and start.minute == 0
+    assert end.hour == 12 and end.minute == 0
 
 
 def test_format_local_includes_tz():

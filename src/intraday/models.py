@@ -42,7 +42,7 @@ class IntradayTrade:
     symbol: str
     strategy: str
     side: str
-    quantity: int
+    quantity: float
     entry_time: datetime
     exit_time: datetime
     entry_price: float
@@ -84,7 +84,7 @@ class PaperPosition:
     symbol: str
     strategy: str
     side: str
-    quantity: int
+    quantity: float
     entry_time: datetime
     entry_price: float
     stop_price: float

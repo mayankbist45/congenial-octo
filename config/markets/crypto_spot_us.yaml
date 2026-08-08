@@ -1,0 +1,42 @@
+id: crypto_spot_us
+label: "US Spot Crypto"
+legacy_region: US
+asset_class: crypto
+exchange: CRYPTO
+timezone: America/New_York
+currency: USD
+currency_symbol: "$"
+session:
+  regular:
+    open: "09:00"
+    close: "17:00"
+  trading_days: all_days
+broker:
+  provider: alpaca_crypto
+  product_types: [CASH]
+data:
+  prices: alpaca_crypto
+  fundamentals: []
+  news: rss_us
+costs: crypto_spot_us
+prompts: crypto_spot_us
+fund:
+  benchmark_symbol: "BTC/USD"
+  benchmark_label: "Bitcoin"
+  base_currency: USD
+universe:
+  file: "data/crypto_us.csv"
+execution:
+  product_type: "CASH"
+  exchange: CRYPTO
+scheduling:
+  swing_cycle: "09:00"
+  swing_close: "17:10"
+  intraday_watch:
+    personas: [crypto_momentum_paper]
+    start_offset_min: 0
+    stop_offset_min: 0
+display:
+  badge_class: region-us
+  broker_label: "Alpaca Crypto"
+  exchange_label: "Crypto Spot"
