@@ -29,7 +29,7 @@ set -uo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ZONE="${GCP_ZONE:-asia-south1-a}"
-INSTANCE="${GCP_INSTANCE:-fund-poc}"
+INSTANCE="${GCP_INSTANCE:-congenial-octo-fund-poc}"
 MACHINE_TYPE="${GCP_MACHINE_TYPE:-e2-medium}"
 DISK_SIZE="${GCP_DISK_SIZE:-30GB}"
 BACKUP_BUCKET="${GCP_BACKUP_BUCKET:-}"
@@ -116,7 +116,7 @@ create() {
         --metadata enable-oslogin=TRUE \
         --scopes https://www.googleapis.com/auth/devstorage.read_write,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write \
         --tags fund \
-        --labels purpose=fund-poc ||
+        --labels purpose=congenial-octo ||
         die "instance creation failed"
 
     echo "  waiting for SSH"
@@ -153,7 +153,7 @@ push() {
         {
             git ls-files -z -- . "${excludes[@]}"
             git ls-files -z --others --exclude-standard -- . "${excludes[@]}"
-        } | tar -czf "$tarball" --null -T -) ||
+        } | COPYFILE_DISABLE=1 tar -czf "$tarball" --null -T -) ||
         die "could not archive the working tree"
 
     echo "Pushing code to $INSTANCE:$REMOTE_DIR"
@@ -162,11 +162,11 @@ push() {
     rm -f "$tarball"
 
     ssh_vm "sudo mkdir -p '$REMOTE_DIR' &&
-            tar -xzf ~/fund-src.tar.gz -C '$REMOTE_DIR' &&
+            sudo tar -xzf ~/fund-src.tar.gz -C '$REMOTE_DIR' &&
             rm -f ~/fund-src.tar.gz &&
-            find '$REMOTE_DIR' -name '._*' -delete &&
-            chmod +x '$REMOTE_DIR'/scripts/*.sh &&
-            mkdir -p '$REMOTE_DIR/data'" || die "unpacking on the VM failed"
+            sudo find '$REMOTE_DIR' -name '._*' -delete &&
+            sudo chmod +x '$REMOTE_DIR'/scripts/*.sh &&
+            sudo mkdir -p '$REMOTE_DIR/data'" || die "unpacking on the VM failed"
 
     _apply_shared_permissions
 
