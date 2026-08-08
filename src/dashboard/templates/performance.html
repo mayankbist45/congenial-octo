@@ -150,6 +150,7 @@
 <div class="two-col">
   <div class="panel">
     <h2>Return statistics</h2>
+    <div class="table-scroll">
     <table>
       <tbody>
         <tr><td>Information ratio</td><td class="num">{{ performance.information_ratio | number(2) }}</td></tr>
@@ -161,11 +162,13 @@
         <tr><td>Unrealised P&amp;L</td><td class="num {{ performance.unrealised_pnl | sign }}">{{ performance.unrealised_pnl | money_currency(currency) }}</td></tr>
       </tbody>
     </table>
+    </div>
   </div>
 
   <div class="panel">
     <h2>Risk profile</h2>
     {% if risk %}
+    <div class="table-scroll">
     <table>
       <tbody>
         <tr><td>Portfolio beta</td><td class="num">{{ risk.portfolio_beta | number(2) }}</td></tr>
@@ -175,6 +178,7 @@
         <tr><td>Top 5 concentration</td><td class="num">{{ risk.concentration_top5_pct | pct(1) }}</td></tr>
       </tbody>
     </table>
+    </div>
     {% else %}
       <p class="empty">No risk profile recorded yet.</p>
     {% endif %}

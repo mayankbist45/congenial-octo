@@ -93,6 +93,7 @@
     <span class="note">Beta and idiosyncratic volatility come from the factor model</span>
   </div>
   {% if holdings %}
+  <div class="table-scroll desktop-only">
   <table>
     <thead>
       <tr>
@@ -136,6 +137,30 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  <div class="mobile-only mobile-cards">
+    {% for h in holdings %}
+    <div class="mobile-card">
+      <div class="mobile-card-head">
+        <div>
+          <div class="mobile-card-title">{{ h.symbol }}</div>
+          <div class="mobile-card-subtitle">{{ h.sector }}</div>
+        </div>
+        <div class="tag">{{ h.weight_pct | pct(1) }}</div>
+      </div>
+      <div class="mobile-pairs">
+        <div class="mobile-pair"><div class="label">Qty</div><div class="value">{{ h.quantity }}</div></div>
+        <div class="mobile-pair"><div class="label">Value</div><div class="value">{{ h.market_value | money_currency(currency) }}</div></div>
+        <div class="mobile-pair"><div class="label">Return</div><div class="value {{ h.return_pct | sign }}">{{ h.return_pct | pct(1, true) }}</div></div>
+        <div class="mobile-pair"><div class="label">P&amp;L</div><div class="value {{ h.unrealised_pnl | sign }}">{{ h.unrealised_pnl | money_currency(currency) }}</div></div>
+        <div class="mobile-pair"><div class="label">Score</div><div class="value">{{ h.composite_score | number(2) }}</div></div>
+        <div class="mobile-pair"><div class="label">Held</div><div class="value">{{ h.holding_days if h.holding_days is not none else '-' }}</div></div>
+        <div class="mobile-pair"><div class="label">Beta</div><div class="value">{{ h.beta | number(2) }}</div></div>
+        <div class="mobile-pair"><div class="label">Idio vol</div><div class="value">{{ h.idiosyncratic_vol | pct(1) }}</div></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
   {% else %}
     <p class="empty">
       No holdings recorded for <code>{{ current_persona }}</code>.
@@ -165,6 +190,7 @@
 {% if holdings %}
 <div class="panel">
   <h2>Why the fund owns these</h2>
+  <div class="table-scroll desktop-only">
   <table>
     <thead><tr><th>Stock</th><th>Thesis at entry</th></tr></thead>
     <tbody>
@@ -176,6 +202,15 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  <div class="mobile-only mobile-cards">
+    {% for h in holdings %}
+    <div class="mobile-card">
+      <div class="mobile-card-title">{{ h.symbol }}</div>
+      <div class="mobile-card-copy">{{ h.thesis or 'No thesis recorded.' }}</div>
+    </div>
+    {% endfor %}
+  </div>
 </div>
 {% endif %}
 

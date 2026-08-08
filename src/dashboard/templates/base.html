@@ -325,6 +325,72 @@
 
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
+    .desktop-only { display: block; }
+    .mobile-only { display: none; }
+    .table-scroll {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .table-scroll > table,
+    .table-scroll > .data-table {
+      min-width: 640px;
+    }
+    .mobile-cards {
+      display: grid;
+      gap: 12px;
+    }
+    .mobile-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+      background: var(--panel);
+    }
+    .mobile-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .mobile-card-title {
+      font-size: 15px;
+      font-weight: 620;
+      letter-spacing: -0.01em;
+    }
+    .mobile-card-subtitle {
+      color: var(--ink-soft);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    .mobile-pairs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 14px;
+    }
+    .mobile-pair .label {
+      color: var(--ink-soft);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
+    .mobile-pair .value {
+      font-weight: 600;
+      font-size: 13px;
+      word-break: break-word;
+    }
+    .mobile-card-copy {
+      margin-top: 10px;
+      color: var(--ink-soft);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .mobile-actions {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
 
     .region-badge {
       display: inline-block;
@@ -455,6 +521,98 @@
       letter-spacing: 0.04em;
     }
     .small { font-size: 12px; }
+    @media (max-width: 960px) {
+      header { padding: 0 16px; }
+      main { padding: 20px 16px 56px; }
+      .header-inner {
+        gap: 12px;
+        align-items: flex-start;
+        padding: 10px 0;
+      }
+      nav {
+        width: 100%;
+        margin-left: 0;
+        order: 3;
+      }
+      .persona-select {
+        margin-left: auto;
+      }
+      .panel { padding: 16px; }
+      .panel-head {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .actions { width: 100%; }
+    }
+    @media (max-width: 720px) {
+      body { font-size: 14px; }
+      h1 { font-size: 20px; }
+      .subtitle { margin-bottom: 18px; }
+      .stats {
+        grid-template-columns: 1fr 1fr;
+      }
+      .stat { padding: 14px; }
+      .stat .value { font-size: 17px; }
+      .desktop-only { display: none !important; }
+      .mobile-only { display: block; }
+      .mobile-inline { display: inline; }
+      .actions,
+      form.inline {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .actions form,
+      .actions button,
+      .actions .btn,
+      form.inline button,
+      form.inline input[type=text] {
+        width: 100%;
+      }
+      .persona-select {
+        width: 100%;
+        margin-left: 0;
+        order: 2;
+      }
+      .persona-select select { width: 100%; }
+      .mode { margin-left: auto; }
+      .legend {
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .bar-row {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .bar-label,
+      .bar-value {
+        width: auto;
+      }
+      .mobile-pairs {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .table-scroll > table,
+      .table-scroll > .data-table {
+        min-width: 560px;
+      }
+      table,
+      .data-table,
+      pre.briefing {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+      }
+    }
+    @media (max-width: 480px) {
+      header { padding: 0 12px; }
+      main { padding: 16px 12px 44px; }
+      .stats { grid-template-columns: 1fr; }
+      .panel { padding: 14px; }
+      nav a {
+        padding: 7px 10px;
+        font-size: 13px;
+      }
+    }
   </style>
 </head>
 <body>

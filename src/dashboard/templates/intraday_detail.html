@@ -123,6 +123,7 @@
 {% if summary.watchlist %}
 <div class="panel">
   <h2>Watchlist</h2>
+  <div class="table-scroll desktop-only">
   <table class="data-table">
     <thead>
       <tr>
@@ -151,6 +152,27 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  <div class="mobile-only mobile-cards">
+    {% for w in summary.watchlist %}
+    <div class="mobile-card">
+      <div class="mobile-card-head">
+        <div>
+          <div class="mobile-card-title">{{ w.symbol }}</div>
+          <div class="mobile-card-subtitle">{{ w.playbook or w.catalyst_class or '—' }}</div>
+        </div>
+        {% if w.fundamental_style %}
+        <span class="tag tag-{{ w.fundamental_style }}">{{ w.fundamental_style }}</span>
+        {% endif %}
+      </div>
+      <div class="mobile-pairs">
+        <div class="mobile-pair"><div class="label">P/E</div><div class="value">{{ w.pe_ratio | number(1) if w.pe_ratio is defined and w.pe_ratio is not none else '—' }}</div></div>
+        <div class="mobile-pair"><div class="label">Confidence</div><div class="value">{{ w.confidence | number(2) if w.confidence is defined else '—' }}</div></div>
+      </div>
+      <div class="mobile-card-copy">{{ w.rationale or w.fundamental_summary or '' }}</div>
+    </div>
+    {% endfor %}
+  </div>
 </div>
 {% endif %}
 
@@ -252,6 +274,7 @@
 {% if trades %}
 <div class="panel">
   <h2>Completed trades</h2>
+  <div class="table-scroll desktop-only">
   <table class="data-table">
     <thead>
       <tr>
@@ -288,6 +311,27 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  <div class="mobile-only mobile-cards">
+    {% for t in trades %}
+    <div class="mobile-card">
+      <div class="mobile-card-head">
+        <div>
+          <div class="mobile-card-title">{{ t.symbol }}</div>
+          <div class="mobile-card-subtitle">{{ t.strategy }} · {{ t.side }}</div>
+        </div>
+        <div class="tag {{ t.net_pnl | sign }}">{{ t.net_pnl | money_currency(persona.currency) }}</div>
+      </div>
+      <div class="mobile-pairs">
+        <div class="mobile-pair"><div class="label">Qty</div><div class="value">{{ t.quantity }}</div></div>
+        <div class="mobile-pair"><div class="label">R</div><div class="value {{ t.r_multiple | sign }}">{{ t.r_multiple | number(3) }}</div></div>
+        <div class="mobile-pair"><div class="label">Entry</div><div class="value">{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</div></div>
+        <div class="mobile-pair"><div class="label">Exit</div><div class="value">{{ t.exit_time }} @ {{ t.exit_price | number(2) }}</div></div>
+      </div>
+      <div class="mobile-card-copy">{{ t.exit_reason }}</div>
+    </div>
+    {% endfor %}
+  </div>
 </div>
 {% endif %}
 
