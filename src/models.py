@@ -246,6 +246,7 @@ class FactorScores:
     metric_coverage_pct: Optional[float] = None
     valuation_summary: Dict[str, Optional[float]] = field(default_factory=dict)
     macro_exposures: Dict[str, float] = field(default_factory=dict)
+    suppressed_reasons: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -572,6 +573,7 @@ class TradeProposal:
     warnings: List[str] = field(default_factory=list)
     thesis: str = ""
     target_price: Optional[float] = None
+    regime_note: str = ""
 
     @property
     def is_buy_side(self) -> bool:
@@ -595,6 +597,8 @@ class DailyDecision:
     risk_profile: Optional[PortfolioRiskProfile] = None
     digest: Optional[NewsDigest] = None
     llm_used: bool = False
+    regime_applied: str = ""
+    suppressed_candidates: List[str] = field(default_factory=list)
 
     @property
     def has_trades(self) -> bool:

@@ -22,6 +22,7 @@
     &middot; Last run {{ overview.run.run_date }}
     {%- if overview.run.is_deep_review %} (quarterly deep review){% endif %}
     &middot; {{ overview.run.status }}
+    &middot; {{ overview.run.command }}
     &middot; {{ 'decision layer active' if overview.run.llm_used else 'rules only' }}
   </p>
 {% else %}
@@ -223,6 +224,17 @@
   </div>
 {% else %}
 
+{% if overview.warnings %}
+<div class="panel">
+  <h2>Run health</h2>
+  <ul style="margin:0;padding-left:18px">
+    {% for item in overview.warnings %}
+      <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <div class="stats">
   <div class="stat">
     <div class="label">Fund value</div>
@@ -261,6 +273,16 @@
     <div class="sub">of the annual budget</div>
   </div>
   <div class="stat">
+    <div class="label">Candidate pack</div>
+    {% if overview.candidate_pack %}
+      <div class="value">{{ overview.candidate_pack.research_date }}</div>
+      <div class="sub">{{ overview.candidate_pack.candidate_count }} names screened</div>
+    {% else %}
+      <div class="value">Missing</div>
+      <div class="sub">no weekly pack saved yet</div>
+    {% endif %}
+  </div>
+  <div class="stat">
     <div class="label">Market regime</div>
     {% if overview.market_regime %}
       <div class="value">{{ overview.market_regime.regime | title }}</div>
@@ -285,7 +307,7 @@
     <span class="note">{{ overview.market_regime.regime | title }}</span>
   </div>
   <p class="muted" style="margin:0 0 10px">
-    Advisory only: this does not block trades or resize positions.
+    Threshold modifier: the regime tightens buy thresholds and daily deployment.
   </p>
   <ul style="margin:0;padding-left:18px">
     {% for item in overview.market_regime.evidence[:4] %}
@@ -319,7 +341,10 @@
 <div class="panel">
   <div class="panel-head">
     <h2>Manager's memo</h2>
-    <span class="note">{{ overview.run.run_date }}</span>
+    <span class="note">
+      {{ overview.run.run_date }}
+      {% if overview.run.candidate_pack_date %}&middot; pack {{ overview.run.candidate_pack_date }}{% endif %}
+    </span>
   </div>
   <div class="memo">{{ overview.run.memo }}</div>
 </div>

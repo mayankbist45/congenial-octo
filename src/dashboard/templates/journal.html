@@ -13,7 +13,7 @@
   <table>
     <thead>
       <tr>
-        <th>Date</th><th>Mode</th><th>Status</th>
+        <th>Date</th><th>Command</th><th>Status</th>
         <th class="num">Fund value</th><th class="num">Turnover</th>
         <th>Decision layer</th><th></th>
       </tr>
@@ -22,7 +22,10 @@
       {% for run in runs %}
       <tr>
         <td>{{ run.run_date }}</td>
-        <td>{{ 'Deep review' if run.is_deep_review else 'Monitoring' }}</td>
+        <td>
+          {{ run.command }}
+          {% if run.candidate_pack_date %}<div class="sub-line">pack {{ run.candidate_pack_date }}</div>{% endif %}
+        </td>
         <td>{{ run.status }}</td>
         <td class="num">{{ run.portfolio_value | money }}</td>
         <td class="num">{{ run.turnover_used_pct | pct(1) }}</td>
