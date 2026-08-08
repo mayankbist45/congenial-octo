@@ -83,6 +83,9 @@ That single command creates the VM, pushes the fund, and provisions it:
    `requirements.txt`, cron, and logrotate. Then it runs `setup_check.py`, which
    creates the journal schema.
 
+If you want merges to `main` to deploy automatically after the VM exists, see
+[GITHUB_ACTIONS_GCP.md](GITHUB_ACTIONS_GCP.md).
+
 `DATABASE_URL` is stripped from the `.env` on the way up — the laptop's DSN
 points at a Homebrew server. The VM's own DSN with its generated password is
 written on the machine and never leaves it.

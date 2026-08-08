@@ -972,6 +972,7 @@ class DashboardService:
                 view["proposals"] = [
                     self._proposal_view(p) for p in self._repo.proposals_for_run(run_id)
                 ]
+                view["quarterly_updates"] = self.quarterly_updates_for_run(run["run_date"])
                 view["stage_events"] = [
                     {
                         "stage_name": row["stage_name"],
@@ -984,6 +985,67 @@ class DashboardService:
                 ]
                 return view
         return None
+
+    def quarterly_updates_for_run(self, run_date: str) -> List[Dict[str, Any]]:
+        try:
+            parsed = datetime.fromisoformat(run_date).date()
+        except (TypeError, ValueError):
+            return []
+        rows = self._repo.quarterly_report_analyses_for_run(parsed)
+        updates: List[Dict[str, Any]] = []
+        for row in rows:
+            updates.append(
+                {
+                    "symbol": row["symbol"],
+                    "fiscal_period": row["fiscal_period"],
+                    "summary": row["summary"] or "",
+                    "thesis_impact": row["thesis_impact"] or "unclear",
+                    "flags": _loads(row["flags"], []),
+                    "highlights": _loads(row["highlights"], {}),
+                }
+            )
+        return updates
+
+    def quarterly_report_cards(self) -> List[Dict[str, Any]]:
+        cards: List[Dict[str, Any]] = []
+        for holding in self.holdings():
+            history = self._repo.quarterly_history(holding["symbol"], limit=8)
+            if not history:
+                continue
+            summary = self._quarterly_summary(holding["symbol"])
+            cards.append(
+                {
+                    "symbol": holding["symbol"],
+                    "company_name": holding["company_name"],
+                    "latest_quarter": summary.get("latest_quarter"),
+                    "quarterly_summary": summary.get("quarterly_summary"),
+                    "quarterly_thesis_impact": summary.get("quarterly_thesis_impact"),
+                    "revenue_series": self._align_series(history, "revenue"),
+                    "profit_series": self._align_series(history, "net_profit"),
+                    "opm_series": self._align_series(history, "opm_pct"),
+                }
+            )
+        return cards
+
+    @staticmethod
+    def _align_series(history: List[Dict[str, Any]], field: str) -> Dict[str, List[Any]]:
+        ordered = list(reversed(history))
+        values = [row.get(field) for row in ordered]
+        return {
+            "dates": [row["fiscal_period"] for row in ordered],
+            "values": [float(v) if v is not None else 0.0 for v in values],
+            "has_values": any(v is not None for v in values),
+        }
+
+    def _quarterly_summary(self, symbol: str) -> Dict[str, Any]:
+        latest = self._repo.latest_quarterly_report(symbol)
+        analysis = self._repo.latest_quarterly_report_analysis(symbol)
+        return {
+            "latest_quarter": latest["fiscal_period"] if latest else None,
+            "quarterly_summary": analysis["summary"] if analysis else "",
+            "quarterly_thesis_impact": analysis["thesis_impact"] if analysis else "",
+            "quarterly_flags": _loads(analysis["flags"], []) if analysis else [],
+        }
 
     def briefing(self, run_date: str) -> Optional[str]:
         """The exact briefing text the decision layer was given that day."""
