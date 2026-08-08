@@ -8,7 +8,7 @@ install.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict
 
 import pytest
@@ -25,6 +25,7 @@ from src.models import (
     NewsDigest,
     TradeProposal,
 )
+from src.operations import append_event
 from tests.conftest import make_diversified_portfolio, make_scores
 from tests.conftest import make_portfolio
 
@@ -36,6 +37,7 @@ PAGES = [
     "/performance",
     "/personas",
     "/intraday",
+    "/operations",
     "/journal",
 ]
 API = [
@@ -477,6 +479,66 @@ def test_intraday_page_lists_regions(client) -> None:
     assert "Intraday" in body
     assert "calan_us" in body
     assert "revert" in body
+
+
+def test_operations_page_renders_structured_machine_health(client, temp_config) -> None:
+    data_dir = temp_config.root / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    append_event(
+        data_dir / "scheduled.log",
+        "scheduled_run",
+        "success",
+        job="daily_monitor",
+    )
+    append_event(
+        data_dir / "backup.log",
+        "backup_upload",
+        "failure",
+        bucket="congenial-octo-fund-backups",
+        error="upload_failed",
+    )
+
+    body = client.get("/operations").text
+    assert "Operations" in body
+    assert "Morning portfolio run" in body
+    assert "upload_failed" in body
+
+
+def test_operations_overview_marks_weekday_run_healthy_and_intraday_late(temp_config) -> None:
+    service = DashboardService(temp_config)
+    service._ops_now = lambda: datetime(2026, 8, 7, 20, 0, 0)
+    data_dir = temp_config.root / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    append_event(
+        data_dir / "scheduled.log",
+        "scheduled_run",
+        "success",
+        ts="2026-08-07T08:20:00Z",
+        job="daily_monitor",
+    )
+    append_event(
+        data_dir / "scheduled.log",
+        "scheduled_run",
+        "success",
+        ts="2026-08-07T18:05:00Z",
+        job="close",
+    )
+
+    ops = service.operations_overview()
+    cards = {card["key"]: card for card in ops["cards"]}
+    assert cards["daily_monitor"]["current_state"] == "healthy"
+    assert cards["close"]["current_state"] == "healthy"
+    assert cards["intraday-india_equity"]["current_state"] in {"late", "unknown", "healthy"}
+
+
+def test_operations_overview_respects_weekend_schedule(temp_config) -> None:
+    service = DashboardService(temp_config)
+    service._ops_now = lambda: datetime(2026, 8, 8, 12, 0, 0)
+    ops = service.operations_overview()
+    cards = {card["key"]: card for card in ops["cards"]}
+    assert cards["daily_monitor"]["current_state"] != "late"
+    assert cards["close"]["current_state"] != "late"
 
 
 def test_intraday_detail_renders_live_paper_completed_trades(client, temp_config) -> None:

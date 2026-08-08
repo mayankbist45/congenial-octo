@@ -11,7 +11,7 @@ shows exactly what the manager saw when the decision was made.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
 from src.config import Config, get_config
@@ -19,6 +19,7 @@ from src.journal.performance import PerformanceCalculator
 from src.journal.repository import JournalRepository
 from src.learning.service import LearningService
 from src.logging_setup import get_logger
+from src.operations import load_events
 
 logger = get_logger(__name__)
 
@@ -114,6 +115,7 @@ class DashboardService:
         self._repo = JournalRepository(self._config)
         self._performance = PerformanceCalculator(self._config)
         self._learning = LearningService(self._config)
+        self._ops_now = datetime.now
 
     @property
     def repository(self) -> JournalRepository:
@@ -1057,3 +1059,314 @@ class DashboardService:
         if not path.exists():
             return None
         return path.read_text(encoding="utf-8")
+
+    # ------------------------------------------------------------------
+    # Operations
+    # ------------------------------------------------------------------
+    def operations_overview(self) -> Dict[str, Any]:
+        now = self._ops_now()
+        events = load_events(self._config.root / "data")
+        runs = self._repo.recent_runs(limit=60)
+
+        cards = [
+            self._scheduled_job_card(
+                "daily_monitor",
+                label="Morning portfolio run",
+                schedule=self._market_schedule(self._config.market_id, "swing_cycle"),
+                grace_minutes=int(self._config.get("observability.daily_monitor_grace_minutes", 45) or 45),
+                now=now,
+                events=events,
+            ),
+            self._scheduled_job_card(
+                "close",
+                label="Close run",
+                schedule=self._market_schedule(self._config.market_id, "swing_close"),
+                grace_minutes=int(self._config.get("observability.close_grace_minutes", 45) or 45),
+                now=now,
+                events=events,
+            ),
+            self._backup_card(now, events),
+        ]
+
+        for market_id in ("india_equity", "us_equity"):
+            cards.append(self._intraday_market_card(market_id, now, events))
+        cards.append(self._dashboard_service_card(now, events))
+
+        return {
+            "cards": cards,
+            "incidents": self._operations_incidents(events, runs),
+            "freshness": self._freshness_summary(cards),
+            "generated_at": now.isoformat(timespec="seconds"),
+            "log_hint": "Search Cloud Logging for OPS_EVENT and one of the event names: scheduled_run, backup_run, backup_upload, intraday_launcher, intraday_watch, intraday_heartbeat, dashboard_service.",
+        }
+
+    def _market_schedule(self, market_id: str, field: str) -> str:
+        from src.market.registry import get_market
+
+        market = get_market(market_id)
+        return str(getattr(market.scheduling, field))
+
+    def _scheduled_job_card(
+        self,
+        job: str,
+        *,
+        label: str,
+        schedule: str,
+        grace_minutes: int,
+        now: datetime,
+        events: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        job_events = [e for e in events if e.get("event") == "scheduled_run" and e.get("job") == job]
+        starts = [e for e in job_events if e.get("status") == "start"]
+        successes = [e for e in job_events if e.get("status") == "success"]
+        failures = [e for e in job_events if e.get("status") == "failure"]
+        last_start = starts[-1] if starts else None
+        last_success = successes[-1] if successes else None
+        last_failure = failures[-1] if failures else None
+
+        target = self._today_at(schedule, now)
+        healthy_today = last_success and self._event_time(last_success) >= target
+        latest_error = (last_failure or {}).get("error")
+        current_state = "healthy"
+        if self._is_weekday(now):
+            if last_failure and self._event_time(last_failure) >= self._event_time(last_success):
+                current_state = "failed"
+            elif healthy_today:
+                current_state = "healthy"
+            elif now > target + timedelta(minutes=grace_minutes):
+                current_state = "late"
+            else:
+                current_state = "healthy"
+        elif last_failure and self._event_time(last_failure) >= self._event_time(last_success):
+            current_state = "failed"
+
+        return {
+            "key": job,
+            "label": label,
+            "kind": "scheduled",
+            "expected_schedule": f"Weekdays {schedule} {self._config.market.tz_abbrev}",
+            "last_start_time": self._event_ts(last_start),
+            "last_success_time": self._event_ts(last_success),
+            "last_failure_time": self._event_ts(last_failure),
+            "current_state": current_state if (last_success or last_failure or self._is_weekday(now)) else "unknown",
+            "latest_error": latest_error,
+            "latest_note": f"Expected by {schedule} with {grace_minutes} min grace",
+        }
+
+    def _backup_card(self, now: datetime, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        backups = [e for e in events if e.get("event") == "backup_run"]
+        uploads = [e for e in events if e.get("event") == "backup_upload"]
+        starts = [e for e in backups if e.get("status") == "start"]
+        successes = [e for e in backups if e.get("status") == "success"]
+        failures = [e for e in backups if e.get("status") == "failure"]
+        upload_success = [e for e in uploads if e.get("status") == "success"]
+        upload_failure = [e for e in uploads if e.get("status") == "failure"]
+
+        last_start = starts[-1] if starts else None
+        last_success = successes[-1] if successes else None
+        last_failure = failures[-1] if failures else None
+        last_upload_success = upload_success[-1] if upload_success else None
+        last_upload_failure = upload_failure[-1] if upload_failure else None
+        schedule = "19:30"
+        target = self._today_at(schedule, now)
+        grace_minutes = int(self._config.get("observability.backup_grace_minutes", 90) or 90)
+
+        state = "healthy"
+        if last_upload_failure and self._event_time(last_upload_failure) >= self._event_time(last_upload_success):
+            state = "failed"
+        elif last_failure and self._event_time(last_failure) >= self._event_time(last_success):
+            state = "failed"
+        elif self._is_weekday(now) and now > target + timedelta(minutes=grace_minutes):
+            if not last_success or self._event_time(last_success) < target:
+                state = "late"
+
+        latest_error = (
+            (last_upload_failure or {}).get("error")
+            or (last_failure or {}).get("error")
+        )
+        note = "Local dump plus GCS upload"
+        if last_upload_success and last_upload_success.get("bucket"):
+            note = f"GCS bucket {last_upload_success['bucket']}"
+
+        return {
+            "key": "backup",
+            "label": "Backup run",
+            "kind": "backup",
+            "expected_schedule": f"Weekdays {schedule} {self._config.market.tz_abbrev}",
+            "last_start_time": self._event_ts(last_start),
+            "last_success_time": self._event_ts(last_upload_success or last_success),
+            "last_failure_time": self._event_ts(last_upload_failure or last_failure),
+            "current_state": state if (last_success or last_failure or last_upload_failure or self._is_weekday(now)) else "unknown",
+            "latest_error": latest_error,
+            "latest_note": note,
+        }
+
+    def _intraday_market_card(
+        self, market_id: str, now: datetime, events: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        from src.market.registry import get_market
+
+        market = get_market(market_id)
+        heartbeats = [e for e in events if e.get("event") == "intraday_heartbeat" and e.get("market_id") == market_id]
+        launchers = [e for e in events if e.get("event") == "intraday_launcher" and e.get("market_id") == market_id]
+        watch_failures = [e for e in events if e.get("event") == "intraday_watch" and e.get("market_id") == market_id and e.get("status") == "failure"]
+        last_heartbeat = heartbeats[-1] if heartbeats else None
+        last_launcher_success = self._latest_event(launchers, "success")
+        last_launcher_failure = self._latest_event(launchers, "failure")
+        last_watch_failure = watch_failures[-1] if watch_failures else None
+
+        in_session = self._is_market_session_open(market_id, now)
+        heartbeat_interval = int(self._config.get("observability.heartbeat_interval_seconds", 300) or 300)
+        heartbeat_deadline = now - timedelta(seconds=heartbeat_interval * 2)
+
+        state = "healthy"
+        if in_session:
+            if not last_heartbeat or self._event_time(last_heartbeat) < heartbeat_deadline:
+                state = "late"
+            else:
+                state = "healthy"
+        elif last_watch_failure and self._event_time(last_watch_failure) >= self._event_time(last_heartbeat):
+            state = "failed"
+
+        latest_error = (last_watch_failure or {}).get("error")
+        if not latest_error and last_launcher_failure and self._event_time(last_launcher_failure) >= self._event_time(last_launcher_success):
+            latest_error = last_launcher_failure.get("error")
+            state = "failed"
+
+        session_label = f"{market.session.open}-{market.session.close} {market.tz_abbrev}"
+        return {
+            "key": f"intraday-{market_id}",
+            "label": f"{market.label} intraday watch",
+            "kind": "intraday",
+            "expected_schedule": f"Weekdays {session_label}",
+            "last_start_time": self._event_ts(last_launcher_success or self._latest_event(launchers, "start")),
+            "last_success_time": self._event_ts(last_heartbeat),
+            "last_failure_time": self._event_ts(last_watch_failure or last_launcher_failure),
+            "current_state": state if (last_heartbeat or launchers or market.scheduling.intraday_watch) else "unknown",
+            "latest_error": latest_error,
+            "latest_note": (
+                f"Latest heartbeat state: {(last_heartbeat or {}).get('session_state', 'none')}"
+                if last_heartbeat
+                else "No heartbeat yet"
+            ),
+        }
+
+    def _dashboard_service_card(self, now: datetime, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        starts = [e for e in events if e.get("event") == "dashboard_service" and e.get("status") == "start"]
+        last_start = starts[-1] if starts else None
+        freshness_minutes = int(self._config.get("observability.dashboard_freshness_minutes", 30) or 30)
+        state = "healthy"
+        if last_start and self._event_time(last_start) < now - timedelta(minutes=freshness_minutes):
+            state = "healthy"
+        return {
+            "key": "dashboard-service",
+            "label": "Dashboard service",
+            "kind": "service",
+            "expected_schedule": "Always on",
+            "last_start_time": self._event_ts(last_start),
+            "last_success_time": now.isoformat(timespec="seconds"),
+            "last_failure_time": None,
+            "current_state": state,
+            "latest_error": None,
+            "latest_note": "This page is responding now",
+        }
+
+    def _operations_incidents(
+        self, events: List[Dict[str, Any]], runs: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        incidents: List[Dict[str, Any]] = []
+        for event in events:
+            if event.get("status") not in {"failure", "warning"}:
+                continue
+            incidents.append(
+                {
+                    "time": event.get("ts"),
+                    "source": event.get("event"),
+                    "subject": event.get("job") or event.get("market_id") or event.get("persona_id") or event.get("bucket") or "-",
+                    "message": event.get("error") or event.get("state") or event.get("status"),
+                }
+            )
+        for run in runs[:20]:
+            for row in self._repo.run_stage_events(run["id"]):
+                if str(row["status"]).lower() not in {"failed", "failure", "error"}:
+                    continue
+                incidents.append(
+                    {
+                        "time": row["created_at"],
+                        "source": f"run_stage:{row['stage_name']}",
+                        "subject": run.get("command") or run.get("run_date") or f"run {run['id']}",
+                        "message": row["error"] or row["details"] or "stage failed",
+                    }
+                )
+        incidents.sort(key=lambda row: str(row.get("time") or ""), reverse=True)
+        return incidents[:20]
+
+    def _freshness_summary(self, cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        lookup = {card["key"]: card for card in cards}
+        return [
+            {
+                "label": "Morning run",
+                "value": lookup["daily_monitor"]["current_state"],
+            },
+            {
+                "label": "Close run",
+                "value": lookup["close"]["current_state"],
+            },
+            {
+                "label": "Backup",
+                "value": lookup["backup"]["current_state"],
+            },
+            {
+                "label": "India intraday",
+                "value": lookup["intraday-india_equity"]["current_state"],
+            },
+            {
+                "label": "US intraday",
+                "value": lookup["intraday-us_equity"]["current_state"],
+            },
+        ]
+
+    @staticmethod
+    def _event_time(event: Optional[Dict[str, Any]]) -> datetime:
+        if not event or not event.get("ts"):
+            return datetime.min
+        try:
+            return datetime.fromisoformat(str(event["ts"]).replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            return datetime.min
+
+    def _event_ts(self, event: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not event:
+            return None
+        return str(event.get("ts") or "")
+
+    @staticmethod
+    def _latest_event(events: List[Dict[str, Any]], status: str) -> Optional[Dict[str, Any]]:
+        matches = [event for event in events if event.get("status") == status]
+        return matches[-1] if matches else None
+
+    @staticmethod
+    def _is_weekday(now: datetime) -> bool:
+        return now.weekday() < 5
+
+    @staticmethod
+    def _parse_clock(value: str) -> time:
+        hour, minute = str(value).split(":", 1)
+        return time(hour=int(hour), minute=int(minute))
+
+    def _today_at(self, hhmm: str, now: datetime) -> datetime:
+        clock = self._parse_clock(hhmm)
+        return now.replace(hour=clock.hour, minute=clock.minute, second=0, microsecond=0)
+
+    def _is_market_session_open(self, market_id: str, now: datetime) -> bool:
+        from zoneinfo import ZoneInfo
+        from src.market.registry import get_market
+
+        market = get_market(market_id)
+        local_now = now.astimezone(ZoneInfo(market.timezone)) if now.tzinfo else now
+        if local_now.weekday() >= 5:
+            return False
+        open_at = self._parse_clock(market.session.open)
+        close_at = self._parse_clock(market.session.close)
+        current = local_now.time()
+        return open_at <= current <= close_at

@@ -31,6 +31,18 @@ LOG="$PROJECT_DIR/data/${MARKET//_/-}-intraday-watch.log"
 
 mkdir -p "$PROJECT_DIR/data"
 
+emit_event() {
+    local status="$1"
+    shift || true
+    python3 -m src.operations emit \
+        --log "$LOG" \
+        --event "intraday_launcher" \
+        --status "$status" \
+        --field "market_id=$MARKET" \
+        --field "source=run_market_intraday_watches.sh" \
+        "$@"
+}
+
 {
     echo ""
     echo "=================================================================="
@@ -40,6 +52,7 @@ mkdir -p "$PROJECT_DIR/data"
 
 if [ ! -x "$PYTHON" ] || [ ! -x "$WATCH" ]; then
     echo "FATAL: missing venv or run_intraday_watch.sh" >>"$LOG"
+    emit_event "failure" --field "error=missing_runtime"
     exit 1
 fi
 
@@ -55,8 +68,11 @@ for pid in enabled_intraday_personas('$MARKET'):
 
 if [ "${#PERSONAS[@]}" -eq 0 ]; then
     echo "No enabled intraday personas for market $MARKET" >>"$LOG"
+    emit_event "success" --field "persona_count=0" --field "state=no_personas_enabled"
     exit 0
 fi
+
+emit_event "start" --field "persona_count=${#PERSONAS[@]}"
 
 PIDS=()
 for persona in "${PERSONAS[@]}"; do
@@ -73,4 +89,9 @@ for pid in "${PIDS[@]}"; do
 done
 
 echo "--- $MARKET watch launcher done at $(date '+%H:%M:%S') exit=$FAIL ---" >>"$LOG"
+if [ $FAIL -eq 0 ]; then
+    emit_event "success" --field "persona_count=${#PERSONAS[@]}" --field "exit_code=0"
+else
+    emit_event "failure" --field "persona_count=${#PERSONAS[@]}" --field "exit_code=$FAIL"
+fi
 exit $FAIL
