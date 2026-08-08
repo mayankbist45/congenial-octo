@@ -131,6 +131,7 @@ class RiskEngine:
         technicals: Dict[str, TechnicalSnapshot],
         scores: Optional[Dict[str, FactorScores]] = None,
         turnover: Optional[TurnoverStatus] = None,
+        market_regime: Optional[str] = None,
     ) -> ValidationResult:
         """Check every proposal against the fund's hard rules."""
         result = ValidationResult()
@@ -160,6 +161,7 @@ class RiskEngine:
                 total_value,
                 turnover,
                 discretionary_value,
+                market_regime,
             )
             if failure is not None:
                 result.rejected.append((proposal, failure))
@@ -207,6 +209,7 @@ class RiskEngine:
         total_value: float,
         turnover: TurnoverStatus,
         discretionary_value: float,
+        market_regime: Optional[str],
     ) -> Optional[str]:
         """Return a rejection reason, or None when the trade is acceptable."""
         symbol = proposal.symbol.upper()
@@ -253,6 +256,13 @@ class RiskEngine:
                 f"{symbol} fails fundamental gates: "
                 + "; ".join(score.gate_failures[:2])
             )
+        if proposal.action == Action.BUY and score is not None:
+            floor = self._regime_min_buy_score(market_regime)
+            if score.composite < floor:
+                return (
+                    f"{symbol} composite {score.composite:.2f} is below the "
+                    f"{market_regime or 'normal'}-regime minimum of {floor:.2f}"
+                )
 
         value = proposal.quantity * price
 
@@ -350,7 +360,10 @@ class RiskEngine:
     # Deployment of idle cash
     # ------------------------------------------------------------------
     def cash_deployment_triggers(
-        self, portfolio: PortfolioState, candidates: List[FactorScores]
+        self,
+        portfolio: PortfolioState,
+        candidates: List[FactorScores],
+        market_regime: Optional[str] = None,
     ) -> List[Trigger]:
         """Flag that the fund is holding more cash than its mandate intends.
 
@@ -363,7 +376,7 @@ class RiskEngine:
         buffer_pct = float(self._config.get("fund.min_cash_buffer_pct", 5.0) or 5.0)
         # Allow meaningful headroom before acting, so ordinary cash movements do
         # not cause daily nibbling.
-        threshold = buffer_pct * 2.0
+        threshold = buffer_pct * self._regime_cash_trigger_multiple(market_regime)
         if portfolio.cash_pct <= threshold:
             return []
 
@@ -394,9 +407,35 @@ class RiskEngine:
                     "positions_held": held,
                     "target_positions": target_positions,
                     "top_candidates": [c.symbol for c in candidates[:10]],
+                    "market_regime": market_regime or "unknown",
                 },
             )
         ]
+
+    def regime_new_buy_limit(self, market_regime: Optional[str]) -> int:
+        block = self._regime_block(market_regime)
+        return int(block.get("max_new_buys", 3) or 3)
+
+    def regime_min_buy_score(self, market_regime: Optional[str]) -> float:
+        return self._regime_min_buy_score(market_regime)
+
+    def _regime_min_buy_score(self, market_regime: Optional[str]) -> float:
+        base = float(self._config.get("quant.min_buy_score", 0.5) or 0.5)
+        block = self._regime_block(market_regime)
+        delta = float(block.get("min_buy_score_delta", 0.0) or 0.0)
+        return base + delta
+
+    def _regime_cash_trigger_multiple(self, market_regime: Optional[str]) -> float:
+        block = self._regime_block(market_regime)
+        return float(block.get("cash_trigger_multiple", 2.0) or 2.0)
+
+    def _regime_block(self, market_regime: Optional[str]) -> Dict[str, object]:
+        regime = str(market_regime or "unknown").lower()
+        policy = self._config.get("analytics.regime_policy", {}) or {}
+        default_mode = str(policy.get("default_mode", "threshold_modifier")).lower()
+        if default_mode == "advisory_only":
+            return {"min_buy_score_delta": 0.0, "cash_trigger_multiple": 2.0, "max_new_buys": 3}
+        return policy.get(regime) or policy.get("unknown") or {}
 
     def turnover_status(self, as_of=None) -> TurnoverStatus:
         return self._turnover.status(as_of)

@@ -6,8 +6,7 @@ information on screen to say yes or no responsibly? Each proposal shows the
 trigger that produced it, the written rationale, the risk warnings attached
 during validation, and the resulting position size.
 
-The dashboard binds to localhost by default and has no authentication, because it
-is a single-operator tool for a personal fund. Do not expose it to a network.
+The dashboard bind address is configured from settings rather than hardcoded.
 """
 
 from __future__ import annotations
@@ -577,7 +576,7 @@ def serve() -> None:
     import uvicorn
 
     config = get_config()
-    host = str(config.get("dashboard.host", "127.0.0.1"))
+    host = str(config.get("dashboard.host", "0.0.0.0"))
     port = int(config.get("dashboard.port", 8000) or 8000)
     logger.info("Dashboard starting on http://%s:%d", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info")

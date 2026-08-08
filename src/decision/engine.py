@@ -106,6 +106,11 @@ class DecisionEngine:
         as_of = as_of or portfolio.as_of
         deep_review = is_deep_review_day(self._config, as_of)
         turnover = self._risk.turnover_status(as_of)
+        market_regime = (
+            risk_profile.market_regime.regime
+            if risk_profile and risk_profile.market_regime
+            else None
+        )
 
         # 1. Rules first. These are already decided.
         mandatory = self._risk.mandatory_proposals(triggers, portfolio, technicals)
@@ -129,13 +134,18 @@ class DecisionEngine:
 
         # 3. Discretionary proposals.
         discretionary, memo, llm_used = self._propose(
-            briefing, portfolio, technicals, triggers, candidates, deep_review
+            briefing, portfolio, technicals, triggers, candidates, deep_review, market_regime
         )
 
         # 4. Everything is re-validated together, so the batch as a whole
         #    respects the cash buffer and the caps.
         validation = self._risk.validate(
-            mandatory + discretionary, portfolio, technicals, scores, turnover
+            mandatory + discretionary,
+            portfolio,
+            technicals,
+            scores,
+            turnover,
+            market_regime=market_regime,
         )
 
         if validation.rejected:
@@ -153,6 +163,12 @@ class DecisionEngine:
             risk_profile=risk_profile,
             digest=digest,
             llm_used=llm_used,
+            regime_applied=self._regime_note(market_regime),
+            suppressed_candidates=[
+                score.symbol
+                for score in candidates
+                if getattr(score, "suppressed_reasons", [])
+            ],
         )
 
         logger.info(
@@ -172,12 +188,13 @@ class DecisionEngine:
         triggers: List[Trigger],
         candidates: List[FactorScores],
         deep_review: bool,
+        market_regime: Optional[str],
     ) -> Tuple[List[TradeProposal], str, bool]:
         """Ask the LLM for proposals, falling back to rules-only."""
 
         def fall_back(reason: str) -> Tuple[List[TradeProposal], str, bool]:
             proposals = self._rules_only_proposals(
-                portfolio, technicals, triggers, candidates
+                portfolio, technicals, triggers, candidates, market_regime
             )
             return proposals, self._rules_only_memo(triggers, reason, proposals), False
 
@@ -224,6 +241,7 @@ class DecisionEngine:
         technicals: Dict[str, TechnicalSnapshot],
         triggers: List[Trigger],
         candidates: List[FactorScores],
+        market_regime: Optional[str],
     ) -> List[TradeProposal]:
         """Deploy idle cash mechanically when the decision layer is unavailable.
 
@@ -243,8 +261,9 @@ class DecisionEngine:
             return []
 
         proposals: List[TradeProposal] = []
+        buy_limit = self._risk.regime_new_buy_limit(market_regime)
         for score in candidates:
-            if len(proposals) >= MAX_RULES_ONLY_BUYS:
+            if len(proposals) >= min(MAX_RULES_ONLY_BUYS, buy_limit):
                 break
             symbol = score.symbol
             if portfolio.get(symbol) is not None:
@@ -286,6 +305,7 @@ class DecisionEngine:
                         "Held on quantitative merit alone: no qualitative thesis was "
                         "written, because no decision layer was available to write one."
                     ),
+                    regime_note=self._regime_note(market_regime),
                 )
             )
 
@@ -341,6 +361,15 @@ class DecisionEngine:
                 )
             )
         return "\n".join(lines)
+
+    def _regime_note(self, market_regime: Optional[str]) -> str:
+        regime = str(market_regime or "unknown").lower()
+        floor = self._risk.regime_min_buy_score(regime)
+        limit = self._risk.regime_new_buy_limit(regime)
+        return (
+            f"Regime policy active: {regime} market regime tightened the minimum "
+            f"buy score to {floor:.2f} and capped fresh buy proposals at {limit}."
+        )
 
     # ------------------------------------------------------------------
     def _parse_proposals(

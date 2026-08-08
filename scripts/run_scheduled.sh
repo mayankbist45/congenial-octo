@@ -11,7 +11,7 @@ set -uo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR" || exit 1
 
-COMMAND="${1:-cycle}"
+COMMAND="${1:-daily_monitor}"
 shift || true
 
 PYTHON="$PROJECT_DIR/.venv/bin/python"

@@ -58,23 +58,23 @@ def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
         "",
     ]
 
-    # One swing cycle per market at market-local pre-open time.
-    for market in markets:
-        hour, minute = _parse_hhmm(market.scheduling.swing_cycle)
-        sample_day = _next_weekday(date.today())
-        market_tz = ZoneInfo(market.timezone)
-        cycle_dt = datetime.combine(sample_day, datetime.min.time()).replace(
-            hour=hour, minute=minute, tzinfo=market_tz
+    # Shared long-horizon jobs.
+    lines.append(
+        _cron_line(
+            "15",
+            "8",
+            "1-5",
+            f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh daily_monitor",
         )
-        m, h, dow = _to_vm_cron(cycle_dt, vm_tz)
-        lines.append(
-            _cron_line(
-                m,
-                h,
-                "1-5",
-                f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh cycle --market {market.id}",
-            )
+    )
+    lines.append(
+        _cron_line(
+            "0",
+            "9",
+            "6",
+            f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh weekly_research",
         )
+    )
 
     # Intraday watch start/stop per market.
     for market in markets:

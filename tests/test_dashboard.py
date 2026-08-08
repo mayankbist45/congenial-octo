@@ -386,7 +386,6 @@ def test_sector_weights_sum_to_the_invested_share(service, repo) -> None:
 
     assert abs(total - invested_pct) < 0.5
 
-
 def test_overview_exposes_market_regime(service, repo) -> None:
     seed_run(repo)
     seed_history(repo)
@@ -438,8 +437,6 @@ def test_risk_profile_exposes_market_regime(service, repo) -> None:
     assert risk is not None
     assert risk["market_regime"]["regime"] == "elevated"
     assert risk["market_regime"]["evidence"]
-
-
 def test_briefing_is_served_when_it_exists(service, temp_config) -> None:
     today = date.today()
     path = temp_config.briefing_dir / f"briefing_{today.isoformat()}.txt"

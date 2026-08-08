@@ -6,11 +6,23 @@
 <p class="subtitle">
   {{ 'Quarterly deep review' if run.is_deep_review else 'Daily monitoring' }}
   &middot; {{ run.status }}
+  &middot; {{ run.command }}
   &middot; started {{ run.started_at }}
   {%- if run.finished_at %}, finished {{ run.finished_at }}{% endif %}
   &middot; {{ 'decision layer active' if run.llm_used else 'rules only' }}
   &middot; <a href="/journal">Back to journal</a>
 </p>
+
+{% if run.stage_status %}
+<div class="panel">
+  <h2>Run telemetry</h2>
+  <p class="muted" style="margin:0">
+    {% if run.candidate_pack_date %}Candidate pack {{ run.candidate_pack_date }}{% endif %}
+    {% if run.market_regime %}&middot; regime {{ run.market_regime|title }}{% endif %}
+    {% if run.memo_present is not none %}&middot; memo {{ 'saved' if run.memo_present else 'missing' }}{% endif %}
+  </p>
+</div>
+{% endif %}
 
 {% if run.memo %}
 <div class="panel">

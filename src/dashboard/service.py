@@ -11,7 +11,7 @@ shows exactly what the manager saw when the decision was made.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from src.config import Config, get_config
@@ -198,6 +198,10 @@ class DashboardService:
             "unrealised_pnl": 0.0,
             "run": None,
             "daily_change_pct": None,
+            "warnings": [],
+            "candidate_pack": None,
+            "latest_nav_date": None,
+            "latest_analysis_date": None,
         }
 
     def _safe_overview(self) -> Dict[str, Any]:
@@ -230,6 +234,7 @@ class DashboardService:
         history = self._repo.nav_history()
         holdings = self.holdings()
         pending = self.pending_proposals()
+        candidate_pack = self._repo.latest_candidate_pack()
 
         latest = history[-1] if history else None
         previous = history[-2] if len(history) > 1 else None
@@ -281,6 +286,20 @@ class DashboardService:
             ):
                 total_return_pct = return_since_inception_pct
 
+        warnings: List[str] = []
+        latest_nav_date = str(latest["run_date"]) if latest else None
+        latest_analysis_date = str(run["run_date"]) if run else None
+        if latest_nav_date and latest_analysis_date and latest_nav_date > latest_analysis_date:
+            warnings.append(
+                f"Holdings/NAV are fresher than the latest analysis run ({latest_analysis_date})."
+            )
+        if run and not (run.get("memo") or "").strip():
+            warnings.append("Latest run did not persist a manager memo.")
+        if candidate_pack and run and run.get("command") == "daily_monitor":
+            pack_date = str(candidate_pack.get("research_date") or "")
+            if pack_date and run.get("candidate_pack_date") and pack_date != str(run["candidate_pack_date"]):
+                warnings.append("Latest daily monitor did not use the latest available candidate pack.")
+
         return {
             "has_data": bool(run) or bool(holdings),
             "run": self._run_view(run) if run else None,
@@ -298,6 +317,10 @@ class DashboardService:
             "market_regime": (self.risk_profile() or {}).get("market_regime"),
             "total_return_pct": total_return_pct,
             "excess_return_pct": perf.get("excess_return_pct"),
+            "warnings": warnings,
+            "candidate_pack": self._candidate_pack_view(candidate_pack),
+            "latest_nav_date": latest_nav_date,
+            "latest_analysis_date": latest_analysis_date,
         }
 
     def _run_view(self, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -310,8 +333,26 @@ class DashboardService:
             "is_deep_review": bool(run["is_deep_review"]),
             "llm_used": bool(run["llm_used"]),
             "memo": run["memo"] or "",
+            "memo_present": bool(run["memo"]),
+            "memo_length": run.get("memo_length"),
             "turnover_used_pct": run["turnover_used_pct"],
             "portfolio_value": run["portfolio_value"],
+            "command": run.get("command") or "analyse",
+            "trigger_source": run.get("trigger_source") or "manual",
+            "candidate_pack_date": run.get("candidate_pack_date"),
+            "candidate_pack_age_days": run.get("candidate_pack_age_days"),
+            "market_regime": run.get("market_regime"),
+            "market_regime_score": run.get("market_regime_score"),
+            "stage_status": _loads(run.get("stage_status"), {}),
+        }
+
+    def _candidate_pack_view(self, pack: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not pack:
+            return None
+        return {
+            "id": pack["id"],
+            "research_date": pack["research_date"],
+            "candidate_count": pack.get("candidate_count"),
         }
 
     # ------------------------------------------------------------------
@@ -908,7 +949,21 @@ class DashboardService:
         ]
 
     def runs(self, limit: int = 30) -> List[Dict[str, Any]]:
-        return [self._run_view(run) for run in self._repo.recent_runs(limit=limit)]
+        rows = []
+        for run in self._repo.recent_runs(limit=limit):
+            view = self._run_view(run)
+            view["stage_events"] = [
+                {
+                    "stage_name": row["stage_name"],
+                    "status": row["status"],
+                    "duration_ms": row["duration_ms"],
+                    "details": _loads(row["details"], {}),
+                    "error": row["error"],
+                }
+                for row in self._repo.run_stage_events(run["id"])
+            ]
+            rows.append(view)
+        return rows
 
     def run_detail(self, run_id: int) -> Optional[Dict[str, Any]]:
         for run in self._repo.recent_runs(limit=200):
@@ -916,6 +971,16 @@ class DashboardService:
                 view = self._run_view(run)
                 view["proposals"] = [
                     self._proposal_view(p) for p in self._repo.proposals_for_run(run_id)
+                ]
+                view["stage_events"] = [
+                    {
+                        "stage_name": row["stage_name"],
+                        "status": row["status"],
+                        "duration_ms": row["duration_ms"],
+                        "details": _loads(row["details"], {}),
+                        "error": row["error"],
+                    }
+                    for row in self._repo.run_stage_events(run_id)
                 ]
                 return view
         return None
