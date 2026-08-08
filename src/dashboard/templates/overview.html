@@ -22,6 +22,7 @@
     &middot; Last run {{ overview.run.run_date }}
     {%- if overview.run.is_deep_review %} (quarterly deep review){% endif %}
     &middot; {{ overview.run.status }}
+    &middot; {{ overview.run.command }}
     &middot; {{ 'decision layer active' if overview.run.llm_used else 'rules only' }}
   </p>
 {% else %}
@@ -223,6 +224,17 @@
   </div>
 {% else %}
 
+{% if overview.warnings %}
+<div class="panel">
+  <h2>Run health</h2>
+  <ul style="margin:0;padding-left:18px">
+    {% for item in overview.warnings %}
+      <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <div class="stats">
   <div class="stat">
     <div class="label">Fund value</div>
@@ -261,6 +273,16 @@
     <div class="sub">of the annual budget</div>
   </div>
   <div class="stat">
+    <div class="label">Candidate pack</div>
+    {% if overview.candidate_pack %}
+      <div class="value">{{ overview.candidate_pack.research_date }}</div>
+      <div class="sub">{{ overview.candidate_pack.candidate_count }} names screened</div>
+    {% else %}
+      <div class="value">Missing</div>
+      <div class="sub">no weekly pack saved yet</div>
+    {% endif %}
+  </div>
+  <div class="stat">
     <div class="label">Market regime</div>
     {% if overview.market_regime %}
       <div class="value">{{ overview.market_regime.regime | title }}</div>
@@ -285,7 +307,7 @@
     <span class="note">{{ overview.market_regime.regime | title }}</span>
   </div>
   <p class="muted" style="margin:0 0 10px">
-    Advisory only: this does not block trades or resize positions.
+    Threshold modifier: the regime tightens buy thresholds and daily deployment.
   </p>
   <ul style="margin:0;padding-left:18px">
     {% for item in overview.market_regime.evidence[:4] %}
@@ -319,7 +341,10 @@
 <div class="panel">
   <div class="panel-head">
     <h2>Manager's memo</h2>
-    <span class="note">{{ overview.run.run_date }}</span>
+    <span class="note">
+      {{ overview.run.run_date }}
+      {% if overview.run.candidate_pack_date %}&middot; pack {{ overview.run.candidate_pack_date }}{% endif %}
+    </span>
   </div>
   <div class="memo">{{ overview.run.memo }}</div>
 </div>
@@ -343,6 +368,7 @@
   <div class="panel">
     <h2>Largest holdings</h2>
     {% if overview.top_holdings %}
+    <div class="desktop-only">
     <table>
       <thead>
         <tr><th>Stock</th><th class="num">Weight</th><th class="num">Position return</th></tr>
@@ -360,6 +386,23 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
+    <div class="mobile-only mobile-cards">
+      {% for h in overview.top_holdings %}
+      <div class="mobile-card">
+        <div class="mobile-card-head">
+          <div>
+            <div class="mobile-card-title">{{ h.symbol }}</div>
+            <div class="mobile-card-subtitle">{{ h.sector }}</div>
+          </div>
+          <div class="tag">{{ h.weight_pct | pct(1) }}</div>
+        </div>
+        <div class="mobile-pairs">
+          <div class="mobile-pair"><div class="label">Position return</div><div class="value {{ h.return_pct | sign }}">{{ h.return_pct | pct(1, true) }}</div></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
     {% else %}
       <p class="empty">The fund holds no positions yet.</p>
     {% endif %}
@@ -404,6 +447,7 @@
     <h2>Intraday sessions</h2>
     <span class="note"><a href="/intraday">All intraday</a></span>
   </div>
+  <div class="table-scroll desktop-only">
   <table class="data-table">
     <thead>
       <tr>
@@ -446,6 +490,41 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  <div class="mobile-only mobile-cards">
+    {% for p in intraday_books %}
+    {% set s = p.intraday_summary %}
+    <div class="mobile-card">
+      <div class="mobile-card-head">
+        <div>
+          <div class="mobile-card-title">{{ p.persona_id }}</div>
+          <div class="mobile-card-subtitle">{{ p.description }}</div>
+        </div>
+        <span class="region-badge region-{{ p.region | lower }}">{{ p.region_label }}</span>
+      </div>
+      {% if s %}
+      <div class="mobile-pairs">
+        <div class="mobile-pair"><div class="label">Broker</div><div class="value">{{ p.broker_label }}</div></div>
+        <div class="mobile-pair"><div class="label">Net P&amp;L</div><div class="value {{ s.total_net_pnl | sign }}">{{ s.total_net_pnl | money_currency(p.currency) }}</div></div>
+        <div class="mobile-pair"><div class="label">Return</div><div class="value {{ s.total_return_pct | sign }}">{{ s.total_return_pct | pct(2, true) }}</div></div>
+        <div class="mobile-pair"><div class="label">Trades</div><div class="value">{{ s.total_trades }}</div></div>
+      </div>
+      <div class="mobile-card-copy">
+        {% if s.active %}Active{% else %}Ended{% endif %}
+        {% if s.last_scan_at %} · {{ s.last_scan_at }}{% endif %}
+      </div>
+      <div class="mobile-actions">
+        <a class="btn" href="/intraday/{{ p.persona_id }}">Details</a>
+      </div>
+      {% else %}
+      <div class="mobile-card-copy">No saved run.</div>
+      <div class="mobile-actions">
+        <a class="btn" href="/intraday/{{ p.persona_id }}">Setup</a>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
 </div>
 {% endif %}
 

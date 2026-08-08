@@ -193,12 +193,11 @@ ROTATE
 # --- Dashboard service ------------------------------------------------------
 # The review UI runs as a managed service rather than something started by hand
 # over SSH: a backgrounded python process would keep the SSH session open and
-# die with the next reboot. It binds 127.0.0.1 only (dashboard.host in
-# settings.yaml), so the sole way to reach it is the SSH tunnel that
-# deploy_gcp.sh dashboard opens - no firewall rule, nothing on the public IP.
+# die with the next reboot. It binds to dashboard.host from settings.yaml,
+# which may be public when the VM firewall allows tcp:8000.
 cat >/etc/systemd/system/mutualfund-dashboard.service <<UNIT
 [Unit]
-Description=AI Mutual Fund Manager dashboard (localhost only)
+Description=AI Mutual Fund Manager dashboard
 After=network.target postgresql.service
 
 [Service]
@@ -216,7 +215,7 @@ WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now mutualfund-dashboard >/dev/null 2>&1 &&
-    echo "  dashboard service up on 127.0.0.1:8000 (reach it via the SSH tunnel)" ||
+    echo "  dashboard service up on dashboard.host:dashboard.port from settings.yaml" ||
     echo "  note: dashboard service failed; check journalctl -u mutualfund-dashboard"
 
 # --- Cloud Logging ----------------------------------------------------------

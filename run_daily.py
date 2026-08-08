@@ -60,7 +60,18 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         nargs="?",
         default="analyse",
-        choices=["analyse", "execute", "cycle", "close", "learn", "dashboard", "status", "watch"],
+        choices=[
+            "analyse",
+            "daily_monitor",
+            "weekly_research",
+            "execute",
+            "cycle",
+            "close",
+            "learn",
+            "dashboard",
+            "status",
+            "watch",
+        ],
         help="what to run (default: analyse)",
     )
     parser.add_argument(
@@ -385,6 +396,44 @@ def _run_persona(persona_id: str, args, base_config) -> int:
                 print(f"\n[{persona_id}] No trades proposed today.")
             return 0
 
+        if args.command == "weekly_research":
+            result = manager.weekly_research(
+                as_of=as_of,
+                refresh_fundamentals=args.refresh_fundamentals,
+                max_candidates=args.max_candidates,
+                trigger_source="manual",
+            )
+            print(
+                f"\n[{persona_id}] Weekly research refreshed {len(result.candidates)} "
+                f"candidate(s) for {result.as_of.isoformat()}."
+            )
+            return 0
+
+        if args.command == "daily_monitor":
+            result = manager.daily_monitor(
+                as_of=as_of,
+                skip_news=args.skip_news,
+                refresh_fundamentals=args.refresh_fundamentals,
+                trigger_source="manual",
+            )
+            if result.proposal_count and _auto_mode(manager, args):
+                print(
+                    f"\n[{persona_id}] {result.proposal_count} proposal(s) pending. "
+                    f"Auto mode is on, so they are approved and placed by:\n"
+                    f"  python run_daily.py execute --persona {persona_id}"
+                )
+            elif result.proposal_count:
+                host = pcfg.get("dashboard.host", "127.0.0.1")
+                port = pcfg.get("dashboard.port", 8000)
+                print(
+                    f"\n[{persona_id}] {result.proposal_count} proposal(s) await "
+                    f"your approval.\n"
+                    f"  python run_daily.py dashboard   ->  http://{host}:{port}/proposals"
+                )
+            else:
+                print(f"\n[{persona_id}] No trades proposed today.")
+            return 0
+
         if args.command == "execute":
             if _auto_mode(manager, args) and manager.pending_count():
                 _clear_pending(manager, args)
@@ -393,11 +442,11 @@ def _run_persona(persona_id: str, args, base_config) -> int:
             return 0 if not summary.failed else 1
 
         if args.command == "cycle":
-            result = manager.analyse(
+            result = manager.daily_monitor(
                 as_of=as_of,
                 skip_news=args.skip_news,
                 refresh_fundamentals=args.refresh_fundamentals,
-                max_candidates=args.max_candidates,
+                trigger_source="manual",
             )
             if not result.proposal_count:
                 print(f"\n[{persona_id}] No trades proposed today.")

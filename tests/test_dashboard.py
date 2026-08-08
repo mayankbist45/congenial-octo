@@ -213,6 +213,7 @@ def test_proposal_card_shows_rationale_thesis_and_warnings(client, repo) -> None
     assert "Margins hold" in body
     assert "overbought" in body
     assert "initial_build" in body
+    assert "mobile-card" in body
 
 
 def test_mandatory_proposal_is_marked_as_rule_enforced(client, repo) -> None:
@@ -229,6 +230,8 @@ def test_holdings_page_lists_positions_with_risk_metrics(client, repo) -> None:
     assert "TCS" in body
     assert "Idio vol" in body
     assert "Sector exposure" in body
+    assert "mobile-cards" in body
+    assert "desktop-only" in body
 
 
 def test_performance_page_reports_excess_return(client, repo) -> None:
@@ -259,15 +262,28 @@ def test_news_page_shows_the_digest(client, repo, temp_config) -> None:
     assert "Inflation eased" in body
     assert "Large deal win" in body
     assert "TATASTEEL" in body
+    assert "mobile-card" in body
 
 
 def test_journal_links_to_the_run_detail(client, repo) -> None:
     run_id = seed_run(repo)
 
-    assert f"/journal/{run_id}" in client.get("/journal").text
+    journal = client.get("/journal").text
+    assert f"/journal/{run_id}" in journal
+    assert "table-scroll" in journal
     detail = client.get(f"/journal/{run_id}")
     assert detail.status_code == 200
     assert "WIPRO" in detail.text
+
+
+def test_overview_includes_responsive_markup(client, repo) -> None:
+    seed_run(repo)
+    seed_history(repo)
+
+    body = client.get("/").text
+
+    assert "mobile-card" in body
+    assert "desktop-only" in body
 
 
 def test_unknown_run_is_a_404(client) -> None:
@@ -386,7 +402,6 @@ def test_sector_weights_sum_to_the_invested_share(service, repo) -> None:
 
     assert abs(total - invested_pct) < 0.5
 
-
 def test_overview_exposes_market_regime(service, repo) -> None:
     seed_run(repo)
     seed_history(repo)
@@ -438,8 +453,6 @@ def test_risk_profile_exposes_market_regime(service, repo) -> None:
     assert risk is not None
     assert risk["market_regime"]["regime"] == "elevated"
     assert risk["market_regime"]["evidence"]
-
-
 def test_briefing_is_served_when_it_exists(service, temp_config) -> None:
     today = date.today()
     path = temp_config.briefing_dir / f"briefing_{today.isoformat()}.txt"

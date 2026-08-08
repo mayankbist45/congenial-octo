@@ -14,10 +14,12 @@ engine: no trade reaches the approval queue without passing it.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from src.broker.base import BrokerClient, BrokerError
 from src.broker.factory import build_broker
@@ -135,7 +137,7 @@ class FundManager:
         skip_news: bool = False,
         refresh_fundamentals: bool = False,
         max_candidates: Optional[int] = None,
-    ) -> RunResult:
+        ) -> RunResult:
         """Run the full analysis and journal the result."""
         started = time.time()
         self._connect()
@@ -225,6 +227,205 @@ class FundManager:
             earnings=earnings,
         )
 
+    def weekly_research(
+        self,
+        as_of: Optional[date] = None,
+        refresh_fundamentals: bool = False,
+        max_candidates: Optional[int] = None,
+        trigger_source: str = "manual",
+    ) -> RunResult:
+        """Refresh the screened universe and persist a reusable candidate pack."""
+        self._connect()
+        technicals = self._load_technicals()
+        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
+        as_of = as_of or self._prices.latest_data_date() or date.today()
+        portfolio.as_of = as_of
+        deep_review = is_deep_review_day(self._config, as_of)
+
+        fundamentals = self._load_fundamentals(
+            technicals, portfolio, refresh_fundamentals, max_candidates
+        )
+        scores = self._scoring.score(fundamentals, technicals)
+        candidates = self._scoring.buy_candidates(
+            scores, exclude=portfolio.symbols, limit=20
+        )
+        risk_profile = self._analyse_risk(portfolio, fundamentals, technicals)
+        market_regime = (
+            risk_profile.market_regime.regime
+            if risk_profile and risk_profile.market_regime
+            else None
+        )
+        candidates = self._apply_regime_policy(candidates, market_regime)
+        pack_id = self._repo.save_candidate_pack(as_of, candidates)
+
+        decision = DailyDecision(
+            as_of=as_of,
+            is_deep_review=deep_review,
+            memo=(
+                f"Weekly research refreshed {len(candidates)} screened candidate(s) "
+                f"into pack #{pack_id} for {as_of.isoformat()}."
+            ),
+            llm_used=False,
+            risk_profile=risk_profile,
+            regime_applied=self._regime_summary(market_regime),
+            suppressed_candidates=self._suppressed_symbols(candidates),
+        )
+        run_id = self._journal(
+            decision,
+            portfolio,
+            scores,
+            risk_profile,
+            digest=None,
+            as_of=as_of,
+            deep_review=deep_review,
+            command="weekly_research",
+            trigger_source=trigger_source,
+            candidate_pack_date=as_of,
+            stage_status={
+                "candidate_pack_id": pack_id,
+                "candidate_count": len(candidates),
+                "market_regime": market_regime,
+            },
+        )
+        return RunResult(
+            run_id=run_id,
+            as_of=as_of,
+            decision=decision,
+            portfolio=portfolio,
+            technicals=technicals,
+            fundamentals=fundamentals,
+            scores=scores,
+            candidates=candidates,
+            risk_profile=risk_profile,
+        )
+
+    def daily_monitor(
+        self,
+        as_of: Optional[date] = None,
+        skip_news: bool = False,
+        refresh_fundamentals: bool = False,
+        trigger_source: str = "manual",
+    ) -> RunResult:
+        """Run the holdings-first daily monitor using the latest weekly pack."""
+        started = time.time()
+        self._connect()
+
+        logger.info("=" * 66)
+        logger.info("PERSONA: %s", self._persona_id)
+        logger.info("DAILY MONITOR using latest weekly candidate pack")
+
+        technicals = self._load_technicals()
+        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
+        as_of = as_of or self._prices.latest_data_date() or date.today()
+        portfolio.as_of = as_of
+        deep_review = is_deep_review_day(self._config, as_of)
+
+        pack = self._repo.latest_candidate_pack()
+        pack_date = (
+            date.fromisoformat(str(pack["research_date"])) if pack and pack.get("research_date") else None
+        )
+        pack_age_days = (as_of - pack_date).days if pack_date else None
+        pack_max_age = int(
+            self._config.get("analytics.regime_policy.pack_max_age_days", 10) or 10
+        )
+        pack_stale = pack_age_days is None or pack_age_days > pack_max_age
+
+        candidate_scores = self._candidate_pack_scores(pack) if pack and not pack_stale else []
+        candidate_symbols = [score.symbol for score in candidate_scores]
+        fundamentals = self._load_named_fundamentals(
+            technicals,
+            portfolio,
+            refresh_fundamentals,
+            candidate_symbols,
+        )
+        live_scores = self._refresh_candidate_scores(candidate_scores, fundamentals, technicals)
+        risk_profile = self._analyse_risk(portfolio, fundamentals, technicals)
+        market_regime = (
+            risk_profile.market_regime.regime
+            if risk_profile and risk_profile.market_regime
+            else None
+        )
+        candidates = self._apply_regime_policy(live_scores, market_regime)
+
+        quarterly_context = self._load_quarterly_reports(
+            portfolio, candidates, fundamentals, as_of
+        )
+        earnings = self._build_earnings(portfolio, candidates, as_of)
+        digest = None if skip_news else self._build_digest(portfolio, candidates, as_of)
+        scores = self._scoring.score(fundamentals, technicals)
+        triggers = self._evaluate_triggers(
+            portfolio,
+            scores,
+            fundamentals,
+            technicals,
+            digest,
+            risk_profile,
+            candidates if not pack_stale else [],
+            deep_review,
+            quarterly_context,
+            earnings,
+        )
+        decision = self._decision.decide(
+            portfolio=portfolio,
+            scores=scores,
+            fundamentals=fundamentals,
+            technicals=technicals,
+            triggers=triggers,
+            candidates=[] if pack_stale else candidates,
+            digest=digest,
+            earnings=earnings,
+            risk_profile=risk_profile,
+            quarterly_context=quarterly_context,
+            as_of=as_of,
+        )
+        if pack_stale:
+            note = "No usable weekly candidate pack was available, so new discretionary buys were suppressed."
+            decision.memo = f"{decision.memo}\n\n{note}".strip()
+            decision.regime_applied = self._regime_summary(market_regime)
+        elif decision.regime_applied:
+            decision.memo = f"{decision.memo}\n\n{decision.regime_applied}".strip()
+
+        run_id = self._journal(
+            decision,
+            portfolio,
+            scores,
+            risk_profile,
+            digest,
+            as_of,
+            deep_review,
+            command="daily_monitor",
+            trigger_source=trigger_source,
+            candidate_pack_date=pack_date,
+            candidate_pack_age_days=pack_age_days,
+            stage_status={
+                "candidate_pack_stale": pack_stale,
+                "candidate_count": len(candidates),
+                "candidate_pack_age_days": pack_age_days,
+                "market_regime": market_regime,
+                "elapsed_seconds": round(time.time() - started, 2),
+            },
+        )
+        logger.info(
+            "Daily monitor complete in %.0fs: %d proposal(s) awaiting approval",
+            time.time() - started,
+            len(decision.proposals),
+        )
+        return RunResult(
+            run_id=run_id,
+            as_of=as_of,
+            decision=decision,
+            portfolio=portfolio,
+            technicals=technicals,
+            fundamentals=fundamentals,
+            scores=scores,
+            candidates=candidates,
+            triggers=triggers,
+            risk_profile=risk_profile,
+            digest=digest,
+            quarterly_context=quarterly_context,
+            earnings=earnings,
+        )
+
     # ------------------------------------------------------------------
     # Stages
     # ------------------------------------------------------------------
@@ -290,6 +491,22 @@ class FundManager:
             fundamentals.update(
                 self._fundamentals.refresh_symbols(portfolio.symbols)
             )
+        self._fundamentals.close()
+        return fundamentals
+
+    def _load_named_fundamentals(
+        self,
+        technicals: Dict[str, TechnicalSnapshot],
+        portfolio: PortfolioState,
+        refresh: bool,
+        symbols: List[str],
+    ) -> Dict[str, FundamentalSnapshot]:
+        wanted = list(dict.fromkeys(list(portfolio.symbols) + list(symbols)))
+        if not wanted:
+            return {}
+        fundamentals = self._fundamentals.get_many(wanted, force_refresh=refresh)
+        if portfolio.symbols and not refresh:
+            fundamentals.update(self._fundamentals.refresh_symbols(portfolio.symbols))
         self._fundamentals.close()
         return fundamentals
 
@@ -417,7 +634,8 @@ class FundManager:
                 deep_review,
             )
         )
-        triggers.extend(self._risk.cash_deployment_triggers(portfolio, candidates))
+        regime = risk_profile.market_regime.regime if risk_profile and risk_profile.market_regime else None
+        triggers.extend(self._risk.cash_deployment_triggers(portfolio, candidates, regime))
         return triggers
 
     # ------------------------------------------------------------------
@@ -432,12 +650,24 @@ class FundManager:
         digest: Optional[NewsDigest],
         as_of: date,
         deep_review: bool,
+        command: str = "analyse",
+        trigger_source: str = "manual",
+        candidate_pack_date: Optional[date] = None,
+        candidate_pack_age_days: Optional[float] = None,
+        stage_status: Optional[Dict[str, Any]] = None,
     ) -> int:
+        market_regime = risk_profile.market_regime if risk_profile else None
         run_id = self._repo.start_run(
             run_date=as_of,
             is_deep_review=deep_review,
             portfolio_value=portfolio.total_value,
             cash=portfolio.cash,
+            command=command,
+            trigger_source=trigger_source,
+            candidate_pack_date=candidate_pack_date,
+            candidate_pack_age_days=candidate_pack_age_days,
+            market_regime=market_regime.regime if market_regime else None,
+            market_regime_score=market_regime.score if market_regime else None,
         )
         self._repo.save_proposals(run_id, decision.proposals)
         self._repo.save_rejected(run_id, decision.rejected)
@@ -454,8 +684,85 @@ class FundManager:
             memo=decision.memo,
             llm_used=decision.llm_used,
             turnover_used_pct=decision.turnover_used_pct,
+            stage_status=stage_status,
         )
         return run_id
+
+    def _candidate_pack_scores(self, pack: Optional[Dict[str, Any]]) -> List[FactorScores]:
+        if not pack:
+            return []
+        payload = json.loads(str(pack.get("payload") or "[]"))
+        out: List[FactorScores] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            out.append(
+                FactorScores(
+                    symbol=str(item.get("symbol") or "").upper(),
+                    rank=item.get("rank"),
+                    composite=float(item.get("composite") or 0.0),
+                    percentile=item.get("percentile"),
+                    passes_gates=bool(item.get("passes_gates", False)),
+                    gate_failures=list(item.get("gate_failures") or []),
+                    sector_model=item.get("sector_model"),
+                    supported_metrics=list(item.get("supported_metrics") or []),
+                    unsupported_metrics=list(item.get("unsupported_metrics") or []),
+                    metric_coverage_pct=item.get("metric_coverage_pct"),
+                    valuation_summary=dict(item.get("valuation_summary") or {}),
+                    macro_exposures=dict(item.get("macro_exposures") or {}),
+                    suppressed_reasons=list(item.get("suppressed_reasons") or []),
+                )
+            )
+        return out
+
+    def _refresh_candidate_scores(
+        self,
+        cached_scores: List[FactorScores],
+        fundamentals: Dict[str, FundamentalSnapshot],
+        technicals: Dict[str, TechnicalSnapshot],
+    ) -> List[FactorScores]:
+        if not cached_scores:
+            return []
+        rescored = self._scoring.score(fundamentals, technicals)
+        ordered: List[FactorScores] = []
+        for cached in cached_scores:
+            score = rescored.get(cached.symbol)
+            if score is None:
+                continue
+            ordered.append(score)
+        return ordered
+
+    def _apply_regime_policy(
+        self,
+        candidates: List[FactorScores],
+        market_regime: Optional[str],
+    ) -> List[FactorScores]:
+        if not candidates:
+            return []
+        minimum = self._risk.regime_min_buy_score(market_regime)
+        limit = self._risk.regime_new_buy_limit(market_regime)
+        allowed: List[FactorScores] = []
+        for candidate in candidates:
+            if candidate.composite < minimum:
+                candidate.suppressed_reasons.append(
+                    f"below {market_regime or 'unknown'} regime score floor {minimum:.2f}"
+                )
+                continue
+            allowed.append(candidate)
+        return allowed[:limit] if limit > 0 else []
+
+    @staticmethod
+    def _suppressed_symbols(candidates: List[FactorScores]) -> List[str]:
+        return [c.symbol for c in candidates if getattr(c, "suppressed_reasons", [])]
+
+    def _regime_summary(self, market_regime: Optional[str]) -> str:
+        regime = str(market_regime or "unknown").lower()
+        floor = self._risk.regime_min_buy_score(regime)
+        limit = self._risk.regime_new_buy_limit(regime)
+        return (
+            f"Decision under regime policy: {regime.title()} backdrop applied a "
+            f"minimum composite buy score of {floor:.2f} and capped new buys at {limit}."
+        )
 
     def _record_nav(self, as_of: date, portfolio: PortfolioState) -> None:
         """Record the day's NAV alongside the benchmark, for like-for-like returns."""

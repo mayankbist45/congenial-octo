@@ -462,6 +462,33 @@ def _apply_policy_defaults(raw: Dict[str, Any]) -> None:
     )
     analytics.setdefault("preferred_sector_models", [])
     analytics.setdefault("metric_weights", {})
+    analytics.setdefault(
+        "regime_policy",
+        {
+            "default_mode": "threshold_modifier",
+            "pack_max_age_days": 10,
+            "calm": {
+                "min_buy_score_delta": 0.0,
+                "cash_trigger_multiple": 2.0,
+                "max_new_buys": 3,
+            },
+            "elevated": {
+                "min_buy_score_delta": 0.1,
+                "cash_trigger_multiple": 2.5,
+                "max_new_buys": 2,
+            },
+            "stressed": {
+                "min_buy_score_delta": 0.2,
+                "cash_trigger_multiple": 3.0,
+                "max_new_buys": 1,
+            },
+            "unknown": {
+                "min_buy_score_delta": 0.05,
+                "cash_trigger_multiple": 2.5,
+                "max_new_buys": 2,
+            },
+        },
+    )
 
 
 @lru_cache(maxsize=1)

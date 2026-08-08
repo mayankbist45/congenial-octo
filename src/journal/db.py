@@ -61,7 +61,15 @@ CREATE TABLE IF NOT EXISTS runs (
     portfolio_value {REAL},
     cash {REAL},
     turnover_used_pct {REAL},
-    status TEXT NOT NULL DEFAULT 'running'
+    status TEXT NOT NULL DEFAULT 'running',
+    command TEXT NOT NULL DEFAULT 'analyse',
+    trigger_source TEXT NOT NULL DEFAULT 'manual',
+    candidate_pack_date TEXT,
+    candidate_pack_age_days {REAL},
+    market_regime TEXT,
+    market_regime_score {REAL},
+    memo_length INTEGER,
+    stage_status TEXT
 );
 
 CREATE TABLE IF NOT EXISTS proposals (
@@ -185,6 +193,41 @@ CREATE TABLE IF NOT EXISTS news_digests (
     high_impact_count INTEGER,
     generated_by_llm INTEGER,
     PRIMARY KEY (persona_id, run_date)
+);
+
+CREATE TABLE IF NOT EXISTS candidate_packs (
+    id {ID_PK},
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    research_date TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    source_run_id INTEGER REFERENCES runs(id),
+    candidate_count INTEGER NOT NULL DEFAULT 0,
+    payload TEXT,
+    UNIQUE (persona_id, research_date)
+);
+
+CREATE TABLE IF NOT EXISTS candidate_pack_members (
+    id {ID_PK},
+    pack_id INTEGER NOT NULL REFERENCES candidate_packs(id),
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    research_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    rank INTEGER,
+    composite {REAL},
+    payload TEXT,
+    UNIQUE (pack_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS run_stage_events (
+    id {ID_PK},
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    persona_id TEXT NOT NULL DEFAULT 'balanced',
+    stage_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    duration_ms {REAL},
+    details TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS liquid_positions (
@@ -320,6 +363,9 @@ CREATE INDEX IF NOT EXISTS idx_trades_executed ON trades(executed_at);
 CREATE INDEX IF NOT EXISTS idx_trades_persona ON trades(persona_id);
 CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(run_date);
 CREATE INDEX IF NOT EXISTS idx_runs_persona ON runs(persona_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_packs_persona_date ON candidate_packs(persona_id, research_date);
+CREATE INDEX IF NOT EXISTS idx_candidate_pack_members_pack ON candidate_pack_members(pack_id);
+CREATE INDEX IF NOT EXISTS idx_run_stage_events_run ON run_stage_events(run_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_date ON position_snapshots(run_date);
 CREATE INDEX IF NOT EXISTS idx_snapshots_persona ON position_snapshots(persona_id);
 CREATE INDEX IF NOT EXISTS idx_quarterly_reports_symbol ON quarterly_reports(symbol);
@@ -345,6 +391,9 @@ TABLES = (
     "nav_history",
     "risk_history",
     "news_digests",
+    "candidate_packs",
+    "candidate_pack_members",
+    "run_stage_events",
     "liquid_positions",
     "quarterly_reports",
     "quarterly_report_analyses",
@@ -359,6 +408,9 @@ SEQUENCE_TABLES = (
     "runs",
     "proposals",
     "trades",
+    "candidate_packs",
+    "candidate_pack_members",
+    "run_stage_events",
     "quarterly_reports",
     "quarterly_report_analyses",
     "decision_reviews",
@@ -514,6 +566,7 @@ def _apply_schema(conn: Connection) -> None:
     # reference persona_id which doesn't exist on old tables.
     _migrate_add_persona_id(conn)
     _migrate_quarterly_analysis_sector_model(conn)
+    _migrate_runs_observability(conn)
 
     statements = [s.strip() for s in schema_for(conn.dialect).split(";") if s.strip()]
     for statement in statements:
@@ -650,6 +703,24 @@ def _migrate_quarterly_analysis_sector_model(conn: Connection) -> None:
     conn.execute(
         "ALTER TABLE quarterly_report_analyses ADD COLUMN sector_model TEXT"
     )
+    conn.commit()
+
+
+def _migrate_runs_observability(conn: Connection) -> None:
+    columns = {
+        "command": "TEXT NOT NULL DEFAULT 'analyse'",
+        "trigger_source": "TEXT NOT NULL DEFAULT 'manual'",
+        "candidate_pack_date": "TEXT",
+        "candidate_pack_age_days": _SCHEMA_TOKENS[conn.dialect]["REAL"],
+        "market_regime": "TEXT",
+        "market_regime_score": _SCHEMA_TOKENS[conn.dialect]["REAL"],
+        "memo_length": "INTEGER",
+        "stage_status": "TEXT",
+    }
+    for name, column_type in columns.items():
+        if _has_column(conn, "runs", name):
+            continue
+        conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {column_type}")
     conn.commit()
 
 

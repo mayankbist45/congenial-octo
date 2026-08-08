@@ -277,7 +277,7 @@ connectors:
     data_feed: iex
 
 dashboard:
-  host: "127.0.0.1"
+  host: "0.0.0.0"
   port: 8000
 
 # End-of-day persona digests → WhatsApp (Twilio). Credentials live in .env.

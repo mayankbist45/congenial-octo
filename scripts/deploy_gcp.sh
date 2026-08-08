@@ -11,7 +11,7 @@
 #   ./scripts/deploy_gcp.sh status      run run_daily.py status up there
 #   ./scripts/deploy_gcp.sh logs        follow data/scheduled.log on the VM
 #   ./scripts/deploy_gcp.sh cloudlogs   read what the Ops Agent shipped to Cloud Logging
-#   ./scripts/deploy_gcp.sh dashboard   start the dashboard and tunnel :8000 here
+#   ./scripts/deploy_gcp.sh dashboard   start the dashboard and print its public URL
 #   ./scripts/deploy_gcp.sh ssh         shell on the VM
 #   ./scripts/deploy_gcp.sh snapshots   nightly disk snapshots, 7 kept
 #   ./scripts/deploy_gcp.sh stop|start  pause billing for compute, keep the disk
@@ -21,8 +21,8 @@
 #   GCP_PROJECT GCP_ZONE GCP_INSTANCE GCP_MACHINE_TYPE GCP_DISK_SIZE
 #   GCP_BACKUP_BUCKET   a GCS bucket for nightly pg_dump copies
 #
-# The dashboard port is never opened to the internet; reach it over the SSH
-# tunnel that the dashboard subcommand sets up.
+# The dashboard can be exposed publicly on tcp:8000. This script opens the
+# firewall rule on the VM tag and prints the instance's external URL.
 
 set -uo pipefail
 
@@ -63,6 +63,19 @@ gc_quiet() {
     else
         gc "$@"
     fi
+}
+
+public_ip() {
+    gc compute instances describe "$INSTANCE" --zone "$ZONE" \
+        --format='value(networkInterfaces[0].accessConfigs[0].natIP)'
+}
+
+ensure_dashboard_firewall() {
+    gc compute firewall-rules create mutualfund-dashboard-public \
+        --allow tcp:8000 \
+        --target-tags fund \
+        --source-ranges 0.0.0.0/0 >/dev/null 2>&1 ||
+        true
 }
 
 _apply_shared_permissions() {
@@ -111,6 +124,7 @@ create() {
         ssh_vm true >/dev/null 2>&1 && break
         sleep 6
     done
+    ensure_dashboard_firewall
 }
 
 push() {
@@ -233,18 +247,17 @@ snapshots() {
 dashboard() {
     instance_exists || die "$INSTANCE does not exist yet"
     echo "Ensuring the dashboard service is up on $INSTANCE"
+    ensure_dashboard_firewall
     # The dashboard is a systemd service (see bootstrap_vm.sh), so starting it
     # returns at once instead of holding the SSH session open the way a
-    # backgrounded python process would. It binds 127.0.0.1 only; the tunnel
-    # below is the sole way in. Readiness is a TCP check on the port rather than
-    # pgrep, which cannot accidentally match this very command line.
+    # backgrounded python process would.
     ssh_vm "sudo systemctl start mutualfund-dashboard 2>/dev/null || true
             for _ in \$(seq 1 15); do
                 (exec 3<>/dev/tcp/127.0.0.1/8000) 2>/dev/null && break
                 sleep 1
             done
             if (exec 3<>/dev/tcp/127.0.0.1/8000) 2>/dev/null; then
-                echo '  dashboard listening on 127.0.0.1:8000'
+                echo '  dashboard service is listening on port 8000'
             else
                 echo '  dashboard did not come up; recent log:' >&2
                 sudo journalctl -u mutualfund-dashboard -n 20 --no-pager 2>/dev/null
@@ -252,9 +265,10 @@ dashboard() {
                 exit 1
             fi" || die "could not start the dashboard"
     echo
-    echo "Tunnelling http://127.0.0.1:8000 -> the VM. Open that in your browser."
-    echo "Ctrl-C closes the tunnel; the dashboard keeps running on the VM."
-    gc_quiet compute ssh "$INSTANCE" --zone "$ZONE" -- -N -L 8000:127.0.0.1:8000
+    local ip
+    ip="$(public_ip)"
+    [ -n "$ip" ] || die "could not determine external IP"
+    echo "Dashboard URL: http://$ip:8000"
 }
 
 case "${1:-help}" in
@@ -264,8 +278,9 @@ deploy)
     push
     bootstrap
     echo
-    echo "Deployed. The VM now runs weekdays on IST:"
-    echo "  08:15  cycle    research, self-approve, place simulated orders"
+    echo "Deployed. The VM now runs on IST:"
+    echo "  08:15  daily_monitor    weekday monitoring and proposals"
+    echo "  09:00  weekly_research  Saturday candidate-pack refresh"
     echo "  18:00  close    mark the book and record NAV"
     echo "  19:30  backup   pg_dump of the journal"
     echo
@@ -324,7 +339,7 @@ cloudlogs)
         --format 'value(timestamp.date("%Y-%m-%d %H:%M:%S"), jsonPayload.message, textPayload)'
     ;;
 
-cycle | close | analyse)
+daily_monitor | weekly_research | cycle | close | analyse)
     require_gcloud
     ssh_vm "cd '$REMOTE_DIR' && ./scripts/run_scheduled.sh $1 && tail -30 data/scheduled.log"
     ;;
