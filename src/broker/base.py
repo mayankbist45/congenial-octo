@@ -20,7 +20,7 @@ class BrokerHolding:
     """One line of the broker's demat holdings."""
 
     symbol: str
-    quantity: int
+    quantity: float
     average_price: float
     last_price: float
     isin: str = ""
@@ -43,9 +43,10 @@ class BrokerFunds:
 class OrderRequest:
     symbol: str
     side: str  # BUY or SELL
-    quantity: int
+    quantity: float = 0.0
     order_type: str = "LIMIT"
     price: Optional[float] = None
+    notional: Optional[float] = None
     product_type: str = "DELIVERY"
     exchange: str = "NSE"
     variety: str = "NORMAL"
@@ -57,7 +58,7 @@ class OrderResult:
     success: bool
     symbol: str
     side: str
-    quantity: int
+    quantity: float
     order_id: Optional[str] = None
     price: Optional[float] = None
     status: str = ""

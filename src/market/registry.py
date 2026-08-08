@@ -25,6 +25,7 @@ PERSONA_MARKET_ALIASES: Dict[str, str] = {
     "spread_us": "us_equity",
     "slice_us": "us_equity",
     "xstat_us": "us_equity",
+    "crypto_momentum_paper": "crypto_spot_us",
 }
 
 LEGACY_REGION_TO_MARKET: Dict[str, str] = {
@@ -37,6 +38,7 @@ LEGACY_REGION_TO_MARKET: Dict[str, str] = {
 class SessionSpec:
     open: str
     close: str
+    trading_days: str = "weekdays"
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,7 @@ def _load_market_yaml(path: Path) -> Market:
         session=SessionSpec(
             open=_parse_time(regular.get("open", "09:15")),
             close=_parse_time(regular.get("close", "15:30")),
+            trading_days=str(session_raw.get("trading_days", "weekdays")).lower(),
         ),
         broker_provider=str(broker.get("provider", "angelone")).lower(),
         broker_product_types=[str(p) for p in broker.get("product_types", ["CASH"])],

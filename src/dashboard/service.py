@@ -70,7 +70,11 @@ def region_label(region: str) -> str:
 
 
 def broker_label(provider: str) -> str:
-    mapping = {"angelone": "Angel One", "alpaca": "Alpaca"}
+    mapping = {
+        "angelone": "Angel One",
+        "alpaca": "Alpaca",
+        "alpaca_crypto": "Alpaca Crypto",
+    }
     return mapping.get((provider or "angelone").lower(), provider)
 
 
@@ -394,7 +398,7 @@ class DashboardService:
         invested = sum(float(lot["quantity"]) * float(lot["avg_cost"]) for lot in lots)
         views: List[Dict[str, Any]] = []
         for lot in lots:
-            qty = int(lot["quantity"])
+            qty = float(lot["quantity"])
             avg_cost = float(lot["avg_cost"])
             market_value = qty * avg_cost
             views.append(
@@ -487,7 +491,7 @@ class DashboardService:
         if not proposal or proposal["status"] != "pending":
             return False
         logger.info(
-            "User approved proposal %d: %s %s x%d",
+            "User approved proposal %d: %s %s x%s",
             proposal_id,
             proposal["action"],
             proposal["symbol"],
@@ -500,7 +504,7 @@ class DashboardService:
         if not proposal or proposal["status"] != "pending":
             return False
         logger.info(
-            "User rejected proposal %d: %s %s x%d (%s)",
+            "User rejected proposal %d: %s %s x%s (%s)",
             proposal_id,
             proposal["action"],
             proposal["symbol"],
@@ -1088,7 +1092,7 @@ class DashboardService:
             self._backup_card(now, events),
         ]
 
-        for market_id in ("india_equity", "us_equity"):
+        for market_id in ("india_equity", "us_equity", "crypto_spot_us"):
             cards.append(self._intraday_market_card(market_id, now, events))
         cards.append(self._dashboard_service_card(now, events))
 
@@ -1234,11 +1238,16 @@ class DashboardService:
             state = "failed"
 
         session_label = f"{market.session.open}-{market.session.close} {market.tz_abbrev}"
+        trading_days = (
+            "Daily"
+            if getattr(market.session, "trading_days", "weekdays") == "all_days"
+            else "Weekdays"
+        )
         return {
             "key": f"intraday-{market_id}",
             "label": f"{market.label} intraday watch",
             "kind": "intraday",
-            "expected_schedule": f"Weekdays {session_label}",
+            "expected_schedule": f"{trading_days} {session_label}",
             "last_start_time": self._event_ts(last_launcher_success or self._latest_event(launchers, "start")),
             "last_success_time": self._event_ts(last_heartbeat),
             "last_failure_time": self._event_ts(last_watch_failure or last_launcher_failure),
@@ -1364,7 +1373,7 @@ class DashboardService:
 
         market = get_market(market_id)
         local_now = now.astimezone(ZoneInfo(market.timezone)) if now.tzinfo else now
-        if local_now.weekday() >= 5:
+        if getattr(market.session, "trading_days", "weekdays") != "all_days" and local_now.weekday() >= 5:
             return False
         open_at = self._parse_clock(market.session.open)
         close_at = self._parse_clock(market.session.close)

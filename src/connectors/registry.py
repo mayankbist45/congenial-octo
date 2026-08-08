@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 from src.broker.base import BrokerClient
 from src.config import Config, get_config
 from src.connectors.alpaca import AlpacaConnector
+from src.connectors.alpaca_crypto import AlpacaCryptoConnector
 from src.connectors.angelone import AngelOneConnector
 from src.connectors.base import BrokerConnector
 from src.logging_setup import get_logger
@@ -16,6 +17,7 @@ logger = get_logger(__name__)
 _REGISTRY: Dict[str, BrokerConnector] = {
     AngelOneConnector().provider_id: AngelOneConnector(),
     AlpacaConnector().provider_id: AlpacaConnector(),
+    AlpacaCryptoConnector().provider_id: AlpacaCryptoConnector(),
 }
 
 DEFAULT_PROVIDER = "angelone"

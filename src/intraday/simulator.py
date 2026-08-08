@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.config import Config
 from src.intraday.agent import IntradayAgent
+from src.intraday.costs import round_trip_costs
 from src.intraday.engine_helpers import collect_signals
 from src.intraday.models import IntradayBacktestResult, IntradaySignal, IntradayTrade
 from src.intraday.pair_exits import is_pair_strategy, pair_leg_quantities, resolve_pair_exit
@@ -134,6 +135,8 @@ class IntradaySimulator:
             trade_key = signal.pair_id or signal.symbol
             if trade_key in traded_keys:
                 continue
+            if self._is_short_disallowed(signal):
+                continue
             frame = day_frames.get(signal.symbol)
             if frame is None:
                 continue
@@ -192,7 +195,7 @@ class IntradaySimulator:
             entry_b,
             beta,
         )
-        if qty_a < 1 or qty_b < 1:
+        if qty_a <= 0 or qty_b <= 0:
             return []
 
         exit_time, exit_reason, _ = resolve_pair_exit(
@@ -236,7 +239,7 @@ class IntradaySimulator:
         self,
         signal: IntradaySignal,
         frame: pd.DataFrame,
-        quantity: int,
+        quantity: float,
         equity: float,
         exit_time: datetime,
         exit_reason: str,
@@ -290,8 +293,10 @@ class IntradaySimulator:
         max_value = equity * float(
             self._config.get("intraday.max_position_value_pct", 20.0) or 20.0
         ) / 100.0
-        quantity = int(min(risk_amount / signal.risk_per_share, max_value / signal.entry_price))
-        if quantity < 1:
+        quantity = self._size_quantity(
+            min(risk_amount / signal.risk_per_share, max_value / signal.entry_price)
+        )
+        if quantity <= 0:
             return None
 
         entry_ts = pd.Timestamp(signal.entry_time)
@@ -443,21 +448,12 @@ class IntradaySimulator:
         )
 
     def _estimate_costs(self, signal: IntradaySignal, equity: float) -> float:
-        qty = int(
-            min(
-                equity
-                * float(self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4)
-                / 100.0
-                / max(signal.risk_per_share, 0.01),
-                equity
-                * float(self._config.get("intraday.max_position_value_pct", 20.0) or 20.0)
-                / 100.0
-                / signal.entry_price,
-            )
-        )
-        costs = self._costs(signal.entry_price, signal.target_price, max(qty, 1))
+        qty = self._position_quantity_for_signal(signal, equity)
+        if qty <= 0:
+            return 0.0
+        costs = self._costs(signal.entry_price, signal.target_price, qty)
         if signal.is_pair and signal.pair_entry_price and signal.pair_target_price:
-            qty_b = max(qty, 1)
+            qty_b = qty
             costs += self._costs(
                 float(signal.pair_entry_price),
                 float(signal.pair_target_price),
@@ -465,30 +461,42 @@ class IntradaySimulator:
             )
         return costs
 
-    def _costs(self, entry: float, exit: float, quantity: int) -> float:
-        buy_value = entry * quantity
-        sell_value = exit * quantity
-        turnover = buy_value + sell_value
-        brokerage_pct = float(
-            self._config.get("intraday.costs.brokerage_pct", 0.03) or 0.03
-        ) / 100.0
-        cap = float(self._config.get("intraday.costs.brokerage_cap_per_order", 20.0) or 20.0)
-        brokerage = min(cap, buy_value * brokerage_pct) + min(cap, sell_value * brokerage_pct)
-        stt = sell_value * float(self._config.get("intraday.costs.stt_sell_pct", 0.025) or 0.025) / 100.0
-        exchange = turnover * float(
-            self._config.get("intraday.costs.exchange_txn_pct", 0.00325) or 0.00325
-        ) / 100.0
-        sebi = turnover * float(self._config.get("intraday.costs.sebi_pct", 0.0001) or 0.0001) / 100.0
-        stamp = buy_value * float(
-            self._config.get("intraday.costs.stamp_buy_pct", 0.003) or 0.003
-        ) / 100.0
-        gst = (brokerage + exchange + sebi) * float(
-            self._config.get("intraday.costs.gst_pct", 18.0) or 18.0
-        ) / 100.0
-        slippage = turnover * float(
-            self._config.get("intraday.slippage_bps_per_side", 2.0) or 2.0
-        ) / 10000.0
-        return brokerage + stt + exchange + sebi + stamp + gst + slippage
+    def _costs(self, entry: float, exit: float, quantity: float) -> float:
+        return round_trip_costs(self._config, entry, exit, quantity)
+
+    def _position_quantity_for_signal(self, signal: IntradaySignal, equity: float) -> float:
+        raw_quantity = min(
+            equity
+            * float(self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4)
+            / 100.0
+            / max(signal.risk_per_share, 0.01),
+            equity
+            * float(self._config.get("intraday.max_position_value_pct", 20.0) or 20.0)
+            / 100.0
+            / max(signal.entry_price, 0.01),
+        )
+        return self._size_quantity(raw_quantity)
+
+    def _size_quantity(self, raw_quantity: float) -> float:
+        if raw_quantity <= 0:
+            return 0.0
+        if str(self._config.market.asset_class).lower() == "crypto":
+            step = float(self._config.get("intraday.quantity_step", 0.0001) or 0.0001)
+            if step <= 0:
+                step = 0.0001
+            scaled = int(raw_quantity / step)
+            qty = scaled * step
+            return round(
+                qty, int(self._config.get("intraday.quantity_decimals", 4) or 4)
+            )
+        return float(int(raw_quantity))
+
+    def _is_short_disallowed(self, signal: IntradaySignal) -> bool:
+        if str(self._config.market.asset_class).lower() != "crypto":
+            return False
+        return signal.side.upper() == "SELL" and not bool(
+            self._config.get("intraday.allow_short", False)
+        )
 
     @staticmethod
     def _trading_days(frames: Dict[str, pd.DataFrame]) -> List[date]:

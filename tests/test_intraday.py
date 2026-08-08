@@ -481,6 +481,14 @@ def test_us_personas_use_broker_mode():
         assert intraday_uses_broker(cfg) is True
 
 
+def test_crypto_persona_stays_paper_mode():
+    from src.config import get_persona_config
+    from src.intraday.broker_execution import intraday_uses_broker
+
+    cfg = get_persona_config("crypto_momentum_paper")
+    assert intraday_uses_broker(cfg) is False
+
+
 def test_broker_executor_submits_entry_and_exit(calan_config):
     from dataclasses import replace
 
@@ -693,6 +701,49 @@ def test_watch_stale_signal_is_rejected(calan_config):
     assert engine._is_stale_signal(fresh, now, state) is False
 
 
+def test_crypto_watch_sizes_fractional_position():
+    from src.config import get_persona_config
+    from src.intraday.models import PaperState
+    from src.intraday.watch import IntradayWatchEngine
+
+    config = get_persona_config("crypto_momentum_paper")
+    engine = IntradayWatchEngine(config, data_service=MagicMock(), symbols=["BTC/USD"])
+    state = PaperState(persona_id="crypto_momentum_paper", trading_date=date(2026, 8, 8))
+    signal = IntradaySignal(
+        "BTC/USD",
+        "opening_range_breakout",
+        "BUY",
+        datetime(2026, 8, 8, 10, 0),
+        114000.0,
+        113000.0,
+        116000.0,
+        "test",
+    )
+    position = engine._paper_fill(signal, state, {"use_trailing_stop": False})
+    assert position is not None
+    assert position.quantity > 0
+    assert position.quantity < 1
+
+
+def test_crypto_watch_blocks_short_entries():
+    from src.config import get_persona_config
+    from src.intraday.watch import IntradayWatchEngine
+
+    config = get_persona_config("crypto_momentum_paper")
+    engine = IntradayWatchEngine(config, data_service=MagicMock(), symbols=["BTC/USD"])
+    signal = IntradaySignal(
+        "BTC/USD",
+        "vwap_pullback",
+        "SELL",
+        datetime(2026, 8, 8, 10, 0),
+        114000.0,
+        115000.0,
+        112500.0,
+        "test",
+    )
+    assert engine._is_short_disallowed(signal) is True
+
+
 def test_watch_late_discovery_signal_not_instantly_stale(calan_config):
     """Bar-close age: 11:45 signal evaluated at 11:58 should still be actionable."""
     from zoneinfo import ZoneInfo
@@ -859,4 +910,3 @@ def test_catalyst_watchlist_defaults_in_play_true():
     )
     assert payload is not None
     assert payload["watchlist"][0]["in_play"] is True
-

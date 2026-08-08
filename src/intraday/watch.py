@@ -12,6 +12,7 @@ import pandas as pd
 from src.config import Config
 from src.intraday.agent import IntradayAgent
 from src.intraday.broker_execution import IntradayBrokerExecutor, intraday_uses_broker
+from src.intraday.costs import round_trip_costs
 from src.intraday.data import IntradayDataService
 from src.intraday.engine_helpers import collect_signals
 from src.intraday.mayank import (
@@ -26,10 +27,12 @@ from src.intraday.reporting import save_summary, summarize_state
 from src.intraday.state import PaperStateStore
 from src.intraday.strategies import load_strategies
 from src.logging_setup import get_logger
+from src.market.calendar import calendar_for_config
 from src.market.session import market_timezone, session_open_close
 from src.operations import log_structured_event
 
 logger = get_logger(__name__)
+_CRYPTO_ASSET_CLASS = "crypto"
 
 
 def parse_hhmm(value: str) -> time:
@@ -230,6 +233,9 @@ class IntradayWatchEngine:
         ranked_map = {r.symbol: r for r in ranked}
 
         for _, signal in signals:
+            if self._is_short_disallowed(signal):
+                self._skip(state, signal, "short entries disabled for crypto persona")
+                continue
             if self._already_skipped(state, signal):
                 continue
             if self._uses_watchlist_gate() and signal.symbol not in watch_map:
@@ -340,8 +346,10 @@ class IntradayWatchEngine:
         risk_per_share = abs(entry_price - signal.stop_price)
         if entry_price <= 0 or risk_per_share <= 0:
             return None
-        quantity = int(min(risk_amount / risk_per_share, max_value / entry_price))
-        if quantity < 1:
+        quantity = self._size_quantity(
+            min(risk_amount / risk_per_share, max_value / entry_price)
+        )
+        if quantity <= 0:
             return None
         trailing = (
             float(gate["trailing_stop_pct"])
@@ -391,8 +399,10 @@ class IntradayWatchEngine:
         risk_per_share = abs(entry_price - stop)
         if entry_price <= 0 or risk_per_share <= 0:
             return None
-        quantity = int(min(risk_amount / risk_per_share, max_value / entry_price))
-        if quantity < 1:
+        quantity = self._size_quantity(
+            min(risk_amount / risk_per_share, max_value / entry_price)
+        )
+        if quantity <= 0:
             return None
         trailing = float(
             self._config.get("intraday.trailing_stop_pct", 0.25) or 0.25
@@ -699,50 +709,15 @@ class IntradayWatchEngine:
             r_multiple=round(net / risk_amount, 4) if risk_amount > 0 else 0.0,
         )
 
-    def _costs(self, entry: float, exit: float, quantity: int) -> float:
-        buy_value = entry * quantity
-        sell_value = exit * quantity
-        turnover = buy_value + sell_value
-        brokerage_pct = float(
-            self._config.get("intraday.costs.brokerage_pct", 0.03) or 0.03
-        ) / 100.0
-        cap = float(self._config.get("intraday.costs.brokerage_cap_per_order", 20.0) or 20.0)
-        brokerage = min(cap, buy_value * brokerage_pct) + min(cap, sell_value * brokerage_pct)
-        stt = sell_value * float(
-            self._config.get("intraday.costs.stt_sell_pct", 0.025) or 0.025
-        ) / 100.0
-        exchange = turnover * float(
-            self._config.get("intraday.costs.exchange_txn_pct", 0.00325) or 0.00325
-        ) / 100.0
-        sebi = turnover * float(
-            self._config.get("intraday.costs.sebi_pct", 0.0001) or 0.0001
-        ) / 100.0
-        stamp = buy_value * float(
-            self._config.get("intraday.costs.stamp_buy_pct", 0.003) or 0.003
-        ) / 100.0
-        gst = (brokerage + exchange + sebi) * float(
-            self._config.get("intraday.costs.gst_pct", 18.0) or 18.0
-        ) / 100.0
-        slippage = turnover * float(
-            self._config.get("intraday.slippage_bps_per_side", 2.0) or 2.0
-        ) / 10000.0
-        return brokerage + stt + exchange + sebi + stamp + gst + slippage
+    def _costs(self, entry: float, exit: float, quantity: float) -> float:
+        return round_trip_costs(self._config, entry, exit, quantity)
 
     def _estimate_costs(self, signal: IntradaySignal, state: PaperState) -> float:
         equity = self._equity(state)
-        qty = int(
-            min(
-                equity
-                * float(self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4)
-                / 100.0
-                / max(signal.risk_per_share, 0.01),
-                equity
-                * float(self._config.get("intraday.max_position_value_pct", 20.0) or 20.0)
-                / 100.0
-                / signal.entry_price,
-            )
-        )
-        return self._costs(signal.entry_price, signal.target_price, max(qty, 1))
+        qty = self._position_quantity_for_signal(signal, equity)
+        if qty <= 0:
+            return 0.0
+        return self._costs(signal.entry_price, signal.target_price, qty)
 
     @staticmethod
     def _watchlist_symbols(state: PaperState) -> Set[str]:
@@ -845,10 +820,47 @@ class IntradayWatchEngine:
 
     def _is_market_watch_time(self, now: datetime) -> bool:
         now = self._exchange_now(now)
-        if now.weekday() >= 5:
+        if not calendar_for_config(self._config).is_trading_day(now.date()):
             return False
         open_t, _ = session_open_close(self._config)
         return open_t <= now.time() <= self._force_exit_time()
+
+    def _position_quantity_for_signal(self, signal: IntradaySignal, equity: float) -> float:
+        risk_amount = equity * float(
+            self._config.get("intraday.risk_per_trade_pct", 0.4) or 0.4
+        ) / 100.0
+        max_value = equity * float(
+            self._config.get("intraday.max_position_value_pct", 20.0) or 20.0
+        ) / 100.0
+        raw_quantity = min(
+            risk_amount / max(signal.risk_per_share, 0.01),
+            max_value / max(signal.entry_price, 0.01),
+        )
+        return self._size_quantity(raw_quantity)
+
+    def _size_quantity(self, raw_quantity: float) -> float:
+        if raw_quantity <= 0:
+            return 0.0
+        if self._is_crypto_persona():
+            step = float(self._config.get("intraday.quantity_step", 0.0001) or 0.0001)
+            if step <= 0:
+                step = 0.0001
+            scaled = int(raw_quantity / step)
+            qty = scaled * step
+            return round(
+                qty, int(self._config.get("intraday.quantity_decimals", 4) or 4)
+            )
+        return float(int(raw_quantity))
+
+    def _is_crypto_persona(self) -> bool:
+        return str(self._config.market.asset_class).lower() == _CRYPTO_ASSET_CLASS
+
+    def _is_short_disallowed(self, signal: IntradaySignal) -> bool:
+        if not self._is_crypto_persona():
+            return False
+        return signal.side.upper() == "SELL" and not bool(
+            self._config.get("intraday.allow_short", False)
+        )
 
     def _equity(self, state: PaperState) -> float:
         base = max(float(self._config.secrets.initial_capital) + state.daily_pnl, 0.0)
