@@ -57,6 +57,27 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
   --role="roles/compute.osAdminLogin"
 ```
 
+Grant the deployer permission to act as the VM's attached service account.
+This is required because `gcloud compute scp` and `gcloud compute ssh` need
+`iam.serviceAccounts.actAs` on the instance service account, not just project
+level Compute and OS Login roles:
+
+```bash
+export GCP_INSTANCE="congenial-octo-fund-poc"
+export GCP_ZONE="asia-south1-a"
+export VM_SERVICE_ACCOUNT="$(
+  gcloud compute instances describe "$GCP_INSTANCE" \
+    --project "$GCP_PROJECT_ID" \
+    --zone "$GCP_ZONE" \
+    --format='value(serviceAccounts[0].email)'
+)"
+
+gcloud iam service-accounts add-iam-policy-binding "$VM_SERVICE_ACCOUNT" \
+  --project "$GCP_PROJECT_ID" \
+  --member="serviceAccount:${GCP_SERVICE_ACCOUNT_EMAIL}" \
+  --role="roles/iam.serviceAccountUser"
+```
+
 Create the Workload Identity pool and provider:
 
 ```bash
@@ -121,3 +142,8 @@ For pushes to `main`, deploy logic is:
 
 Use manual dispatch with `deploy` the first time, then ordinary merges to
 `main` handle ongoing releases.
+
+If deploy fails during `gcloud compute scp` or `gcloud compute ssh` with
+`PERMISSION_DENIED` mentioning `iam.serviceAccounts.actAs`, the missing binding
+is almost always `roles/iam.serviceAccountUser` on the VM's attached service
+account.
