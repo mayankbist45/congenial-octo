@@ -10,6 +10,7 @@
 <div class="panel">
   <h2>Daily runs</h2>
   {% if runs %}
+  <div class="table-scroll desktop-only">
   <table>
     <thead>
       <tr>
@@ -35,6 +36,29 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  <div class="mobile-only mobile-cards">
+    {% for run in runs %}
+    <div class="mobile-card">
+      <div class="mobile-card-head">
+        <div>
+          <div class="mobile-card-title">{{ run.run_date }}</div>
+          <div class="mobile-card-subtitle">{{ run.command }}</div>
+        </div>
+        <div class="tag">{{ run.status }}</div>
+      </div>
+      <div class="mobile-pairs">
+        <div class="mobile-pair"><div class="label">Fund value</div><div class="value">{{ run.portfolio_value | money }}</div></div>
+        <div class="mobile-pair"><div class="label">Turnover</div><div class="value">{{ run.turnover_used_pct | pct(1) }}</div></div>
+        <div class="mobile-pair"><div class="label">Decision</div><div class="value">{{ 'active' if run.llm_used else 'rules only' }}</div></div>
+        <div class="mobile-pair"><div class="label">Pack</div><div class="value">{{ run.candidate_pack_date or '-' }}</div></div>
+      </div>
+      <div class="mobile-actions">
+        <a class="btn" href="/journal/{{ run.id }}">View detail</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
   {% else %}
     <p class="empty">No runs recorded yet.</p>
   {% endif %}
@@ -43,6 +67,7 @@
 <div class="panel">
   <h2>Orders</h2>
   {% if trades %}
+  <div class="table-scroll desktop-only">
   <table>
     <thead>
       <tr>
@@ -72,6 +97,31 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  <div class="mobile-only mobile-cards">
+    {% for trade in trades %}
+    <div class="mobile-card">
+      <div class="mobile-card-head">
+        <div>
+          <div class="mobile-card-title">{{ trade.symbol }}</div>
+          <div class="mobile-card-subtitle">{{ trade.executed_at }}</div>
+        </div>
+        <div class="tag {{ 'sell' if trade.is_sell else 'buy' }}">{{ trade.action }}</div>
+      </div>
+      <div class="mobile-pairs">
+        <div class="mobile-pair"><div class="label">Qty</div><div class="value">{{ trade.quantity }}</div></div>
+        <div class="mobile-pair"><div class="label">Price</div><div class="value">{{ trade.price | number }}</div></div>
+        <div class="mobile-pair"><div class="label">Value</div><div class="value">{{ trade.value | money }}</div></div>
+        <div class="mobile-pair"><div class="label">Status</div><div class="value">{{ trade.status }}{% if trade.dry_run %} · simulated{% endif %}</div></div>
+      </div>
+      <div class="mobile-card-copy">
+        Realised P&amp;L:
+        <span class="{{ trade.realised_pnl | sign }}">{{ trade.realised_pnl | money if trade.realised_pnl is not none else '-' }}</span>
+        {% if trade.error or trade.broker_order_id %}<br>{{ trade.error or trade.broker_order_id }}{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
   {% else %}
     <p class="empty">No orders recorded yet.</p>
   {% endif %}
