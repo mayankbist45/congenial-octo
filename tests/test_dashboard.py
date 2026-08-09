@@ -166,8 +166,9 @@ def test_every_api_endpoint_responds_when_empty(client, path) -> None:
 
 def test_empty_overview_tells_the_user_what_to_do(client) -> None:
     body = client.get("/").text
-    assert "has not run yet" in body
-    assert "run_daily.py" in body
+    assert "No journal run recorded yet" in body
+    assert "empty book shell" in body
+    assert "starting capital" in body
 
 
 # ----------------------------------------------------------------------
@@ -665,13 +666,17 @@ def test_overview_shows_intraday_us_trades(client, temp_config) -> None:
 
     body = client.get("/?persona=calan_us").text
     assert "<html" in body
-    assert "INTC" in body
-    assert "Completed trades" in body
-    assert "Watchlist" in body
     assert "Intraday paper" in body
+    assert "Full session detail" in body
+    assert "/intraday/calan_us" in body
+    # Trade rows live on the detail page, not the overview shell.
+    detail = client.get("/intraday/calan_us").text
+    assert "INTC" in detail
+    assert "Completed trades" in detail or "trades" in detail.lower()
 
 
-def test_default_overview_lists_intraday_sessions(client, temp_config) -> None:
+def test_default_overview_stays_on_swing_shell(client, temp_config) -> None:
+    """Default overview is the current swing book — not a dump of all sessions."""
     intraday_dir = temp_config.root / "data" / "intraday"
     intraday_dir.mkdir(parents=True, exist_ok=True)
     (intraday_dir / "calan_us_latest.json").write_text(
@@ -690,8 +695,10 @@ def test_default_overview_lists_intraday_sessions(client, temp_config) -> None:
 
     body = client.get("/").text
     assert "<html" in body
-    assert "Intraday sessions" in body
-    assert "calan_us" in body
+    assert "Intraday sessions" not in body
+    assert "No journal run recorded yet" in body
+    # Other books' sessions stay off the default overview.
+    assert "Intraday paper" not in body
 
 
 def _main_html(body: str) -> str:
@@ -705,12 +712,15 @@ def test_proposals_page_us_persona_shows_sp500_not_nifty(client) -> None:
     assert "Nifty 500" not in main
 
 
-def test_proposals_page_intraday_skips_swing_mandate(client) -> None:
+def test_proposals_page_intraday_redirects_to_swing(client) -> None:
+    response = client.get("/proposals?persona=calan_us", follow_redirects=False)
+    assert response.status_code == 302
+    assert "persona=balanced" in response.headers["location"]
+
+    # Following the redirect lands on the swing approval gate.
     body = client.get("/proposals?persona=calan_us").text
-    main = _main_html(body)
-    assert "Persona Constitution" not in main
-    assert "Intraday personas do not use the swing approval gate" in main
-    assert "Nifty 500" not in main
+    assert "Swing books only" in body
+    assert "Persona Constitution" in body
 
 
 def test_us_overview_uses_dollar_formatting(client) -> None:
