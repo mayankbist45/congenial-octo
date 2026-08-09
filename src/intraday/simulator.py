@@ -12,6 +12,7 @@ from src.config import Config
 from src.intraday.agent import IntradayAgent
 from src.intraday.costs import round_trip_costs
 from src.intraday.engine_helpers import collect_signals
+from src.intraday.kronos_service import maybe_enrich_ranked_with_kronos
 from src.intraday.models import IntradayBacktestResult, IntradaySignal, IntradayTrade
 from src.intraday.pair_exits import is_pair_strategy, pair_leg_quantities, resolve_pair_exit
 from src.intraday.persona_rankers import filter_ranked_for_persona, load_ranker
@@ -110,6 +111,7 @@ class IntradaySimulator:
         ranked = self._ranker.rank(day_frames, day_previous)
         limit = int(self._config.get("intraday.ranked_universe_size", 8) or 8)
         ranked = ranked[:limit]
+        maybe_enrich_ranked_with_kronos(self._config, day_frames, ranked)
         pool = filter_ranked_for_persona(self._config, ranked)
         if not pool:
             pool = ranked

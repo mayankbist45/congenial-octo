@@ -8,6 +8,8 @@ import pandas as pd
 
 from src.config import Config
 from src.intraday.models import IntradaySignal, RankedStock
+from src.intraday.kronos_features import kronos_score_adjustment
+from src.intraday.kronos_service import maybe_enrich_ranked_with_kronos
 from src.intraday.mayank import is_mayank_persona
 from src.intraday.strategies import load_strategies, scan_cross_signals, scan_pair_signals
 
@@ -32,6 +34,7 @@ def signal_score(
     signal: IntradaySignal,
     ranked: RankedStock,
     frame: pd.DataFrame,
+    config: Optional[Config] = None,
 ) -> float:
     risk = signal.risk_per_share
     reward = abs(signal.target_price - signal.entry_price)
@@ -40,7 +43,8 @@ def signal_score(
     avg_volume = float(frame["volume"].tail(12).mean())
     volume_confirm = latest_volume / avg_volume if avg_volume > 0 else 1.0
     priority = STRATEGY_PRIORITY.get(signal.strategy, 0.0)
-    return ranked.score + expected_r * 18.0 + min(volume_confirm, 4.0) * 5.0 + priority
+    kronos_bonus = kronos_score_adjustment(config, signal, ranked) if config is not None else 0.0
+    return ranked.score + expected_r * 18.0 + min(volume_confirm, 4.0) * 5.0 + priority + kronos_bonus
 
 
 def collect_signals(
@@ -53,6 +57,7 @@ def collect_signals(
     strategies = load_strategies(config)
     out: List[Tuple[float, IntradaySignal, RankedStock]] = []
     ranked_map = {r.symbol: r for r in ranked}
+    maybe_enrich_ranked_with_kronos(config, frames, ranked)
 
     if config.persona_id == "spread":
         pair_map = scan_pair_signals(config, frames)
@@ -62,7 +67,7 @@ def collect_signals(
             if item is None or frame is None:
                 continue
             for signal in signals:
-                out.append((signal_score(signal, item, frame), signal, item))
+                out.append((signal_score(signal, item, frame, config), signal, item))
         out.sort(key=lambda row: (-row[0], row[1].entry_time))
         return out
 
@@ -74,7 +79,7 @@ def collect_signals(
             if item is None or frame is None:
                 continue
             for signal in signals:
-                out.append((signal_score(signal, item, frame), signal, item))
+                out.append((signal_score(signal, item, frame, config), signal, item))
         out.sort(key=lambda row: (-row[0], row[1].entry_time))
         return out
 
@@ -92,7 +97,7 @@ def collect_signals(
             for signal in strategy.signals(
                 item.symbol, frame, config, previous_days.get(item.symbol)
             ):
-                score = signal_score(signal, item, frame)
+                score = signal_score(signal, item, frame, config)
                 if best is None or score > best[0]:
                     best = (score, signal)
         if best:
