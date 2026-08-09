@@ -9,6 +9,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ fund_name }}{% endblock %}</title>
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("theme");
+        var theme = stored === "dark" || stored === "light"
+          ? stored
+          : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
   <style>
     :root {
       --bg: #f6f7f9;
@@ -16,11 +29,116 @@
       --ink: #111827;
       --ink-soft: #6b7280;
       --line: #e5e7eb;
+      --line-soft: #f3f4f6;
       --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --accent-soft: #eff6ff;
+      --accent-border: #bfdbfe;
       --up: #047857;
       --down: #b91c1c;
       --warn: #b45309;
       --warn-bg: #fffbeb;
+      --warn-border: #fde68a;
+      --warn-ink: #78350f;
+      --bench: #94a3b8;
+      --tag-bg: #f3f4f6;
+      --tag-ink: #374151;
+      --buy-bg: #dcfce7;
+      --sell-bg: #fee2e2;
+      --rule-bg: #ede9fe;
+      --rule-ink: #5b21b6;
+      --dry-bg: #fef3c7;
+      --live-bg: #fee2e2;
+      --danger-border: #fecaca;
+      --danger-hover: #fef2f2;
+      --chart-grid: #f1f3f5;
+      --chart-baseline: #cbd5e1;
+      --chart-axis: #9ca3af;
+      --bar-track: #f3f4f6;
+      --bar-pos: #93c5fd;
+      --bar-neg: #fca5a5;
+      --persona-card: #fafafa;
+      --region-in-bg: #fef3c7;
+      --region-in-ink: #92400e;
+      --region-us-bg: #dbeafe;
+      --region-us-ink: #1e40af;
+      --tag-swing-bg: #ecfdf5;
+      --tag-swing-ink: #047857;
+      --tag-intraday-bg: #eef2ff;
+      --tag-intraday-ink: #4338ca;
+      --tag-growth-bg: #dbeafe;
+      --tag-growth-ink: #1d4ed8;
+      --tag-value-bg: #fef3c7;
+      --tag-value-ink: #b45309;
+      --tag-trap-bg: #fee2e2;
+      --tag-trap-ink: #b91c1c;
+      --tag-neutral-bg: #f3f4f6;
+      --tag-neutral-ink: #4b5563;
+      --code-bg: #111827;
+      --code-ink: #f9fafb;
+      --briefing-bg: #0f172a;
+      --briefing-ink: #e2e8f0;
+      --input-bg: #ffffff;
+      --toggle-hover: #f3f4f6;
+    }
+    [data-theme="dark"] {
+      --bg: #0b1220;
+      --panel: #111827;
+      --ink: #e5e7eb;
+      --ink-soft: #9ca3af;
+      --line: #1f2937;
+      --line-soft: #1f2937;
+      --accent: #60a5fa;
+      --accent-hover: #3b82f6;
+      --accent-soft: #1e3a5f;
+      --accent-border: #1e40af;
+      --up: #34d399;
+      --down: #f87171;
+      --warn: #fbbf24;
+      --warn-bg: #422006;
+      --warn-border: #854d0e;
+      --warn-ink: #fde68a;
+      --bench: #94a3b8;
+      --tag-bg: #1f2937;
+      --tag-ink: #d1d5db;
+      --buy-bg: #064e3b;
+      --sell-bg: #7f1d1d;
+      --rule-bg: #3b0764;
+      --rule-ink: #d8b4fe;
+      --dry-bg: #422006;
+      --live-bg: #7f1d1d;
+      --danger-border: #7f1d1d;
+      --danger-hover: #450a0a;
+      --chart-grid: #1f2937;
+      --chart-baseline: #475569;
+      --chart-axis: #94a3b8;
+      --bar-track: #1f2937;
+      --bar-pos: #3b82f6;
+      --bar-neg: #f87171;
+      --persona-card: #0f172a;
+      --region-in-bg: #422006;
+      --region-in-ink: #fde68a;
+      --region-us-bg: #1e3a5f;
+      --region-us-ink: #93c5fd;
+      --tag-swing-bg: #064e3b;
+      --tag-swing-ink: #6ee7b7;
+      --tag-intraday-bg: #312e81;
+      --tag-intraday-ink: #c7d2fe;
+      --tag-growth-bg: #1e3a5f;
+      --tag-growth-ink: #93c5fd;
+      --tag-value-bg: #422006;
+      --tag-value-ink: #fbbf24;
+      --tag-trap-bg: #7f1d1d;
+      --tag-trap-ink: #fca5a5;
+      --tag-neutral-bg: #1f2937;
+      --tag-neutral-ink: #9ca3af;
+      --code-bg: #020617;
+      --code-ink: #e2e8f0;
+      --briefing-bg: #020617;
+      --briefing-ink: #cbd5e1;
+      --input-bg: #0f172a;
+      --toggle-hover: #1f2937;
+      color-scheme: dark;
     }
     * { box-sizing: border-box; }
     body {
@@ -61,35 +179,170 @@
       font-weight: 500;
     }
     nav a:hover { background: var(--bg); text-decoration: none; }
-    nav a.active { background: #eff6ff; color: var(--accent); }
-    .persona-select {
+    nav a.active { background: var(--accent-soft); color: var(--accent); }
+    .persona-picker {
       position: relative;
       margin-left: 8px;
+      min-width: 220px;
+      max-width: min(340px, 42vw);
     }
-    .persona-select select {
-      font: inherit;
-      font-size: 13px;
-      font-weight: 500;
-      padding: 6px 28px 6px 10px;
+    .persona-picker-trigger {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 12px;
       border: 1px solid var(--line);
-      border-radius: 7px;
-      background: var(--bg);
+      border-radius: 10px;
+      background: linear-gradient(180deg, var(--panel) 0%, var(--bg) 100%);
       color: var(--ink);
       cursor: pointer;
-      appearance: none;
-      -webkit-appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M3 5l3 3 3-3'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 8px center;
+      text-align: left;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
     }
-    .persona-select select:hover { border-color: var(--accent); }
-    .persona-label {
-      font-size: 11px;
+    .persona-picker-trigger:hover {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+    }
+    .persona-picker.open .persona-picker-trigger {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+    .persona-picker-copy {
+      min-width: 0;
+      flex: 1;
+    }
+    .persona-picker-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 2px;
+    }
+    .persona-picker-meta .region-badge {
+      margin-right: 0;
+      font-size: 10px;
+      padding: 1px 6px;
+    }
+    .persona-picker-meta .tag {
+      margin-right: 0;
+      font-size: 10px;
+      padding: 1px 6px;
+    }
+    .persona-picker-name {
+      display: block;
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .persona-picker-desc {
+      display: block;
       color: var(--ink-soft);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .persona-picker-chevron {
+      width: 16px;
+      height: 16px;
+      color: var(--ink-soft);
+      flex-shrink: 0;
+      transition: transform 0.15s ease;
+    }
+    .persona-picker.open .persona-picker-chevron { transform: rotate(180deg); }
+    .persona-picker-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      width: min(360px, 92vw);
+      max-height: min(70vh, 480px);
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.14);
+      z-index: 40;
+      padding: 8px;
+    }
+    .persona-picker.open .persona-picker-menu { display: block; }
+    .persona-picker-market {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 10px 6px;
+      margin-top: 4px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--ink);
+    }
+    .persona-picker-market:first-child { margin-top: 0; }
+    .persona-picker-kind {
+      padding: 4px 10px 2px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .persona-picker-item {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 10px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+      font: inherit;
+    }
+    .persona-picker-item:hover,
+    .persona-picker-item:focus-visible {
+      background: var(--accent-soft);
+      outline: none;
+    }
+    .persona-picker-item.active {
+      background: var(--accent-soft);
+      box-shadow: inset 0 0 0 1px var(--accent-border);
+    }
+    .persona-picker-item-main { min-width: 0; }
+    .persona-picker-item-id {
+      display: block;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .persona-picker-item-desc {
+      display: block;
+      color: var(--ink-soft);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 240px;
+    }
+    .persona-picker-item-kind {
+      flex-shrink: 0;
+      font-size: 10px;
+      font-weight: 700;
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      font-weight: 600;
-      margin-right: 6px;
+      color: var(--ink-soft);
+    }
+    .persona-section-label {
+      margin: 4px 0 12px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
     }
     .badge {
       display: inline-block;
@@ -111,8 +364,30 @@
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-    .mode.dry { background: #fef3c7; color: var(--warn); }
-    .mode.live { background: #fee2e2; color: var(--down); }
+    .mode.dry { background: var(--dry-bg); color: var(--warn); }
+    .mode.live { background: var(--live-bg); color: var(--down); }
+    .theme-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--ink-soft);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .theme-toggle:hover {
+      background: var(--toggle-hover);
+      color: var(--ink);
+      text-decoration: none;
+    }
+    .theme-toggle svg { width: 18px; height: 18px; display: block; }
+    [data-theme="light"] .theme-toggle .icon-sun { display: none; }
+    [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
 
     main { max-width: 1180px; margin: 0 auto; padding: 28px 24px 64px; }
     h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.02em; }
@@ -175,7 +450,7 @@
       border-bottom: 1px solid var(--line);
       white-space: nowrap;
     }
-    td { padding: 10px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+    td { padding: 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
     tr:last-child td { border-bottom: none; }
     td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     .sym { font-weight: 600; }
@@ -185,15 +460,15 @@
       display: inline-block;
       padding: 2px 7px;
       border-radius: 5px;
-      background: #f3f4f6;
-      color: #374151;
+      background: var(--tag-bg);
+      color: var(--tag-ink);
       font-size: 11px;
       font-weight: 600;
       margin-right: 4px;
     }
-    .tag.buy { background: #dcfce7; color: var(--up); }
-    .tag.sell { background: #fee2e2; color: var(--down); }
-    .tag.rule { background: #ede9fe; color: #5b21b6; }
+    .tag.buy { background: var(--buy-bg); color: var(--up); }
+    .tag.sell { background: var(--sell-bg); color: var(--down); }
+    .tag.rule { background: var(--rule-bg); color: var(--rule-ink); }
 
     .proposal {
       border: 1px solid var(--line);
@@ -201,7 +476,7 @@
       padding: 16px;
       margin-bottom: 12px;
     }
-    .proposal.mandatory { border-left: 3px solid #5b21b6; }
+    .proposal.mandatory { border-left: 3px solid var(--rule-ink); }
     .proposal-head {
       display: flex;
       align-items: center;
@@ -216,8 +491,8 @@
       gap: 12px;
       margin: 12px 0;
       padding: 12px 0;
-      border-top: 1px solid #f3f4f6;
-      border-bottom: 1px solid #f3f4f6;
+      border-top: 1px solid var(--line-soft);
+      border-bottom: 1px solid var(--line-soft);
     }
     .proposal-grid .label {
       color: var(--ink-soft);
@@ -236,12 +511,12 @@
     }
     .warnings {
       background: var(--warn-bg);
-      border: 1px solid #fde68a;
+      border: 1px solid var(--warn-border);
       border-radius: 8px;
       padding: 10px 12px;
       margin-bottom: 12px;
       font-size: 13px;
-      color: #78350f;
+      color: var(--warn-ink);
     }
     .warnings ul { margin: 4px 0 0; padding-left: 18px; }
 
@@ -259,9 +534,9 @@
     }
     button:hover { background: var(--bg); }
     button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    button.primary:hover { background: #1d4ed8; }
-    button.danger { color: var(--down); border-color: #fecaca; }
-    button.danger:hover { background: #fef2f2; }
+    button.primary:hover { background: var(--accent-hover); }
+    button.danger { color: var(--down); border-color: var(--danger-border); }
+    button.danger:hover { background: var(--danger-hover); }
     button.small { padding: 5px 11px; font-size: 13px; }
     input[type=text] {
       font: inherit;
@@ -270,6 +545,8 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       min-width: 200px;
+      background: var(--input-bg);
+      color: var(--ink);
     }
     form.inline { display: inline-flex; gap: 8px; align-items: center; }
 
@@ -279,8 +556,8 @@
       line-height: 1.65;
     }
     pre.briefing {
-      background: #0f172a;
-      color: #e2e8f0;
+      background: var(--briefing-bg);
+      color: var(--briefing-ink);
       padding: 18px;
       border-radius: 10px;
       overflow-x: auto;
@@ -296,9 +573,13 @@
     }
 
     .chart { width: 100%; height: auto; }
-    .chart .grid { stroke: #f1f3f5; stroke-width: 1; }
-    .chart .baseline { stroke: #cbd5e1; stroke-width: 1; stroke-dasharray: 2 3; }
-    .chart .axis { fill: #9ca3af; font-size: 11px; }
+    .chart .grid { stroke: var(--chart-grid); stroke-width: 1; }
+    .chart .baseline { stroke: var(--chart-baseline); stroke-width: 1; stroke-dasharray: 2 3; }
+    .chart .axis { fill: var(--chart-axis); font-size: 11px; }
+    .chart .fund-line { stroke: var(--accent); fill: none; }
+    .chart .bench-line { stroke: var(--bench); fill: none; }
+    .swatch-fund { background: var(--accent); }
+    .swatch-bench { background: var(--bench); }
     .legend { display: flex; gap: 18px; font-size: 13px; color: var(--ink-soft); }
     .legend .swatch {
       display: inline-block;
@@ -312,10 +593,10 @@
     .bars { display: flex; flex-direction: column; gap: 7px; }
     .bar-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
     .bar-label { width: 190px; flex-shrink: 0; color: var(--ink-soft); }
-    .bar-track { flex: 1; background: #f3f4f6; border-radius: 4px; height: 16px; }
+    .bar-track { flex: 1; background: var(--bar-track); border-radius: 4px; height: 16px; }
     .bar-fill { display: block; height: 100%; border-radius: 4px; }
-    .bar-fill.pos { background: #93c5fd; }
-    .bar-fill.neg { background: #fca5a5; }
+    .bar-fill.pos { background: var(--bar-pos); }
+    .bar-fill.neg { background: var(--bar-neg); }
     .bar-value {
       width: 72px;
       text-align: right;
@@ -402,8 +683,8 @@
       text-transform: uppercase;
       margin-right: 8px;
     }
-    .region-in { background: #fef3c7; color: #92400e; }
-    .region-us { background: #dbeafe; color: #1e40af; }
+    .region-in { background: var(--region-in-bg); color: var(--region-in-ink); }
+    .region-us { background: var(--region-us-bg); color: var(--region-us-ink); }
 
     .region-tabs {
       display: flex;
@@ -420,8 +701,8 @@
       font-weight: 500;
     }
     .region-tabs a.active {
-      background: #eff6ff;
-      border-color: #bfdbfe;
+      background: var(--accent-soft);
+      border-color: var(--accent-border);
       color: var(--accent);
     }
 
@@ -434,7 +715,7 @@
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 16px;
-      background: #fafafa;
+      background: var(--persona-card);
     }
     .persona-card-head {
       display: flex;
@@ -474,7 +755,22 @@
       font-size: 13px;
       margin-bottom: 10px;
     }
-    .persona-link { font-size: 13px; font-weight: 600; }
+    .persona-name {
+      color: var(--accent);
+      font-weight: 650;
+      text-decoration: underline;
+      text-decoration-thickness: 1.5px;
+      text-underline-offset: 3px;
+    }
+    .persona-name::after {
+      content: " →";
+      font-weight: 500;
+      text-decoration: none;
+      letter-spacing: -0.02em;
+    }
+    .persona-name:hover {
+      color: var(--accent-hover);
+    }
     .tag {
       padding: 2px 7px;
       border-radius: 6px;
@@ -483,21 +779,21 @@
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
-    .tag-swing { background: #ecfdf5; color: #047857; }
-    .tag-intraday { background: #eef2ff; color: #4338ca; }
-    .tag-growth { background: #dbeafe; color: #1d4ed8; }
-    .tag-value { background: #fef3c7; color: #b45309; }
-    .tag-value_trap { background: #fee2e2; color: #b91c1c; }
-    .tag-neutral { background: #f3f4f6; color: #4b5563; }
-    .tag-unknown { background: #f3f4f6; color: #6b7280; }
+    .tag-swing { background: var(--tag-swing-bg); color: var(--tag-swing-ink); }
+    .tag-intraday { background: var(--tag-intraday-bg); color: var(--tag-intraday-ink); }
+    .tag-growth { background: var(--tag-growth-bg); color: var(--tag-growth-ink); }
+    .tag-value { background: var(--tag-value-bg); color: var(--tag-value-ink); }
+    .tag-value_trap { background: var(--tag-trap-bg); color: var(--tag-trap-ink); }
+    .tag-neutral { background: var(--tag-neutral-bg); color: var(--tag-neutral-ink); }
+    .tag-unknown { background: var(--tag-neutral-bg); color: var(--ink-soft); }
     .warn-text { color: var(--warn); font-weight: 600; }
     code.cmd {
       display: block;
       margin-top: 8px;
       padding: 8px 10px;
       border-radius: 8px;
-      background: #111827;
-      color: #f9fafb;
+      background: var(--code-bg);
+      color: var(--code-ink);
       font-size: 12px;
       overflow-x: auto;
     }
@@ -534,7 +830,7 @@
         margin-left: 0;
         order: 3;
       }
-      .persona-select {
+      .persona-picker {
         margin-left: auto;
       }
       .panel { padding: 16px; }
@@ -568,12 +864,17 @@
       form.inline input[type=text] {
         width: 100%;
       }
-      .persona-select {
+      .persona-picker {
         width: 100%;
+        max-width: none;
         margin-left: 0;
         order: 2;
       }
-      .persona-select select { width: 100%; }
+      .persona-picker-menu {
+        left: 0;
+        right: 0;
+        width: auto;
+      }
       .mode { margin-left: auto; }
       .legend {
         flex-wrap: wrap;
@@ -624,6 +925,21 @@
       {% else %}
         <span class="mode live" title="Approved orders are sent to the broker">Live</span>
       {% endif %}
+      <button
+        type="button"
+        class="theme-toggle"
+        id="theme-toggle"
+        aria-label="Toggle dark mode"
+        title="Toggle dark mode"
+      >
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5z"/>
+        </svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+        </svg>
+      </button>
       {% set qs = '?persona=' ~ current_persona if current_persona and current_persona != 'balanced' else '' %}
       <nav>
         <a href="/" class="{{ 'active' if page == 'overview' }}">Overview</a>
@@ -638,14 +954,77 @@
         <a href="/operations" class="{{ 'active' if page == 'operations' }}">Operations</a>
         <a href="/journal{{ qs }}" class="{{ 'active' if page == 'journal' }}">Journal</a>
       </nav>
-      {% if show_persona_selector and personas|length > 1 %}
-      <div class="persona-select">
-        <span class="persona-label">Persona</span>
-        <select onchange="(function(sel){var p=sel.value,path=window.location.pathname,params=new URLSearchParams(window.location.search);if(path.indexOf('/intraday/')===0&&p){window.location.href='/intraday/'+p+(params.get('region')?'?region='+params.get('region'):'');}else if(p){window.location.search='?persona='+p;}else{window.location.search='';}})(this)">
-          {% for p in personas %}
-            <option value="{{ p.id }}" {{ 'selected' if p.id == current_persona }}>{{ p.description }}</option>
+      {% if show_persona_selector and persona_groups %}
+      {% set current_item = personas|selectattr('id', 'equalto', current_persona)|first %}
+      <div class="persona-picker" id="persona-picker">
+        <button
+          type="button"
+          class="persona-picker-trigger"
+          id="persona-picker-trigger"
+          aria-haspopup="listbox"
+          aria-expanded="false"
+          aria-controls="persona-picker-menu"
+        >
+          <span class="persona-picker-copy">
+            <span class="persona-picker-meta">
+              {% if current_item %}
+                <span class="region-badge {{ current_item.badge_class }}">{{ current_item.market_label }}</span>
+                <span class="tag {{ 'tag-intraday' if current_item.intraday else 'tag-swing' }}">{{ current_item.kind_label }}</span>
+              {% else %}
+                <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
+                <span class="tag {{ 'tag-intraday' if is_intraday else 'tag-swing' }}">{{ 'Intraday' if is_intraday else 'Swing' }}</span>
+              {% endif %}
+            </span>
+            <span class="persona-picker-name">{{ current_persona }}</span>
+            <span class="persona-picker-desc">{{ persona_description }}</span>
+          </span>
+          <svg class="persona-picker-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M4 6l4 4 4-4"/>
+          </svg>
+        </button>
+        <div class="persona-picker-menu" id="persona-picker-menu" role="listbox" hidden>
+          {% for group in persona_groups %}
+            <div class="persona-picker-market">
+              <span class="region-badge {{ group.badge_class }}">{{ group.label }}</span>
+            </div>
+            {% if group.swing %}
+              <div class="persona-picker-kind">Swing</div>
+              {% for p in group.swing %}
+              <button
+                type="button"
+                class="persona-picker-item {{ 'active' if p.id == current_persona }}"
+                role="option"
+                data-persona="{{ p.id }}"
+                aria-selected="{{ 'true' if p.id == current_persona else 'false' }}"
+              >
+                <span class="persona-picker-item-main">
+                  <span class="persona-picker-item-id">{{ p.id }}</span>
+                  <span class="persona-picker-item-desc">{{ p.description }}</span>
+                </span>
+                <span class="persona-picker-item-kind">Swing</span>
+              </button>
+              {% endfor %}
+            {% endif %}
+            {% if group.intraday %}
+              <div class="persona-picker-kind">Intraday</div>
+              {% for p in group.intraday %}
+              <button
+                type="button"
+                class="persona-picker-item {{ 'active' if p.id == current_persona }}"
+                role="option"
+                data-persona="{{ p.id }}"
+                aria-selected="{{ 'true' if p.id == current_persona else 'false' }}"
+              >
+                <span class="persona-picker-item-main">
+                  <span class="persona-picker-item-id">{{ p.id }}</span>
+                  <span class="persona-picker-item-desc">{{ p.description }}</span>
+                </span>
+                <span class="persona-picker-item-kind">Intraday</span>
+              </button>
+              {% endfor %}
+            {% endif %}
           {% endfor %}
-        </select>
+        </div>
       </div>
       {% endif %}
     </div>
@@ -653,5 +1032,69 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+    (function () {
+      var btn = document.getElementById("theme-toggle");
+      if (btn) {
+        function currentTheme() {
+          return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+        }
+        function setTheme(theme) {
+          document.documentElement.setAttribute("data-theme", theme);
+          try { localStorage.setItem("theme", theme); } catch (e) {}
+          btn.setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+          btn.setAttribute("title", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+        }
+        btn.addEventListener("click", function () {
+          setTheme(currentTheme() === "dark" ? "light" : "dark");
+        });
+        setTheme(currentTheme());
+      }
+
+      var picker = document.getElementById("persona-picker");
+      var trigger = document.getElementById("persona-picker-trigger");
+      var menu = document.getElementById("persona-picker-menu");
+      if (!picker || !trigger || !menu) return;
+
+      function closePicker() {
+        picker.classList.remove("open");
+        trigger.setAttribute("aria-expanded", "false");
+        menu.hidden = true;
+      }
+      function openPicker() {
+        picker.classList.add("open");
+        trigger.setAttribute("aria-expanded", "true");
+        menu.hidden = false;
+      }
+      function navigateToPersona(personaId) {
+        if (!personaId) return;
+        var path = window.location.pathname;
+        var params = new URLSearchParams(window.location.search);
+        if (path.indexOf("/intraday/") === 0) {
+          var suffix = params.get("region") ? ("?region=" + params.get("region")) : "";
+          window.location.href = "/intraday/" + personaId + suffix;
+          return;
+        }
+        window.location.search = "?persona=" + encodeURIComponent(personaId);
+      }
+
+      trigger.addEventListener("click", function (event) {
+        event.stopPropagation();
+        if (picker.classList.contains("open")) closePicker();
+        else openPicker();
+      });
+      menu.addEventListener("click", function (event) {
+        var item = event.target.closest("[data-persona]");
+        if (!item) return;
+        navigateToPersona(item.getAttribute("data-persona"));
+      });
+      document.addEventListener("click", function (event) {
+        if (!picker.contains(event.target)) closePicker();
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") closePicker();
+      });
+    })();
+  </script>
 </body>
 </html>

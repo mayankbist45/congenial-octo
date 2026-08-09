@@ -14,11 +14,7 @@
 <div class="panel">
   <p class="empty">
     No intraday paper result saved yet for <code>{{ persona.persona_id }}</code>.
-  </p>
-  <code class="cmd">python run_daily.py analyse --persona {{ persona.persona_id }} --as-of YYYY-MM-DD</code>
-  <p class="muted" style="margin-top:12px">
-    Live polling during the session:
-    <code>python run_daily.py watch --persona {{ persona.persona_id }}</code>
+    Results appear after a watch session or backtest.
   </p>
 </div>
 {% else %}

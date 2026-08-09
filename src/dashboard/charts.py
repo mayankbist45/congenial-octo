@@ -16,10 +16,6 @@ PADDING_RIGHT = 16
 PADDING_TOP = 16
 PADDING_BOTTOM = 34
 
-FUND_COLOUR = "#2563eb"
-BENCHMARK_COLOUR = "#94a3b8"
-
-
 def _nice_bounds(values: Sequence[float]) -> Tuple[float, float]:
     """Pad the data range slightly so the line never touches the frame."""
     low = min(values)
@@ -59,13 +55,22 @@ def line_chart(
     benchmark_label: str = "Benchmark",
 ) -> str:
     """Render a rebased performance chart as an inline SVG string."""
-    if len(fund) < 2:
+    if not fund:
         return (
             '<p class="empty">Not enough history to chart yet. The line appears '
-            "once the fund has two or more daily observations.</p>"
+            "once the fund has daily NAV observations.</p>"
         )
 
+    # A single NAV day still gets a flat line so the panel is never blank.
+    dates = list(dates)
+    fund = list(fund)
+    if len(fund) == 1:
+        dates = [dates[0], dates[0]] if dates else ["", ""]
+        fund = [fund[0], fund[0]]
+
     benchmark = list(benchmark or [])
+    if len(benchmark) == 1:
+        benchmark = [benchmark[0], benchmark[0]]
     combined = list(fund) + (benchmark if len(benchmark) == len(fund) else [])
     low, high = _nice_bounds(combined)
 
@@ -100,14 +105,13 @@ def line_chart(
 
     if len(benchmark) == len(fund):
         parts.append(
-            f'<path d="{_path(_points(benchmark, low, high))}" fill="none" '
-            f'stroke="{BENCHMARK_COLOUR}" stroke-width="1.6" '
-            f'stroke-dasharray="4 3" />'
+            f'<path d="{_path(_points(benchmark, low, high))}" class="bench-line" '
+            f'style="stroke:var(--bench)" stroke-width="1.6" stroke-dasharray="4 3" />'
         )
 
     parts.append(
-        f'<path d="{_path(fund_points)}" fill="none" stroke="{FUND_COLOUR}" '
-        f'stroke-width="2.2" stroke-linejoin="round" />'
+        f'<path d="{_path(fund_points)}" class="fund-line" '
+        f'style="stroke:var(--accent)" stroke-width="2.2" stroke-linejoin="round" />'
     )
 
     # Date labels at the ends and midpoint only; a dense axis is unreadable.

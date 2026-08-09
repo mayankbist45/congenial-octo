@@ -553,6 +553,25 @@ def get_persona_config(
     base_raw = {k: v for k, v in base.raw.items() if k != "personas"}
     merged = _deep_merge(base_raw, overrides)
     merged["personas"] = base.raw.get("personas", {})
+
+    # Market fund defaults beat India-centric settings.yaml when the persona
+    # did not override them (e.g. US books → S&P 500 / ^GSPC).
+    from src.market.registry import get_market, resolve_market_id
+
+    legacy = str(merged.get("connectors", {}).get("market_region", "IN")).upper()
+    market_id = resolve_market_id(persona_id, persona_def, legacy_region=legacy)
+    market_fund = get_market(market_id).fund or {}
+    persona_fund = overrides.get("fund") if isinstance(overrides.get("fund"), dict) else {}
+    fund = merged.setdefault("fund", {})
+    if not isinstance(fund, dict):
+        fund = {}
+        merged["fund"] = fund
+    for key in ("benchmark_symbol", "benchmark_label", "base_currency"):
+        if key in persona_fund:
+            continue
+        if key in market_fund:
+            fund[key] = market_fund[key]
+
     _sync_mandate_from_fund(merged)
 
     secrets = base.secrets

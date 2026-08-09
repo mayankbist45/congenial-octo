@@ -4,39 +4,11 @@
 {% block content %}
 <h1>Proposals</h1>
 
-{% if is_intraday %}
 <p class="subtitle">
   <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
-  Intraday personas do not use the swing approval gate.
-  Trades are placed by the live watch loop (paper or broker mode).
-  <a href="/intraday/{{ current_persona }}">View intraday session</a>
-</p>
-
-<div class="panel">
-  {% if intraday_summary %}
-  <p class="muted" style="margin:0 0 12px">
-    {% if intraday_summary.active %}Session active{% else %}Session ended{% endif %}
-    {% if intraday_summary.last_scan_at %} &middot; last scan {{ intraday_summary.last_scan_at }}{% endif %}
-    &middot; {{ intraday_summary.total_trades }} trade(s) today
-  </p>
-  {% if intraday_summary.total_trades == 0 %}
-  <p class="empty" style="margin:0">
-    No intraday trades recorded yet for this session.
-  </p>
-  {% endif %}
-  {% else %}
-  <p class="empty" style="margin:0">
-    No intraday session data saved yet for <code>{{ current_persona }}</code>.
-  </p>
-  <code class="cmd">python run_daily.py watch --persona {{ current_persona }}</code>
-  {% endif %}
-</div>
-
-{% else %}
-
-<p class="subtitle">
-  Nothing is sent to the broker until you approve it here. Approved trades are
-  placed on the next execution pass.
+  Swing books only. Nothing is sent to the broker until you approve it here
+  (or paper auto-approve runs). Approved trades are placed on the next execution pass.
+  Intraday books skip this page and trade from the watch loop.
 </p>
 
 <div class="panel">
@@ -186,5 +158,4 @@
   {% endif %}
 </div>
 
-{% endif %}
 {% endblock %}

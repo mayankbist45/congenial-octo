@@ -141,7 +141,11 @@ class DashboardService:
         mandate_label = self._config.mandate.get("benchmark_label")
         if mandate_label:
             return str(mandate_label)
-        return "Nifty 500"
+        market_fund = getattr(self._config.market, "fund", None) or {}
+        market_label = market_fund.get("benchmark_label")
+        if market_label:
+            return str(market_label)
+        return "Benchmark"
 
     @property
     def is_dry_run(self) -> bool:
@@ -251,8 +255,11 @@ class DashboardService:
                 float(latest["total_value"]) / float(previous["total_value"]) - 1.0
             ) * 100.0
 
-        total_value = float(latest["total_value"]) if latest else 0.0
-        cash = float(latest["cash"]) if latest else 0.0
+        capital = float(self._config.secrets.initial_capital)
+        # No NAV yet: still seed cash/total from mandate capital so Overview
+        # can show the same placeholder shell as a cash-only book.
+        total_value = float(latest["total_value"]) if latest else capital
+        cash = float(latest["cash"]) if latest else capital
         invested_value = float(latest["invested_value"]) if latest else 0.0
         unrealised_pnl = float(latest["unrealised_pnl"] or 0.0) if latest else 0.0
 
@@ -274,11 +281,10 @@ class DashboardService:
             daily_change_pct = None
             reconstructed = True
 
-        capital = float(self._config.secrets.initial_capital)
         return_since_inception_pct = (
             (total_value / capital - 1.0) * 100.0
             if capital > 0 and total_value > 0
-            else None
+            else 0.0 if capital > 0 else None
         )
         perf = self.performance()
         total_return_pct = perf.get("total_return_pct")
@@ -291,6 +297,8 @@ class DashboardService:
                 and abs(return_since_inception_pct) > 0.005
             ):
                 total_return_pct = return_since_inception_pct
+        if total_return_pct is None and not latest and not holdings:
+            total_return_pct = 0.0
 
         warnings: List[str] = []
         latest_nav_date = str(latest["run_date"]) if latest else None
@@ -902,7 +910,8 @@ class DashboardService:
             market_id = row.get("market_id") or "india_equity"
             grouped.setdefault(market_id, []).append(row)
         for rows in grouped.values():
-            rows.sort(key=lambda r: (r.get("intraday", False), r.get("persona_id", "")))
+            # Swing first, then intraday; stable by persona id.
+            rows.sort(key=lambda r: (bool(r.get("intraday")), r.get("persona_id", "")))
         return grouped
 
     def personas_by_market_legacy(self) -> Dict[str, List[Dict[str, Any]]]:
@@ -912,7 +921,7 @@ class DashboardService:
             region = row.get("region", "IN")
             grouped.setdefault(region, []).append(row)
         for rows in grouped.values():
-            rows.sort(key=lambda r: (r.get("intraday", False), r.get("persona_id", "")))
+            rows.sort(key=lambda r: (bool(r.get("intraday")), r.get("persona_id", "")))
         return grouped
 
     def intraday_personas(

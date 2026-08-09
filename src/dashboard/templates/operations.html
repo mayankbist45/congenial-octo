@@ -40,10 +40,10 @@
     letter-spacing: 0.05em;
     text-transform: uppercase;
   }
-  .ops-state.healthy { background: #dcfce7; color: var(--up); }
-  .ops-state.late { background: #fef3c7; color: var(--warn); }
-  .ops-state.failed { background: #fee2e2; color: var(--down); }
-  .ops-state.unknown { background: #f3f4f6; color: var(--ink-soft); }
+  .ops-state.healthy { background: var(--buy-bg); color: var(--up); }
+  .ops-state.late { background: var(--dry-bg); color: var(--warn); }
+  .ops-state.failed { background: var(--sell-bg); color: var(--down); }
+  .ops-state.unknown { background: var(--tag-bg); color: var(--ink-soft); }
   .ops-meta {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -65,8 +65,8 @@
     margin-top: 12px;
     padding: 10px 12px;
     border-radius: 8px;
-    background: #fff7ed;
-    color: #9a3412;
+    background: var(--warn-bg);
+    color: var(--warn-ink);
     font-size: 13px;
   }
 </style>
