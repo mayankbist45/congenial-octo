@@ -75,8 +75,11 @@ fi
 # --- Journal database -------------------------------------------------------
 chown -R "$APP_USER":"$SHARED_GROUP" "$PROJECT_DIR"
 find "$PROJECT_DIR" -type d -exec chmod 2775 {} +
-find "$PROJECT_DIR" -type f ! -path "$PROJECT_DIR/.env" -exec chmod 664 {} +
+find "$PROJECT_DIR" -type f ! -path "$PROJECT_DIR/.env" ! -path "$PROJECT_DIR/.venv/*" -exec chmod 664 {} +
 find "$PROJECT_DIR/scripts" -type f -name '*.sh' -exec chmod 775 {} + 2>/dev/null || true
+if [ -d "$PROJECT_DIR/.venv/bin" ]; then
+    find "$PROJECT_DIR/.venv/bin" -type f -exec chmod 775 {} +
+fi
 chmod -R g+rw "$PROJECT_DIR/data" "$PROJECT_DIR/logs" 2>/dev/null || true
 chmod g+s "$PROJECT_DIR" "$PROJECT_DIR/data" "$PROJECT_DIR/logs" 2>/dev/null || true
 as_app mkdir -p "$PROJECT_DIR/data/backups"
@@ -142,7 +145,7 @@ chmod 644 /etc/cron.d/mutualfund
 echo "  cron installed from config/markets (see data/generated_cron.txt)"
 
 # Intraday watch systemd units (one per market with intraday personas).
-for market_id in india_equity us_equity; do
+for market_id in india_equity us_equity crypto_spot_us; do
     market_unit="${market_id//_/-}"
     unit_file="/etc/systemd/system/mutualfund-${market_unit}-intraday-watch.service"
     as_app "$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/scripts/generate_schedule.py" \

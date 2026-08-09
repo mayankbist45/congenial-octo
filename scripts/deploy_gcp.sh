@@ -82,8 +82,9 @@ _apply_shared_permissions() {
     ssh_vm "sudo groupadd fund 2>/dev/null || true &&
             sudo chown -R \$(id -un):fund '$REMOTE_DIR' &&
             sudo find '$REMOTE_DIR' -type d -exec chmod 2775 {} + &&
-            sudo find '$REMOTE_DIR' -type f ! -path '$REMOTE_DIR/.env' -exec chmod 664 {} + &&
+            sudo find '$REMOTE_DIR' -type f ! -path '$REMOTE_DIR/.env' ! -path '$REMOTE_DIR/.venv/*' -exec chmod 664 {} + &&
             sudo find '$REMOTE_DIR/scripts' -type f -name '*.sh' -exec chmod 775 {} + 2>/dev/null || true &&
+            if [ -d '$REMOTE_DIR/.venv/bin' ]; then sudo find '$REMOTE_DIR/.venv/bin' -type f -exec chmod 775 {} +; fi &&
             sudo chmod -R g+rw '$REMOTE_DIR/data' '$REMOTE_DIR/logs' 2>/dev/null || true &&
             if [ -f '$REMOTE_DIR/.env' ]; then
                 sudo chgrp fund '$REMOTE_DIR/.env' && chmod 640 '$REMOTE_DIR/.env';
