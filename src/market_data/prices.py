@@ -239,7 +239,9 @@ class PriceService:
 
     def benchmark_series(self) -> Optional[pd.Series]:
         """Closing price series for the fund's benchmark index."""
-        symbol = str(self._config.get("fund.benchmark_symbol", "^CRSLDX"))
+        market_fund = getattr(self._config.market, "fund", None) or {}
+        default_symbol = str(market_fund.get("benchmark_symbol") or "^CRSLDX")
+        symbol = str(self._config.get("fund.benchmark_symbol", default_symbol))
         days = int(
             self._config.get("market_data.benchmark_history_days", 750) or 750
         )

@@ -83,11 +83,83 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             _persona_services[persona] = DashboardService(config=pcfg)
         return _persona_services[persona]
 
-    def _persona_nav_items() -> List[Dict[str, str]]:
-        return [
-            {"id": pid, "description": persona_description(pid)}
-            for pid in enabled_personas()
-        ]
+    _MARKET_NAV_ORDER = ("india_equity", "us_equity", "crypto_spot_us")
+
+    def _persona_nav_groups() -> List[Dict[str, Any]]:
+        """Persona picker groups: India → US → Crypto, Swing then Intraday."""
+        from src.market.registry import get_market, list_markets
+
+        buckets: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        for pid in enabled_personas():
+            try:
+                pcfg = get_persona_config(pid, base=config)
+            except ValueError:
+                continue
+            market_id = pcfg.market_id
+            is_intraday = bool(pcfg.get("intraday.enabled", False))
+            kind = "intraday" if is_intraday else "swing"
+            try:
+                market = get_market(market_id)
+                market_label_text = market.label
+                badge_class = market.display.badge_class
+            except ValueError:
+                market_label_text = market_id
+                badge_class = "region-in"
+            item = {
+                "id": pid,
+                "description": persona_description(pid),
+                "short_name": pid,
+                "intraday": is_intraday,
+                "kind": kind,
+                "kind_label": "Intraday" if is_intraday else "Swing",
+                "market_id": market_id,
+                "market_label": market_label_text,
+                "badge_class": badge_class,
+                "region": pcfg.market_region,
+            }
+            bucket = buckets.setdefault(market_id, {"swing": [], "intraday": []})
+            bucket[kind].append(item)
+
+        for bucket in buckets.values():
+            bucket["swing"].sort(key=lambda r: r["id"])
+            bucket["intraday"].sort(key=lambda r: r["id"])
+
+        known = {m.id for m in list_markets()}
+        ordered_ids = [mid for mid in _MARKET_NAV_ORDER if mid in buckets]
+        ordered_ids.extend(
+            sorted(mid for mid in buckets if mid not in _MARKET_NAV_ORDER and mid in known)
+        )
+        ordered_ids.extend(
+            sorted(mid for mid in buckets if mid not in ordered_ids)
+        )
+
+        groups: List[Dict[str, Any]] = []
+        for market_id in ordered_ids:
+            bucket = buckets[market_id]
+            try:
+                market = get_market(market_id)
+                label = market.label
+                badge_class = market.display.badge_class
+            except ValueError:
+                label = market_id
+                badge_class = "region-in"
+            groups.append(
+                {
+                    "market_id": market_id,
+                    "label": label,
+                    "badge_class": badge_class,
+                    "swing": bucket["swing"],
+                    "intraday": bucket["intraday"],
+                }
+            )
+        return groups
+
+    def _persona_nav_items() -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        for group in _persona_nav_groups():
+            items.extend(group["swing"])
+            items.extend(group["intraday"])
+        return items
 
     def _persona_context(
         persona: Optional[str],
@@ -124,6 +196,22 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         page = context.get("page", "")
         if show_persona_selector is None:
             show_persona_selector = page not in ("personas", "intraday")
+        swing_only_picker = bool(context.pop("swing_only_picker", False))
+        persona_groups = _persona_nav_groups()
+        if swing_only_picker:
+            persona_groups = [
+                {
+                    **group,
+                    "swing": list(group.get("swing") or []),
+                    "intraday": [],
+                }
+                for group in persona_groups
+                if group.get("swing")
+            ]
+        personas = []
+        for group in persona_groups:
+            personas.extend(group.get("swing") or [])
+            personas.extend(group.get("intraday") or [])
         base = {
             "fund_name": header_fund_name or svc.fund_name,
             "benchmark_label": svc.benchmark_label,
@@ -131,7 +219,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             "pending_count": pending_count,
             "current_persona": persona_id,
             "persona_description": persona_description(persona_id),
-            "personas": _persona_nav_items(),
+            "personas": personas,
+            "persona_groups": persona_groups,
             "currency": currency,
             "region": region,
             "region_label": region_label(region),
@@ -158,15 +247,35 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "excess_return_pct": None,
                 "benchmark_return_pct": None,
             }
-            chart_html = charts.line_chart([], [], [], svc.benchmark_label)
+            chart_html = ""
         elif is_intraday:
-            overview_data = {"has_data": False, "is_intraday": True}
+            region = pcfg.market_region
+            capital = float(pcfg.secrets.initial_capital)
+            overview_data = {
+                "has_data": False,
+                "is_intraday": True,
+                "region": region,
+                "region_label": region_label(region),
+                "broker_label": broker_label(pcfg.broker_provider),
+                "currency": persona_currency(pcfg, region),
+                "starting_capital": capital,
+                "total_net_pnl": 0.0,
+                "total_return_pct": 0.0,
+                "total_trades": 0,
+                "win_rate_pct": 0.0,
+                "expectancy_r": 0.0,
+                "start_date": None,
+                "end_date": None,
+                "active": False,
+                "last_scan_at": None,
+                "lockout_reason": None,
+            }
             performance_data = {
-                "total_return_pct": None,
+                "total_return_pct": 0.0,
                 "excess_return_pct": None,
                 "benchmark_return_pct": None,
             }
-            chart_html = charts.line_chart([], [], [], svc.benchmark_label)
+            chart_html = ""
         else:
             overview_data = svc.overview()
             performance_data = {
@@ -182,12 +291,6 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 svc.benchmark_label,
             )
 
-        intraday_books = (
-            []
-            if is_intraday
-            else default_service.intraday_personas()
-        )
-
         return render(
             request,
             "overview.html",
@@ -198,7 +301,6 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "performance": performance_data,
                 "chart": chart_html,
                 "digest": svc.digest() if not is_intraday else None,
-                "intraday_books": intraday_books,
                 "region_labels": {"IN": region_label("IN"), "US": region_label("US")},
             },
             service=svc,
@@ -209,17 +311,29 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         request: Request, persona: Optional[str] = Query(default=None)
     ) -> HTMLResponse:
         svc, pcfg, is_intraday, intraday_summary = _persona_context(persona)
+        # Proposals is swing-only — bounce intraday picks to the first swing book.
+        if is_intraday:
+            swing_groups = _persona_nav_groups()
+            swing_ids = [
+                item["id"]
+                for group in swing_groups
+                for item in (group.get("swing") or [])
+            ]
+            fallback = "balanced" if "balanced" in swing_ids else (swing_ids[0] if swing_ids else None)
+            if fallback:
+                return RedirectResponse(url=f"/proposals?persona={fallback}", status_code=302)
         return render(
             request,
             "proposals.html",
             {
                 "page": "proposals",
-                "proposals": [] if is_intraday else svc.pending_proposals(),
-                "approved": [] if is_intraday else svc.approved_proposals(),
-                "history": [] if is_intraday else svc.recent_decisions(),
+                "proposals": svc.pending_proposals(),
+                "approved": svc.approved_proposals(),
+                "history": svc.recent_decisions(),
                 "mandate": svc.mandate_summary(),
                 "analytics": svc.analytics_summary(),
-                "intraday_summary": intraday_summary,
+                "intraday_summary": None,
+                "swing_only_picker": True,
             },
             service=svc,
         )
@@ -236,6 +350,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             if is_intraday
             else []
         )
+        completed_trades = (
+            (intraday_summary or {}).get("trades")
+            or (intraday_summary or {}).get("completed_trades")
+            or []
+            if is_intraday
+            else []
+        )
         return render(
             request,
             "holdings.html",
@@ -243,6 +364,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "page": "holdings",
                 "holdings": holdings_rows,
                 "open_positions": open_positions,
+                "completed_trades": completed_trades,
                 "intraday_summary": intraday_summary,
                 "sectors": sectors,
                 "sector_chart": charts.bar_chart(
@@ -285,17 +407,24 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
         if is_intraday and intraday_summary:
             perf = svc.intraday_performance(intraday_summary)
-            chart_html = charts.line_chart([], [], [], svc.benchmark_label)
+            chart_html = ""
             attribution: List[Dict[str, Any]] = []
             attribution_chart = ""
             risk = None
+            completed_trades = (
+                intraday_summary.get("trades")
+                or intraday_summary.get("completed_trades")
+                or []
+            )
         elif is_intraday:
             perf = {"is_intraday": True, "start_date": None, "end_date": None}
-            chart_html = charts.line_chart([], [], [], svc.benchmark_label)
+            chart_html = ""
             attribution = []
             attribution_chart = ""
             risk = None
+            completed_trades = []
         else:
+            completed_trades = []
             perf = svc.performance()
             series = svc.nav_series()
             chart_html = charts.line_chart(
@@ -322,6 +451,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "attribution_chart": attribution_chart,
                 "risk": risk,
                 "intraday_summary": intraday_summary,
+                "completed_trades": completed_trades,
             },
             service=svc,
         )
@@ -330,7 +460,27 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     def journal(
         request: Request, persona: Optional[str] = Query(default=None)
     ) -> HTMLResponse:
-        svc = _get_service(persona)
+        svc, pcfg, is_intraday, intraday_summary = _persona_context(persona)
+        if is_intraday:
+            completed_trades = (
+                (intraday_summary or {}).get("trades")
+                or (intraday_summary or {}).get("completed_trades")
+                or []
+            )
+            skipped = (intraday_summary or {}).get("skipped_signals") or []
+            return render(
+                request,
+                "journal.html",
+                {
+                    "page": "journal",
+                    "trades": [],
+                    "runs": [],
+                    "intraday_summary": intraday_summary,
+                    "completed_trades": completed_trades,
+                    "skipped_signals": skipped,
+                },
+                service=svc,
+            )
         return render(
             request,
             "journal.html",
@@ -338,6 +488,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 "page": "journal",
                 "trades": svc.trades(),
                 "runs": svc.runs(),
+                "intraday_summary": None,
+                "completed_trades": [],
+                "skipped_signals": [],
             },
             service=svc,
         )

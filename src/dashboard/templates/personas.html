@@ -22,11 +22,23 @@
       <span class="note">{{ rows | length }} persona{{ 's' if rows | length != 1 }}</span>
     </div>
 
+    {% set swing_rows = rows | rejectattr('intraday') | list %}
+    {% set intraday_rows = rows | selectattr('intraday') | list %}
+
+    {% for section_label, section_rows in [('Swing', swing_rows), ('Intraday', intraday_rows)] %}
+    {% if section_rows %}
+    <h3 class="persona-section-label">{{ section_label }}</h3>
     <div class="persona-grid">
-      {% for p in rows %}
+      {% for p in section_rows %}
       <article class="persona-card">
         <div class="persona-card-head">
-          <h3>{{ p.persona_id }}</h3>
+          <h3>
+            {% if p.intraday %}
+              <a class="persona-name" href="/intraday/{{ p.persona_id }}">{{ p.persona_id }}</a>
+            {% else %}
+              <a class="persona-name" href="/?persona={{ p.persona_id }}">{{ p.persona_id }}</a>
+            {% endif %}
+          </h3>
           {% if p.intraday %}
             <span class="tag tag-intraday">Intraday</span>
           {% else %}
@@ -43,7 +55,6 @@
         </dl>
 
         {% if p.intraday %}
-          <a class="persona-link" href="/intraday/{{ p.persona_id }}">View intraday &rarr;</a>
           {% if p.intraday_has_results %}
             {% set s = p.intraday_summary %}
             <div class="persona-stats">
@@ -54,7 +65,7 @@
               <span>{{ s.win_rate_pct | pct(1) }} win</span>
             </div>
           {% else %}
-            <p class="muted">No saved run yet — backtest or watch to populate results.</p>
+            <p class="muted">No saved run yet.</p>
           {% endif %}
         {% else %}
           {% if p.has_data %}
@@ -67,12 +78,13 @@
             </div>
           {% else %}
             <p class="muted">No journal run yet for this swing book.</p>
-            <code class="cmd">python run_daily.py analyse --persona {{ p.persona_id }}</code>
           {% endif %}
         {% endif %}
       </article>
       {% endfor %}
     </div>
+    {% endif %}
+    {% endfor %}
   </div>
   {% endif %}
 {% endfor %}
