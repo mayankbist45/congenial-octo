@@ -71,12 +71,12 @@ def test_build_kronos_market_features_reports_bullish_bias():
     pred_idx = pd.date_range(history.index[-1] + pd.Timedelta(minutes=5), periods=3, freq="5min")
     forecast = pd.DataFrame(
         {
-            "open": [101.0, 101.2, 101.3],
-            "high": [101.3, 101.5, 101.7],
-            "low": [100.9, 101.0, 101.2],
-            "close": [101.2, 101.4, 101.6],
+            "open": [102.0, 102.2, 102.3],
+            "high": [102.3, 102.5, 102.7],
+            "low": [101.9, 102.0, 102.2],
+            "close": [102.2, 102.4, 102.6],
             "volume": [100_000, 100_000, 100_000],
-            "amount": [10_120_000, 10_140_000, 10_160_000],
+            "amount": [10_220_000, 10_240_000, 10_260_000],
         },
         index=pred_idx,
     )
