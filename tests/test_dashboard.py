@@ -479,7 +479,12 @@ def test_intraday_page_lists_regions(client) -> None:
     body = client.get("/intraday").text
     assert "Intraday" in body
     assert "calan_us" in body
-    assert "revert" in body
+    assert "mayank_us" in body
+    assert "calan" in body
+    assert "mayank" in body
+    # Extra paper books are disabled — keep the page focused.
+    assert "revert" not in body
+    assert "flux_us" not in body
 
 
 def test_operations_page_renders_structured_machine_health(client, temp_config) -> None:
