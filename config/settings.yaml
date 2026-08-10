@@ -252,10 +252,12 @@ execution:
   max_slippage_pct: 1.0
 
 angelone:
-  # Historical getCandleData is throttled per SmartAPI app. A second API key
-  # (ANGELONE_DATA2_* in .env) doubles throughput via candle_pool + budget coordinator.
-  # Set false to use primary key only when dual-key hits IP-level limits.
-  use_candle_pool: true
+  # SmartAPI apps are throttled separately. Default split:
+  #   - primary (ANGELONE_*)       → intraday candles / paper watches
+  #   - data2 (ANGELONE_DATA2_*)   → swing analyse/close via build_broker
+  # Set true only if you want both keys pooled for intraday candles (then swing
+  # shares the data2 quota again).
+  use_candle_pool: false
   min_call_interval_seconds: 1.0
   candle_call_interval_seconds: 4.0
   candle_budget_spacing_seconds: 6.0
