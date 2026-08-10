@@ -33,7 +33,7 @@ scheduling:
   swing_cycle: "09:00"
   swing_close: "17:10"
   intraday_watch:
-    personas: [crypto_momentum_paper]
+    personas: []
     start_offset_min: 0
     stop_offset_min: 0
 display:

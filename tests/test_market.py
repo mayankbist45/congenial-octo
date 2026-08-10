@@ -106,6 +106,6 @@ def test_enabled_intraday_personas_respects_market_schedule():
     india = enabled_intraday_personas("india_equity")
     us = enabled_intraday_personas("us_equity")
     assert india == ["calan", "mayank"]
-    assert "mayank_us" in us
-    assert "calan_us" in us
+    assert us == ["calan_us", "mayank_us"]
     assert "flux" not in india
+    assert enabled_intraday_personas("crypto_spot_us") == []

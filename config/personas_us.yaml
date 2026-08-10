@@ -275,7 +275,7 @@ personas:
         value_confidence_penalty: 0.05
 
   revert_us:
-    enabled: true
+    enabled: false
     description: "Revert US — VWAP/gap fade intraday via Alpaca"
     capital_usd: 30000
     fund:
@@ -313,7 +313,7 @@ personas:
         min_trade_confidence: 0.55
 
   flux_us:
-    enabled: true
+    enabled: false
     description: "Flux US — OFI proxy intraday via Alpaca"
     capital_usd: 20000
     fund:
@@ -347,7 +347,7 @@ personas:
         min_trade_confidence: 0.50
 
   spread_us:
-    enabled: true
+    enabled: false
     description: "Spread US — intraday pairs via Alpaca"
     capital_usd: 40000
     fund:
@@ -382,7 +382,7 @@ personas:
         min_trade_confidence: 0.50
 
   slice_us:
-    enabled: true
+    enabled: false
     description: "Slice US — TWAP/VWAP execution via Alpaca"
     capital_usd: 100000
     fund:
