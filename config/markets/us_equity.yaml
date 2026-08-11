@@ -35,6 +35,7 @@ scheduling:
     personas: [calan_us, mayank_us]
     start_offset_min: -10
     stop_offset_min: 15
+    persona_start_stagger_sec: 15
 display:
   badge_class: region-us
   broker_label: "Alpaca"

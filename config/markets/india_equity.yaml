@@ -35,6 +35,8 @@ scheduling:
     personas: [calan, mayank]
     start_offset_min: -5
     stop_offset_min: 5
+    # Stagger Angel One generateSession so calan/mayank don't race at 09:10.
+    persona_start_stagger_sec: 60
 display:
   badge_class: region-in
   broker_label: "Angel One"
