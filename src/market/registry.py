@@ -46,6 +46,8 @@ class IntradayWatchSchedule:
     personas: List[str]
     start_offset_min: int = -5
     stop_offset_min: int = 5
+    # Delay between launching each persona watch (avoids broker login rate limits).
+    persona_start_stagger_sec: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,9 @@ def _load_market_yaml(path: Path) -> Market:
             personas=[str(p) for p in intraday_raw.get("personas", [])],
             start_offset_min=int(intraday_raw.get("start_offset_min", -5)),
             stop_offset_min=int(intraday_raw.get("stop_offset_min", 5)),
+            persona_start_stagger_sec=int(
+                intraday_raw.get("persona_start_stagger_sec", 0)
+            ),
         )
     display_raw = raw.get("display", {}) or {}
 
