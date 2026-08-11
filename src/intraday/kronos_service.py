@@ -83,6 +83,8 @@ class KronosService:
             repo_path = str(self._config.get("intraday.kronos.repo_path", "") or "").strip()
             if repo_path:
                 candidate = Path(repo_path)
+                if not candidate.is_absolute():
+                    candidate = self._config.root / candidate
                 if candidate.exists():
                     sys.path.insert(0, str(candidate))
             from model import Kronos, KronosPredictor, KronosTokenizer  # type: ignore

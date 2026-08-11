@@ -265,7 +265,7 @@ personas:
       kronos:
         enabled: true
         mode: "shadow"
-        repo_path: ""
+        repo_path: "../Kronos"
         model_id: "NeoQuasar/Kronos-small"
         tokenizer_id: "NeoQuasar/Kronos-Tokenizer-base"
         device: "cpu"

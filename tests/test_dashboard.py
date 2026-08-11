@@ -237,6 +237,17 @@ def test_holdings_page_lists_positions_with_risk_metrics(client, repo) -> None:
     assert "desktop-only" in body
 
 
+def test_holdings_page_shows_thesis_without_rendering_a_second_holdings_section(
+    client, repo
+) -> None:
+    seed_history(repo)
+
+    body = client.get("/holdings").text
+
+    assert "No thesis recorded." in body
+    assert "Why the fund owns these" not in body
+
+
 def test_performance_page_reports_excess_return(client, repo) -> None:
     seed_history(repo)
 
