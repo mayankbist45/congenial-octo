@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.broker.factory import build_market_data_broker
 from src.config import get_persona_config
-from src.logging_setup import setup_logging
+from src.logging_setup import bind_log_context, make_run_label, setup_logging
 from src.universe import load_universe
 
 
@@ -33,6 +33,13 @@ def main() -> int:
     setup_logging(
         level=str(config.get("logging.level", "INFO")),
         log_file=config.path("logging.file", "data/fund.log"),
+        persona_log_dir=config.path("logging.persona_dir", "data/logs/personas"),
+    )
+    bind_log_context(
+        persona_id=config.persona_id,
+        run_label=make_run_label("angelone_rate_probe", config.persona_id),
+        command="angelone_rate_probe",
+        market_id=config.market_id,
     )
     if args.spacing is not None:
         config.raw.setdefault("angelone", {})["candle_budget_spacing_seconds"] = args.spacing

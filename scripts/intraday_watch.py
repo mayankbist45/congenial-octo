@@ -13,7 +13,7 @@ from src.broker.factory import build_broker
 from src.config import get_persona_config
 from src.intraday.data import IntradayDataService
 from src.intraday.watch import IntradayWatchEngine
-from src.logging_setup import setup_logging
+from src.logging_setup import bind_log_context, make_run_label, setup_logging
 from src.universe import load_universe
 
 
@@ -23,9 +23,18 @@ def main() -> None:
     parser.add_argument("--max-symbols", type=int, default=None)
     parser.add_argument("--force-simulated", action="store_true")
     args = parser.parse_args()
-    setup_logging(level="INFO")
-
     config = get_persona_config(args.persona)
+    setup_logging(
+        level=str(config.get("logging.level", "INFO")),
+        log_file=config.path("logging.file", "data/fund.log"),
+        persona_log_dir=config.path("logging.persona_dir", "data/logs/personas"),
+    )
+    bind_log_context(
+        persona_id=config.persona_id,
+        run_label=make_run_label("intraday_watch", config.persona_id),
+        command="intraday_watch",
+        market_id=config.market_id,
+    )
     broker = build_broker(config, force_simulated=args.force_simulated)
     broker.connect()
     try:

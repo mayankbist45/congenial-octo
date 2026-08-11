@@ -19,7 +19,7 @@ from src.intraday.data import IntradayDataService
 from src.intraday.reporting import save_summary, summarize_result
 from src.intraday.simulator import IntradaySimulator
 from src.intraday.spread_math import scan_symbols
-from src.logging_setup import setup_logging
+from src.logging_setup import bind_log_context, make_run_label, setup_logging
 from src.universe import load_universe
 
 
@@ -79,6 +79,13 @@ def main() -> int:
     setup_logging(
         level=str(config.get("logging.level", "INFO")),
         log_file=config.path("logging.file", "data/fund.log"),
+        persona_log_dir=config.path("logging.persona_dir", "data/logs/personas"),
+    )
+    bind_log_context(
+        persona_id=config.persona_id,
+        run_label=make_run_label("intraday_backtest", config.persona_id),
+        command="intraday_backtest",
+        market_id=config.market_id,
     )
 
     start = date.fromisoformat(args.start)

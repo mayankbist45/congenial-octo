@@ -313,6 +313,7 @@ database:
 logging:
   level: "INFO"
   file: "data/fund.log"
+  persona_dir: "data/logs/personas"
 
 # ---------------------------------------------------------------------------
 # Personas — named investment strategies that each run as an independent fund.
