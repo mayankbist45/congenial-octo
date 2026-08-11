@@ -387,7 +387,7 @@ personas:
         gst_pct: 18.0
 
   revert:
-    enabled: true
+    enabled: false
     description: "Revert — intraday VWAP/gap fade (mean reversion)"
     strategy_description: >
       Fades session extremes in range-bound Nifty 50 names. Regime analyst
@@ -430,7 +430,7 @@ personas:
         min_net_rr: 1.2
 
   flux:
-    enabled: true
+    enabled: false
     description: "Flux — OFI proxy intraday (flow momentum)"
     strategy_description: >
       Follows candle-based order flow imbalance on top Nifty names. Requires
@@ -482,7 +482,7 @@ personas:
         min_net_rr_momentum: 1.3
 
   spread:
-    enabled: true
+    enabled: false
     description: "Spread — intraday pairs mean reversion"
     strategy_description: >
       Trades cointegrated Nifty pair spreads. Requires two-leg execution.
@@ -525,7 +525,7 @@ personas:
         min_net_rr: 1.2
 
   slice:
-    enabled: true
+    enabled: false
     description: "Slice — TWAP/VWAP execution scheduler"
     strategy_description: >
       Schedules parent orders into TWAP/VWAP child slices. No directional alpha.

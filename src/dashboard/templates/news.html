@@ -8,7 +8,6 @@
 <p class="subtitle">
   <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
   Intraday catalyst and scan notes from the live watch loop — not the swing news digest.
-  <a href="/intraday/{{ current_persona }}">Full intraday view</a>
 </p>
 
 {% if intraday_news and intraday_news.has_data %}
@@ -139,7 +138,6 @@
     <p class="empty" style="margin:0">
       No intraday scan data saved yet for <code>{{ current_persona }}</code>.
     </p>
-    <code class="cmd">python run_daily.py watch --persona {{ current_persona }}</code>
   </div>
 {% endif %}
 
@@ -152,7 +150,7 @@
   </p>
 
   {% if digest.flagged_symbols %}
-  <div class="panel" style="border-left:3px solid #b45309">
+  <div class="panel" style="border-left:3px solid var(--warn)">
     <h2>Flagged for possible thesis change</h2>
     <p style="margin:0">
       {% for symbol in digest.flagged_symbols %}<span class="tag">{{ symbol }}</span>{% endfor %}
@@ -244,7 +242,6 @@
       US personas use CNBC, MarketWatch, and Yahoo Finance feeds configured in <code>personas_us.yaml</code>.
       {% endif %}
     </p>
-    <code class="cmd">python run_daily.py analyse --persona {{ current_persona }}</code>
   </div>
 {% endif %}
 {% endblock %}

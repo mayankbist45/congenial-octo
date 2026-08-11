@@ -7,17 +7,16 @@
 {% if is_intraday %}
 <p class="subtitle">
   <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
-  Intraday open positions from the live session.
-  <a href="/intraday/{{ current_persona }}">Full intraday view</a>
+  Intraday book for <code>{{ current_persona }}</code>
+  {% if intraday_summary and intraday_summary.last_scan_at %}
+    &middot; last scan {{ intraday_summary.last_scan_at }}
+  {% endif %}.
 </p>
 
 {% if open_positions %}
 <div class="panel">
   <div class="panel-head">
     <h2>{{ open_positions | length }} open position{{ 's' if open_positions | length != 1 }}</h2>
-    {% if intraday_summary and intraday_summary.last_scan_at %}
-    <span class="note">Last scan {{ intraday_summary.last_scan_at }}</span>
-    {% endif %}
   </div>
   <table class="data-table">
     <thead>
@@ -41,13 +40,43 @@
     </tbody>
   </table>
 </div>
-{% else %}
+{% endif %}
+
+{% if completed_trades %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{ completed_trades | length }} completed trade{{ 's' if completed_trades | length != 1 }}</h2>
+    <span class="note"><a class="persona-name" href="/intraday/{{ current_persona }}">{{ current_persona }}</a></span>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Strategy</th><th>Side</th><th>Qty</th>
+        <th>Entry</th><th>Exit</th><th>Net P&amp;L</th><th>R</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in completed_trades %}
+      <tr>
+        <td><strong>{{ t.symbol }}</strong></td>
+        <td>{{ t.strategy }}</td>
+        <td>{{ t.side }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+        <td>{{ t.exit_time }} @ {{ t.exit_price | number(2) }}</td>
+        <td class="{{ t.net_pnl | sign }}">{{ t.net_pnl | money_currency(currency) }}</td>
+        <td class="{{ t.r_multiple | sign }}">{{ t.r_multiple | number(3) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif not open_positions %}
 <div class="panel">
   <p class="empty" style="margin:0">
-    No open intraday positions.
     {% if intraday_summary %}
-      Session {% if intraday_summary.active %}active{% else %}ended{% endif %}
-      with {{ intraday_summary.total_trades or 0 }} completed trade(s) today.
+      No open positions and no completed trades in the saved session for
+      <code>{{ current_persona }}</code>.
     {% else %}
       No session data saved yet for <code>{{ current_persona }}</code>.
     {% endif %}

@@ -1,5 +1,5 @@
 id: crypto_momentum_paper
-enabled: true
+enabled: false
 description: "Crypto momentum paper trader on Alpaca spot"
 strategy_description: >
   Spot crypto intraday paper bot on a small liquid USD universe. Long-only,

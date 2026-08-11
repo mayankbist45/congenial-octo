@@ -8,7 +8,6 @@
 <p class="subtitle">
   <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
   Intraday session performance — not the swing NAV series.
-  <a href="/intraday/{{ current_persona }}">Full intraday view</a>
 </p>
 
 {% if performance.start_date %}
@@ -54,12 +53,43 @@
 </div>
 {% endif %}
 
+{% if completed_trades %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>Completed trades</h2>
+    <span class="note"><a class="persona-name" href="/intraday/{{ current_persona }}">{{ current_persona }}</a></span>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Strategy</th><th>Side</th><th>Qty</th>
+        <th>Entry</th><th>Exit</th><th>Net P&amp;L</th><th>R</th><th>Exit reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in completed_trades %}
+      <tr>
+        <td><strong>{{ t.symbol }}</strong></td>
+        <td>{{ t.strategy }}</td>
+        <td>{{ t.side }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+        <td>{{ t.exit_time }} @ {{ t.exit_price | number(2) }}</td>
+        <td class="{{ t.net_pnl | sign }}">{{ t.net_pnl | money_currency(currency) }}</td>
+        <td class="{{ t.r_multiple | sign }}">{{ t.r_multiple | number(3) }}</td>
+        <td>{{ t.exit_reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% else %}
 <div class="panel">
   <p class="empty" style="margin:0">
     No intraday performance saved yet for <code>{{ current_persona }}</code>.
   </p>
-  <code class="cmd">python run_daily.py watch --persona {{ current_persona }}</code>
 </div>
 {% endif %}
 
@@ -72,7 +102,8 @@
     &middot; {{ performance.days }} days &middot; {{ performance.observations }} observations
     &middot; vs {{ benchmark_label }}
   {% else %}
-    No history recorded yet for <code>{{ current_persona }}</code>.
+    No history recorded yet for <code>{{ current_persona }}</code>
+    &middot; vs {{ benchmark_label }}
   {% endif %}
 </p>
 
@@ -126,16 +157,39 @@
     </div>
   </div>
 </div>
+{% else %}
+<div class="stats">
+  <div class="stat">
+    <div class="label">Total return</div>
+    <div class="value">—</div>
+    <div class="sub">awaiting first NAV</div>
+  </div>
+  <div class="stat">
+    <div class="label">{{ benchmark_label }}</div>
+    <div class="value">—</div>
+    <div class="sub">benchmark</div>
+  </div>
+  <div class="stat">
+    <div class="label">Excess return</div>
+    <div class="value">—</div>
+    <div class="sub">vs {{ benchmark_label }}</div>
+  </div>
+</div>
+{% endif %}
 
 <div class="panel">
   <div class="panel-head">
     <h2>Fund vs {{ benchmark_label }}</h2>
     <span class="legend">
-      <span><span class="swatch" style="background:#2563eb"></span>Fund</span>
-      <span><span class="swatch" style="background:#94a3b8"></span>{{ benchmark_label }}</span>
+      <span><span class="swatch swatch-fund"></span>Fund</span>
+      <span><span class="swatch swatch-bench"></span>{{ benchmark_label }}</span>
     </span>
   </div>
-  {{ chart | safe }}
+  {% if chart %}
+    {{ chart | safe }}
+  {% else %}
+    <p class="empty">Not enough history to chart yet.</p>
+  {% endif %}
 </div>
 
 {% if performance.notes %}
@@ -147,40 +201,95 @@
 </div>
 {% endif %}
 
+{% set risk_has_numbers = risk and (
+  risk.portfolio_beta is not none
+  or risk.portfolio_vol is not none
+  or risk.tracking_error_pct is not none
+  or risk.active_share_pct is not none
+  or risk.concentration_top5_pct is not none
+) %}
+{% set return_has_numbers = (
+  performance.information_ratio is not none
+  or performance.win_rate_pct is not none
+  or performance.best_day_pct is not none
+  or performance.worst_day_pct is not none
+  or performance.current_drawdown_pct is not none
+  or performance.realised_pnl is not none
+  or performance.unrealised_pnl is not none
+) %}
+
 <div class="two-col">
   <div class="panel">
     <h2>Return statistics</h2>
+    {% if return_has_numbers %}
     <div class="table-scroll">
     <table>
       <tbody>
+        {% if performance.information_ratio is not none %}
         <tr><td>Information ratio</td><td class="num">{{ performance.information_ratio | number(2) }}</td></tr>
+        {% endif %}
+        {% if performance.win_rate_pct is not none %}
         <tr><td>Win rate</td><td class="num">{{ performance.win_rate_pct | pct(1) }}</td></tr>
+        {% endif %}
+        {% if performance.best_day_pct is not none %}
         <tr><td>Best day</td><td class="num up">{{ performance.best_day_pct | pct(2, true) }}</td></tr>
+        {% endif %}
+        {% if performance.worst_day_pct is not none %}
         <tr><td>Worst day</td><td class="num down">{{ performance.worst_day_pct | pct(2, true) }}</td></tr>
+        {% endif %}
+        {% if performance.current_drawdown_pct is not none %}
         <tr><td>Current drawdown</td><td class="num">{{ performance.current_drawdown_pct | pct(2) }}</td></tr>
+        {% endif %}
+        {% if performance.realised_pnl is not none %}
         <tr><td>Realised P&amp;L</td><td class="num {{ performance.realised_pnl | sign }}">{{ performance.realised_pnl | money_currency(currency) }}</td></tr>
+        {% endif %}
+        {% if performance.unrealised_pnl is not none %}
         <tr><td>Unrealised P&amp;L</td><td class="num {{ performance.unrealised_pnl | sign }}">{{ performance.unrealised_pnl | money_currency(currency) }}</td></tr>
-      </tbody>
-    </table>
-    </div>
-  </div>
-
-  <div class="panel">
-    <h2>Risk profile</h2>
-    {% if risk %}
-    <div class="table-scroll">
-    <table>
-      <tbody>
-        <tr><td>Portfolio beta</td><td class="num">{{ risk.portfolio_beta | number(2) }}</td></tr>
-        <tr><td>Portfolio volatility</td><td class="num">{{ risk.portfolio_vol | pct(1) }}</td></tr>
-        <tr><td>Tracking error</td><td class="num">{{ risk.tracking_error_pct | pct(1) }}</td></tr>
-        <tr><td>Active share</td><td class="num">{{ risk.active_share_pct | pct(1) }}</td></tr>
-        <tr><td>Top 5 concentration</td><td class="num">{{ risk.concentration_top5_pct | pct(1) }}</td></tr>
+        {% endif %}
       </tbody>
     </table>
     </div>
     {% else %}
-      <p class="empty">No risk profile recorded yet.</p>
+      <p class="empty" style="margin:0;padding:16px">Not enough history for return statistics yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Risk profile</h2>
+      {% if risk and risk.run_date %}<span class="note">{{ risk.run_date }}</span>{% endif %}
+    </div>
+    {% if risk_has_numbers %}
+    <div class="table-scroll">
+    <table>
+      <tbody>
+        {% if risk.portfolio_beta is not none %}
+        <tr><td>Portfolio beta</td><td class="num">{{ risk.portfolio_beta | number(2) }}</td></tr>
+        {% endif %}
+        {% if risk.portfolio_vol is not none %}
+        <tr><td>Portfolio volatility</td><td class="num">{{ risk.portfolio_vol | pct(1) }}</td></tr>
+        {% endif %}
+        {% if risk.tracking_error_pct is not none %}
+        <tr><td>Tracking error</td><td class="num">{{ risk.tracking_error_pct | pct(1) }}</td></tr>
+        {% endif %}
+        {% if risk.active_share_pct is not none %}
+        <tr><td>Active share</td><td class="num">{{ risk.active_share_pct | pct(1) }}</td></tr>
+        {% endif %}
+        {% if risk.concentration_top5_pct is not none %}
+        <tr><td>Top 5 concentration</td><td class="num">{{ risk.concentration_top5_pct | pct(1) }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+    </div>
+    {% if risk.warnings %}
+    <ul class="muted" style="margin:12px 0 0;padding-left:18px;font-size:13px">
+      {% for w in risk.warnings %}<li>{{ w }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% elif risk and risk.warnings %}
+      <p class="empty" style="margin:0;padding:16px">{{ risk.warnings[0] }}</p>
+    {% else %}
+      <p class="empty" style="margin:0;padding:16px">No risk profile recorded yet.</p>
     {% endif %}
   </div>
 </div>
@@ -192,15 +301,6 @@
     <span class="note">Each position's P&amp;L as a share of fund value</span>
   </div>
   {{ attribution_chart | safe }}
-</div>
-{% endif %}
-
-{% else %}
-<div class="panel">
-  <p class="empty" style="margin:0">
-    Run the daily analyse pass to start recording NAV history for this persona.
-  </p>
-  <code class="cmd">python run_daily.py analyse --persona {{ current_persona }}</code>
 </div>
 {% endif %}
 

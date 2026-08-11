@@ -50,7 +50,6 @@
           <th>Trades</th>
           <th>Win rate</th>
           <th>Status</th>
-          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -58,7 +57,7 @@
         {% set s = p.intraday_summary %}
         <tr>
           <td>
-            <strong>{{ p.persona_id }}</strong>
+            <a class="persona-name" href="/intraday/{{ p.persona_id }}"><strong>{{ p.persona_id }}</strong></a>
             <div class="muted small">{{ p.description }}</div>
           </td>
           <td>{{ p.broker_label }}</td>
@@ -73,10 +72,8 @@
             {% if s.active %}Active{% else %}Ended{% endif %}
             {% if s.last_scan_at %}<br>{{ format_market_timestamp(s.last_scan_at, p.market_id) }}{% endif %}
           </td>
-          <td><a href="/intraday/{{ p.persona_id }}">Details</a></td>
           {% else %}
           <td colspan="7" class="muted">No saved run</td>
-          <td><a href="/intraday/{{ p.persona_id }}">Setup</a></td>
           {% endif %}
         </tr>
         {% endfor %}

@@ -70,3 +70,67 @@ def test_unknown_connector_raises():
     config = Config(raw={"connectors": {"broker": "unknown"}}, secrets=Secrets())
     with pytest.raises(ValueError, match="Unknown broker connector"):
         get_connector(config=config)
+
+
+def _angelone_secrets(**overrides) -> Secrets:
+    base = dict(
+        angelone_api_key="primary-key",
+        angelone_client_code="P1",
+        angelone_pin="1111",
+        angelone_totp_secret="PRIMARYSECRET11",
+        angelone_data2_api_key="data2-key",
+        angelone_data2_client_code="P2",
+        angelone_data2_pin="2222",
+        angelone_data2_totp_secret="DATA2SECRET2222",
+        dry_run=True,
+    )
+    base.update(overrides)
+    return Secrets(**base)
+
+
+def test_swing_broker_uses_data2_key():
+    from src.broker.dry_run import DryRunBroker
+    from src.connectors.angelone import _book_credentials
+    from src.connectors.registry import build_broker as build
+
+    config = Config(raw={}, secrets=_angelone_secrets())
+    creds = _book_credentials(config)
+    assert creds is not None
+    assert creds.label == "data2"
+    assert creds.api_key == "data2-key"
+
+    broker = build(config)
+    assert isinstance(broker, DryRunBroker)
+    assert broker._inner.credential_label == "data2"
+
+
+def test_intraday_broker_stays_on_primary_key():
+    from src.broker.dry_run import DryRunBroker
+    from src.connectors.angelone import _book_credentials
+    from src.connectors.registry import build_broker as build
+
+    config = Config(
+        raw={"intraday": {"enabled": True}},
+        secrets=_angelone_secrets(),
+    )
+    creds = _book_credentials(config)
+    assert creds is not None
+    assert creds.label == "primary"
+    assert creds.api_key == "primary-key"
+
+    broker = build(config)
+    assert isinstance(broker, DryRunBroker)
+    assert broker._inner.credential_label == "primary"
+
+
+def test_intraday_market_data_uses_primary_not_pool_by_default():
+    from src.broker.candle_budget import CandleBudgetCoordinator
+    from src.connectors.registry import build_market_data_broker
+
+    config = Config(
+        raw={"intraday": {"enabled": True}, "angelone": {"use_candle_pool": False}},
+        secrets=_angelone_secrets(),
+    )
+    broker = build_market_data_broker(config)
+    assert isinstance(broker, CandleBudgetCoordinator)
+    assert broker._inner.credential_label == "primary"

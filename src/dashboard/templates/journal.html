@@ -3,6 +3,124 @@
 
 {% block content %}
 <h1>Journal</h1>
+
+{% if is_intraday %}
+<p class="subtitle">
+  <span class="region-badge region-{{ region | lower }}">{{ region_label }}</span>
+  Intraday session log for <code>{{ current_persona }}</code>
+  {% if intraday_summary %}
+    {% if intraday_summary.start_date %}
+      &middot; {{ intraday_summary.start_date }}{% if intraday_summary.end_date %} to {{ intraday_summary.end_date }}{% endif %}
+    {% endif %}
+    &middot; {% if intraday_summary.active %}session active{% else %}session ended{% endif %}
+  {% endif %}.
+</p>
+
+{% if not intraday_summary %}
+<div class="panel">
+  <p class="empty" style="margin:0">
+    No session data saved yet for <code>{{ current_persona }}</code>.
+    Intraday books do not use the swing daily-run journal — detail appears after a watch or backtest saves a session.
+  </p>
+</div>
+{% else %}
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Session detail</h2>
+    <span class="note">
+      <a class="btn small" href="/intraday/{{ current_persona }}">View detail</a>
+    </span>
+  </div>
+  <p class="muted" style="margin:0">
+    Full scan log, watchlist, candidates, and briefing-style context for this session live on the
+    intraday detail page (swing-style daily briefings are only written by the overnight analyse pass).
+  </p>
+</div>
+
+{% if completed_trades %}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{ completed_trades | length }} completed trade{{ 's' if completed_trades | length != 1 }}</h2>
+  </div>
+  <div class="table-scroll desktop-only">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Strategy</th><th>Side</th><th>Qty</th>
+        <th>Entry</th><th>Exit</th><th>Net P&amp;L</th><th>R</th><th>Exit reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in completed_trades %}
+      <tr>
+        <td><strong>{{ t.symbol }}</strong></td>
+        <td>{{ t.strategy }}</td>
+        <td>{{ t.side }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</td>
+        <td>{{ t.exit_time }} @ {{ t.exit_price | number(2) }}</td>
+        <td class="{{ t.net_pnl | sign }}">{{ t.net_pnl | money_currency(currency) }}</td>
+        <td class="{{ t.r_multiple | sign }}">{{ t.r_multiple | number(3) }}</td>
+        <td>{{ t.exit_reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="mobile-only mobile-cards">
+    {% for t in completed_trades %}
+    <div class="mobile-card">
+      <div class="mobile-card-head">
+        <div>
+          <div class="mobile-card-title">{{ t.symbol }}</div>
+          <div class="mobile-card-subtitle">{{ t.strategy }} · {{ t.side }}</div>
+        </div>
+        <div class="tag {{ t.net_pnl | sign }}">{{ t.net_pnl | money_currency(currency) }}</div>
+      </div>
+      <div class="mobile-pairs">
+        <div class="mobile-pair"><div class="label">Qty</div><div class="value">{{ t.quantity }}</div></div>
+        <div class="mobile-pair"><div class="label">R</div><div class="value {{ t.r_multiple | sign }}">{{ t.r_multiple | number(3) }}</div></div>
+        <div class="mobile-pair"><div class="label">Entry</div><div class="value">{{ t.entry_time }} @ {{ t.entry_price | number(2) }}</div></div>
+        <div class="mobile-pair"><div class="label">Exit</div><div class="value">{{ t.exit_time }} @ {{ t.exit_price | number(2) }}</div></div>
+      </div>
+      <div class="mobile-card-copy">{{ t.exit_reason }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="panel">
+  <p class="empty" style="margin:0">No completed trades in the saved session.</p>
+</div>
+{% endif %}
+
+{% if skipped_signals %}
+<div class="panel">
+  <h2>Skipped / vetoed signals</h2>
+  <table class="data-table">
+    <thead>
+      <tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Side</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      {% for s in skipped_signals %}
+      <tr>
+        <td>{{ s.time or '—' }}</td>
+        <td><strong>{{ s.symbol }}</strong></td>
+        <td>{{ s.strategy }}</td>
+        <td>{{ s.side }}</td>
+        <td class="muted small">{{ s.reason or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endif %}
+
+{% else %}
+
 <p class="subtitle">
   Every run and every order, with the reasoning recorded at the time.
 </p>
@@ -31,7 +149,7 @@
         <td class="num">{{ run.portfolio_value | money }}</td>
         <td class="num">{{ run.turnover_used_pct | pct(1) }}</td>
         <td class="sub-line">{{ 'active' if run.llm_used else 'rules only' }}</td>
-        <td><a href="/journal/{{ run.id }}">Detail</a></td>
+        <td><a href="/journal/{{ run.id }}{{ persona_qs }}">Detail</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -54,13 +172,16 @@
         <div class="mobile-pair"><div class="label">Pack</div><div class="value">{{ run.candidate_pack_date or '-' }}</div></div>
       </div>
       <div class="mobile-actions">
-        <a class="btn" href="/journal/{{ run.id }}">View detail</a>
+        <a class="btn" href="/journal/{{ run.id }}{{ persona_qs }}">View detail</a>
       </div>
     </div>
     {% endfor %}
   </div>
   {% else %}
-    <p class="empty">No runs recorded yet.</p>
+    <p class="empty">
+      No daily runs recorded yet for <code>{{ current_persona }}</code>.
+      “View detail” and the decision briefing appear after this swing book’s analyse pass writes a journal run.
+    </p>
   {% endif %}
 </div>
 
@@ -123,7 +244,9 @@
     {% endfor %}
   </div>
   {% else %}
-    <p class="empty">No orders recorded yet.</p>
+    <p class="empty">No orders recorded yet for <code>{{ current_persona }}</code>.</p>
   {% endif %}
 </div>
+
+{% endif %}
 {% endblock %}

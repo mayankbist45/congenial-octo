@@ -56,7 +56,17 @@ def format_market_timestamp(
     return cal.format_local(dt)
 
 
+_MARKET_DISPLAY_ORDER = ("india_equity", "us_equity", "crypto_spot_us")
+
+
 def all_markets_summary() -> List[Dict[str, Any]]:
+    by_id = {market.id: market for market in list_markets()}
+    ordered: List[Market] = []
+    for market_id in _MARKET_DISPLAY_ORDER:
+        market = by_id.pop(market_id, None)
+        if market is not None:
+            ordered.append(market)
+    ordered.extend(by_id[key] for key in sorted(by_id))
     return [
         {
             "id": market.id,
@@ -67,7 +77,7 @@ def all_markets_summary() -> List[Dict[str, Any]]:
             "exchange_label": market.display.exchange_label,
             "broker_label": market.display.broker_label,
         }
-        for market in list_markets()
+        for market in ordered
     ]
 
 

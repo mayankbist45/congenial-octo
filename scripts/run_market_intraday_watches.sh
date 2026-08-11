@@ -72,13 +72,36 @@ if [ "${#PERSONAS[@]}" -eq 0 ]; then
     exit 0
 fi
 
-emit_event "start" --field "persona_count=${#PERSONAS[@]}"
+STAGGER_SECONDS="$(
+    "$PYTHON" -c "
+import sys
+sys.path.insert(0, '$PROJECT_DIR')
+from src.market.registry import get_market
+m = get_market('$MARKET')
+w = m.scheduling.intraday_watch if m else None
+print(int(w.persona_start_stagger_sec) if w else 0)
+" 2>/dev/null || echo 0
+)"
+# Allow override without editing yaml (e.g. INTRADAY_PERSONA_STAGGER_SECONDS=90).
+if [ -n "${INTRADAY_PERSONA_STAGGER_SECONDS:-}" ]; then
+    STAGGER_SECONDS="$INTRADAY_PERSONA_STAGGER_SECONDS"
+fi
+
+emit_event "start" \
+    --field "persona_count=${#PERSONAS[@]}" \
+    --field "persona_start_stagger_sec=${STAGGER_SECONDS}"
 
 PIDS=()
+idx=0
 for persona in "${PERSONAS[@]}"; do
+    if [ "$idx" -gt 0 ] && [ "${STAGGER_SECONDS}" -gt 0 ] 2>/dev/null; then
+        echo "Stagger ${STAGGER_SECONDS}s before starting $persona" >>"$LOG"
+        sleep "$STAGGER_SECONDS"
+    fi
     echo "Starting watch: $persona" >>"$LOG"
     "$WATCH" "$persona" &
     PIDS+=("$!")
+    idx=$((idx + 1))
 done
 
 FAIL=0
