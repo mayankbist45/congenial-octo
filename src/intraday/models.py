@@ -76,6 +76,13 @@ class RankedStock:
     ofi_z: Optional[float] = None
     spread_z: Optional[float] = None
     pair_id: Optional[str] = None
+    kronos_enabled: bool = False
+    kronos_mode: Optional[str] = None
+    kronos_score: Optional[float] = None
+    kronos_expected_return_pct: Optional[float] = None
+    kronos_confidence: Optional[float] = None
+    kronos_trend_bias: Optional[str] = None
+    kronos_rationale: Optional[str] = None
     reasons: List[str] = field(default_factory=list)
 
 

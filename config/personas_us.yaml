@@ -20,7 +20,7 @@ personas:
     execution:
       product_type: "CASH"
       exchange: US
-      auto_approve: false
+      auto_approve: true
     news:
       feeds:
         - name: "Yahoo Finance"
@@ -71,7 +71,7 @@ personas:
     execution:
       product_type: "CASH"
       exchange: US
-      auto_approve: false
+      auto_approve: true
 
   momentum_rider_us:
     enabled: true
@@ -111,7 +111,7 @@ personas:
     execution:
       product_type: "CASH"
       exchange: US
-      auto_approve: false
+      auto_approve: true
 
   calan_us:
     enabled: true
@@ -177,6 +177,25 @@ personas:
         log_decisions: true
         shadow: true
         min_meta_confidence: 0.55
+      kronos:
+        enabled: false
+        mode: "shadow"
+        backend: "local"
+        repo_path: "../Kronos"
+        model_id: "NeoQuasar/Kronos-small"
+        tokenizer_id: "NeoQuasar/Kronos-Tokenizer-base"
+        device: "cpu"
+        hf_cache_dir: "data/cache/huggingface"
+        endpoint_url: ""
+        request_timeout_seconds: 15.0
+        lookback_bars: 128
+        pred_len: 3
+        max_context: 512
+        min_confidence: 0.55
+        score_weight: 12.0
+        temperature: 1.0
+        top_p: 0.9
+        sample_count: 1
       fundamentals:
         enabled: true
         cache_only: true

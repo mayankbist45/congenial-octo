@@ -33,7 +33,7 @@ from src.journal.db import init_db
 from src.journal.performance import PerformanceCalculator
 from src.journal.portfolio import PortfolioBuilder
 from src.journal.repository import JournalRepository
-from src.logging_setup import get_logger
+from src.logging_setup import bind_log_context, get_logger, make_run_label
 from src.market_data.liquid import LiquidFundService
 from src.market_data.prices import PriceService
 from src.models import (
@@ -98,6 +98,12 @@ class FundManager:
     ):
         self._config = config or get_config()
         self._persona_id = self._config.persona_id
+        bind_log_context(
+            persona_id=self._persona_id,
+            run_label=make_run_label("analyse", self._persona_id),
+            command="analyse",
+            market_id=self._config.market_id,
+        )
         init_db(self._config)
 
         self._broker = broker or build_broker(self._config, force_simulated)
@@ -669,6 +675,7 @@ class FundManager:
             market_regime=market_regime.regime if market_regime else None,
             market_regime_score=market_regime.score if market_regime else None,
         )
+        bind_log_context(run_id=run_id)
         self._repo.save_proposals(run_id, decision.proposals)
         self._repo.save_rejected(run_id, decision.rejected)
         self._repo.record_position_snapshot(as_of, portfolio, scores, risk_profile)

@@ -126,6 +126,22 @@ class PriceService:
 
         return out
 
+    def _retry_missing_symbols(
+        self, symbols: List[str], days: int
+    ) -> Dict[str, pd.DataFrame]:
+        """Retry missing symbols one by one after a partial batch failure."""
+        recovered: Dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            try:
+                fetched = self._download_batch([symbol], days)
+            except Exception as exc:
+                logger.warning("Retry failed for %s: %s", symbol, exc)
+                continue
+            frame = fetched.get(symbol)
+            if frame is not None:
+                recovered[symbol] = frame
+        return recovered
+
     def _to_yahoo(self, symbol: str) -> str:
         symbol = symbol.upper()
         # Index symbols (^NSEI, ^CRSLDX, ^GSPC) are already in Yahoo form.
@@ -161,6 +177,20 @@ class PriceService:
             for start in range(0, len(missing), _BATCH_SIZE):
                 chunk = missing[start : start + _BATCH_SIZE]
                 fetched = self._download_batch(chunk, days)
+                chunk_missing = [symbol for symbol in chunk if symbol not in fetched]
+                if fetched and chunk_missing:
+                    logger.info(
+                        "  retrying %d symbol(s) individually after partial batch miss",
+                        len(chunk_missing),
+                    )
+                    recovered = self._retry_missing_symbols(chunk_missing, days)
+                    if recovered:
+                        logger.info(
+                            "  recovered %d/%d symbol(s) on individual retry",
+                            len(recovered),
+                            len(chunk_missing),
+                        )
+                    fetched.update(recovered)
                 self._frames.update(fetched)
                 logger.info(
                     "  batch %d/%d: %d/%d series retrieved",

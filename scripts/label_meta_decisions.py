@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import get_persona_config
 from src.intraday.meta import meta_label_from_barrier
 from src.journal.repository import JournalRepository
-from src.logging_setup import setup_logging
+from src.logging_setup import bind_log_context, make_run_label, setup_logging
 
 
 def main() -> int:
@@ -27,6 +27,13 @@ def main() -> int:
     setup_logging(
         level=str(config.get("logging.level", "INFO")),
         log_file=config.path("logging.file", "data/fund.log"),
+        persona_log_dir=config.path("logging.persona_dir", "data/logs/personas"),
+    )
+    bind_log_context(
+        persona_id=config.persona_id,
+        run_label=make_run_label("label_meta_decisions", config.persona_id),
+        command="label_meta_decisions",
+        market_id=config.market_id,
     )
     repo = JournalRepository(config)
     rows = repo.meta_decisions(limit=args.limit, unlabeled_only=True)

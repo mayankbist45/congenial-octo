@@ -174,8 +174,8 @@ create_absence_condition() {
 EOF
 }
 
-daily_success_metric="${METRIC_PREFIX}_daily_monitor_success_count"
-daily_failure_metric="${METRIC_PREFIX}_daily_monitor_failure_count"
+daily_success_metric="${METRIC_PREFIX}_long_cycle_success_count"
+daily_failure_metric="${METRIC_PREFIX}_long_cycle_failure_count"
 close_success_metric="${METRIC_PREFIX}_close_success_count"
 close_failure_metric="${METRIC_PREFIX}_close_failure_count"
 backup_success_metric="${METRIC_PREFIX}_backup_success_count"
@@ -186,8 +186,8 @@ india_launcher_failure_metric="${METRIC_PREFIX}_intraday_launcher_failure_india_
 us_launcher_failure_metric="${METRIC_PREFIX}_intraday_launcher_failure_us_count"
 dashboard_restart_metric="${METRIC_PREFIX}_dashboard_restart_count"
 
-upsert_metric "$daily_success_metric" "Morning run success events" "$(metric_filter 'textPayload =~ "\\\"event\\\": \\\"scheduled_run\\\"" AND textPayload =~ "\\\"job\\\": \\\"daily_monitor\\\"" AND textPayload =~ "\\\"status\\\": \\\"success\\\""')"
-upsert_metric "$daily_failure_metric" "Morning run failure events" "$(metric_filter 'textPayload =~ "\\\"event\\\": \\\"scheduled_run\\\"" AND textPayload =~ "\\\"job\\\": \\\"daily_monitor\\\"" AND textPayload =~ "\\\"status\\\": \\\"failure\\\""')"
+upsert_metric "$daily_success_metric" "Long cycle success events" "$(metric_filter 'textPayload =~ "\\\"event\\\": \\\"scheduled_run\\\"" AND textPayload =~ "\\\"job\\\": \\\"long_cycle\\\"" AND textPayload =~ "\\\"status\\\": \\\"success\\\""')"
+upsert_metric "$daily_failure_metric" "Long cycle failure events" "$(metric_filter 'textPayload =~ "\\\"event\\\": \\\"scheduled_run\\\"" AND textPayload =~ "\\\"job\\\": \\\"long_cycle\\\"" AND textPayload =~ "\\\"status\\\": \\\"failure\\\""')"
 upsert_metric "$close_success_metric" "Close run success events" "$(metric_filter 'textPayload =~ "\\\"event\\\": \\\"scheduled_run\\\"" AND textPayload =~ "\\\"job\\\": \\\"close\\\"" AND textPayload =~ "\\\"status\\\": \\\"success\\\""')"
 upsert_metric "$close_failure_metric" "Close run failure events" "$(metric_filter 'textPayload =~ "\\\"event\\\": \\\"scheduled_run\\\"" AND textPayload =~ "\\\"job\\\": \\\"close\\\"" AND textPayload =~ "\\\"status\\\": \\\"failure\\\""')"
 upsert_metric "$backup_success_metric" "Backup upload success events" "$(metric_filter 'textPayload =~ "\\\"event\\\": \\\"backup_upload\\\"" AND textPayload =~ "\\\"status\\\": \\\"success\\\""')"
@@ -210,7 +210,7 @@ CHANNEL_ARG="$(IFS=,; echo "${CHANNELS[*]}")"
 create_policy_file \
     "$TMP_DIR/daily-failure.json" \
     "MFM Morning Run Failure" \
-    "$(create_threshold_condition "daily_monitor failures > 0" "$daily_failure_metric" "0s" 0)"
+    "$(create_threshold_condition "long_cycle failures > 0" "$daily_failure_metric" "0s" 0)"
 
 create_policy_file \
     "$TMP_DIR/close-failure.json" \

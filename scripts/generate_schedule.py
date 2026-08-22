@@ -47,6 +47,18 @@ def _next_weekday(day: date) -> date:
     return day
 
 
+def _sample_trading_day(market, today: date) -> date:
+    trading_days = getattr(market.session, "trading_days", "weekdays")
+    if trading_days == "all_days":
+        return today
+    return _next_weekday(today)
+
+
+def _market_start_dow(market) -> str:
+    trading_days = getattr(market.session, "trading_days", "weekdays")
+    return "*" if trading_days == "all_days" else "1-5"
+
+
 def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
     vm_tz = ZoneInfo(vm_tz_name)
     markets = list_markets()
@@ -64,7 +76,7 @@ def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
             "15",
             "8",
             "1-5",
-            f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh daily_monitor",
+            f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh long_cycle",
         )
     )
     lines.append(
@@ -81,21 +93,22 @@ def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
         watch = market.scheduling.intraday_watch
         if not watch or not watch.personas:
             continue
-        sample_day = _next_weekday(date.today())
+        sample_day = _sample_trading_day(market, date.today())
         cal_start, cal_stop = _watch_bounds(market, sample_day)
         start_m, start_h, start_dow = _to_vm_cron(cal_start, vm_tz)
         stop_m, stop_h, stop_dow = _to_vm_cron(cal_stop, vm_tz)
         service = f"mutualfund-{market.id.replace('_', '-')}-intraday-watch"
+        start_dow_expr = _market_start_dow(market)
         lines.append(
             _cron_line(
                 start_m,
                 start_h,
-                "1-5",
+                start_dow_expr,
                 f"root systemctl start {service}",
             )
         )
         # Stop may fall on next calendar day (US from IST VM).
-        stop_dow_expr = _stop_dow_expr(cal_start, cal_stop, vm_tz)
+        stop_dow_expr = _stop_dow_expr(cal_start, cal_stop, vm_tz, market)
         lines.append(
             _cron_line(
                 stop_m,
@@ -107,7 +120,7 @@ def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
         # EOD persona digest → WhatsApp a few minutes after the watch unit stops.
         report_dt = cal_stop + timedelta(minutes=5)
         report_m, report_h, _ = _to_vm_cron(report_dt, vm_tz)
-        report_dow = _stop_dow_expr(cal_start, report_dt, vm_tz)
+        report_dow = _stop_dow_expr(cal_start, report_dt, vm_tz, market)
         lines.append(
             _cron_line(
                 report_m,
@@ -149,7 +162,14 @@ def _watch_bounds(market, day: date) -> tuple[datetime, datetime]:
     return bounds
 
 
-def _stop_dow_expr(start: datetime, stop: datetime, vm_tz: ZoneInfo) -> str:
+def _stop_dow_expr(start: datetime, stop: datetime, vm_tz: ZoneInfo, market=None) -> str:
+    trading_days = getattr(getattr(market, "session", None), "trading_days", "weekdays")
+    if trading_days == "all_days":
+        start_local_dt = start.astimezone(vm_tz)
+        stop_local_dt = stop.astimezone(vm_tz)
+        if stop_local_dt.date() > start_local_dt.date():
+            return "*"
+        return "*"
     start_local = start.astimezone(vm_tz).date()
     stop_local = stop.astimezone(vm_tz).date()
     if stop_local > start_local:

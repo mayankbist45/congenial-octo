@@ -122,3 +122,20 @@ def test_whatsapp_skips_when_unconfigured():
     result = send_whatsapp_message("hello", cfg)
     assert result["ok"] is False
     assert result["skipped"] is True
+
+
+def test_generate_schedule_includes_daily_crypto_report():
+    from src.market.registry import get_market
+    from scripts.generate_schedule import _market_start_dow, _sample_trading_day, _stop_dow_expr
+    from zoneinfo import ZoneInfo
+    from datetime import date, datetime
+
+    market = get_market("crypto_spot_us")
+    assert _market_start_dow(market) == "*"
+    assert _sample_trading_day(market, date(2026, 8, 9)) == date(2026, 8, 9)
+
+    et = ZoneInfo("America/New_York")
+    ist = ZoneInfo("Asia/Kolkata")
+    start = datetime(2026, 8, 9, 18, 30, tzinfo=ist).astimezone(et)
+    stop = datetime(2026, 8, 10, 2, 30, tzinfo=ist).astimezone(et)
+    assert _stop_dow_expr(start, stop, ist, market) == "*"

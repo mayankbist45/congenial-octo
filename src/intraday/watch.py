@@ -15,6 +15,7 @@ from src.intraday.broker_execution import IntradayBrokerExecutor, intraday_uses_
 from src.intraday.costs import round_trip_costs
 from src.intraday.data import IntradayDataService
 from src.intraday.engine_helpers import collect_signals
+from src.intraday.kronos_service import maybe_enrich_ranked_with_kronos
 from src.intraday.mayank import (
     build_style_context,
     enrich_candidates_with_style,
@@ -120,6 +121,7 @@ class IntradayWatchEngine:
         ranked = self._ranker.rank(frames, previous_days)
         limit = int(self._config.get("intraday.ranked_universe_size", 8) or 8)
         ranked = ranked[:limit]
+        maybe_enrich_ranked_with_kronos(self._config, frames, ranked)
         state.top_candidates = [asdict(item) for item in ranked]
 
         if is_mayank_persona(self._config):

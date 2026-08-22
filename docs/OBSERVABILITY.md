@@ -10,7 +10,7 @@ This repo now exposes operations health in two layers:
 The wrappers and app now produce these structured events:
 
 - `scheduled_run`
-  - `job=daily_monitor|close|...`
+  - `job=long_cycle|close|...`
   - `status=start|success|failure`
 - `backup_run`
   - local dump lifecycle

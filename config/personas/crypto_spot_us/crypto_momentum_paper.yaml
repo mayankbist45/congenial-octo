@@ -73,3 +73,22 @@ intraday:
     log_decisions: true
     shadow: true
     min_meta_confidence: 0.50
+  kronos:
+    enabled: false
+    mode: "shadow"
+    backend: "local"
+    repo_path: ""
+    model_id: "NeoQuasar/Kronos-small"
+    tokenizer_id: "NeoQuasar/Kronos-Tokenizer-base"
+    device: "cpu"
+    hf_cache_dir: "data/cache/huggingface"
+    endpoint_url: ""
+    request_timeout_seconds: 15.0
+    lookback_bars: 128
+    pred_len: 6
+    max_context: 512
+    min_confidence: 0.50
+    score_weight: 10.0
+    temperature: 1.0
+    top_p: 0.9
+    sample_count: 1

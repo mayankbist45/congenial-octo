@@ -148,6 +148,53 @@ class DecisionEngine:
             market_regime=market_regime,
         )
 
+        # An available LLM is allowed to decline discretionary trades, but it
+        # must not leave an under-invested paper fund in cash indefinitely.
+        # Fall back only when no buy survived the hard risk checks.
+        deployment_triggered = any(
+            trigger.trigger_type in (TriggerType.INITIAL_BUILD, TriggerType.UNDERWEIGHT_DEPLOY)
+            for trigger in triggers
+        )
+        if deployment_triggered and not any(proposal.is_buy_side for proposal in validation.approved):
+            proposed_buy_symbols = {
+                proposal.symbol.upper()
+                for proposal in mandatory + discretionary
+                if proposal.is_buy_side
+            }
+            fallback_candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.symbol.upper() not in proposed_buy_symbols
+            ]
+            fallback = self._rules_only_proposals(
+                portfolio,
+                technicals,
+                triggers,
+                fallback_candidates,
+                market_regime,
+            )
+            if fallback:
+                fallback_validation = self._risk.validate(
+                    fallback,
+                    portfolio,
+                    technicals,
+                    scores,
+                    turnover,
+                    market_regime=market_regime,
+                )
+                validation.approved.extend(fallback_validation.approved)
+                validation.rejected.extend(fallback_validation.rejected)
+                memo = (
+                    f"{memo}\n\nDeterministic cash deployment was used because "
+                    "the fund is under-invested and no discretionary buy survived risk validation."
+                ).strip()
+                logger.warning(
+                    "Cash deployment fallback for %s: %d approved, %d rejected",
+                    as_of.isoformat(),
+                    len(fallback_validation.approved),
+                    len(fallback_validation.rejected),
+                )
+
         if validation.rejected:
             memo = self._append_rejections(memo, validation.rejected)
 

@@ -154,6 +154,7 @@ Debian or Ubuntu host via `scripts/bootstrap_vm.sh`.
 
 - [docs/GCP_ARCHITECTURE.md](docs/GCP_ARCHITECTURE.md) — how it is laid out: paths, Postgres, persistence, schedule
 - [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md) — deploy steps, cost, security, exit plan
+- [docs/KRONOS_GCP_DEPLOY.md](docs/KRONOS_GCP_DEPLOY.md) — GPU VM path, shadow evaluation, and fine-tune export workflow
 
 ### How much starting capital
 

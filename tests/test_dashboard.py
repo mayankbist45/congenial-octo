@@ -237,6 +237,17 @@ def test_holdings_page_lists_positions_with_risk_metrics(client, repo) -> None:
     assert "desktop-only" in body
 
 
+def test_holdings_page_shows_thesis_without_rendering_a_second_holdings_section(
+    client, repo
+) -> None:
+    seed_history(repo)
+
+    body = client.get("/holdings").text
+
+    assert "No thesis recorded." in body
+    assert "Why the fund owns these" not in body
+
+
 def test_performance_page_reports_excess_return(client, repo) -> None:
     seed_history(repo)
 
@@ -494,7 +505,7 @@ def test_operations_page_renders_structured_machine_health(client, temp_config) 
         data_dir / "scheduled.log",
         "scheduled_run",
         "success",
-        job="daily_monitor",
+        job="long_cycle",
     )
     append_event(
         data_dir / "backup.log",
@@ -506,7 +517,7 @@ def test_operations_page_renders_structured_machine_health(client, temp_config) 
 
     body = client.get("/operations").text
     assert "Operations" in body
-    assert "Morning portfolio run" in body
+    assert "Morning long-horizon cycle" in body
     assert "upload_failed" in body
 
 
@@ -521,7 +532,7 @@ def test_operations_overview_marks_weekday_run_healthy_and_intraday_late(temp_co
         "scheduled_run",
         "success",
         ts="2026-08-07T08:20:00Z",
-        job="daily_monitor",
+        job="long_cycle",
     )
     append_event(
         data_dir / "scheduled.log",
@@ -533,7 +544,7 @@ def test_operations_overview_marks_weekday_run_healthy_and_intraday_late(temp_co
 
     ops = service.operations_overview()
     cards = {card["key"]: card for card in ops["cards"]}
-    assert cards["daily_monitor"]["current_state"] == "healthy"
+    assert cards["long_cycle"]["current_state"] == "healthy"
     assert cards["close"]["current_state"] == "healthy"
     assert cards["intraday-india_equity"]["current_state"] in {"late", "unknown", "healthy"}
 
@@ -543,7 +554,7 @@ def test_operations_overview_respects_weekend_schedule(temp_config) -> None:
     service._ops_now = lambda: datetime(2026, 8, 8, 12, 0, 0)
     ops = service.operations_overview()
     cards = {card["key"]: card for card in ops["cards"]}
-    assert cards["daily_monitor"]["current_state"] != "late"
+    assert cards["long_cycle"]["current_state"] != "late"
     assert cards["close"]["current_state"] != "late"
 
 

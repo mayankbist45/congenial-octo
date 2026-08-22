@@ -21,9 +21,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import get_config, get_persona_config
+from src.config import get_persona_config
 from src.fundamentals.reports import QuarterlyReportsService
-from src.logging_setup import setup_logging
+from src.logging_setup import bind_log_context, make_run_label, setup_logging
 from src.universe import load_universe
 
 
@@ -64,13 +64,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
 
-    base = get_config()
-    setup_logging(
-        level="DEBUG" if args.verbose else str(base.get("logging.level", "INFO")),
-        log_file=base.path("logging.file", "data/fund.log"),
-    )
-
     config = get_persona_config(args.persona)
+    setup_logging(
+        level="DEBUG" if args.verbose else str(config.get("logging.level", "INFO")),
+        log_file=config.path("logging.file", "data/fund.log"),
+        persona_log_dir=config.path("logging.persona_dir", "data/logs/personas"),
+    )
+    bind_log_context(
+        persona_id=config.persona_id,
+        run_label=make_run_label("backfill_quarterly_reports", config.persona_id),
+        command="backfill_quarterly_reports",
+        market_id=config.market_id,
+    )
     if args.symbols:
         symbols = [symbol.upper() for symbol in args.symbols]
     else:

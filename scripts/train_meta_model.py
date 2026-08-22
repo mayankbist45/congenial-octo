@@ -19,7 +19,7 @@ from src.intraday.data import IntradayDataService
 from src.intraday.meta_model import MetaLabelModel, default_model_path
 from src.intraday.meta_train import merge_training_rows, rows_from_frames, rows_from_journal
 from src.intraday.spread_math import scan_symbols
-from src.logging_setup import setup_logging
+from src.logging_setup import bind_log_context, make_run_label, setup_logging
 from src.universe import load_universe
 
 
@@ -82,6 +82,13 @@ def main() -> int:
     setup_logging(
         level=str(config.get("logging.level", "INFO")),
         log_file=config.path("logging.file", "data/fund.log"),
+        persona_log_dir=config.path("logging.persona_dir", "data/logs/personas"),
+    )
+    bind_log_context(
+        persona_id=config.persona_id,
+        run_label=make_run_label("train_meta_model", config.persona_id),
+        command="train_meta_model",
+        market_id=config.market_id,
     )
 
     end = date.fromisoformat(args.end) if args.end else date.today()
