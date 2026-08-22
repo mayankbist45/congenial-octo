@@ -61,7 +61,7 @@
     <h2>Approved, not yet placed</h2>
     <span class="note">These go to the broker on the next execution pass</span>
   </div>
-  <div class="table-scroll desktop-only">
+  <div class="table-scroll">
   <table>
     <thead>
       <tr>
@@ -83,24 +83,6 @@
     </tbody>
   </table>
   </div>
-  <div class="mobile-only mobile-cards">
-    {% for p in approved %}
-    <div class="mobile-card">
-      <div class="mobile-card-head">
-        <div>
-          <div class="mobile-card-title">{{ p.symbol }}</div>
-          <div class="mobile-card-subtitle">{{ p.company_name }}</div>
-        </div>
-        <div class="tag {{ 'sell' if p.is_sell else 'buy' }}">{{ p.action }}</div>
-      </div>
-      <div class="mobile-pairs">
-        <div class="mobile-pair"><div class="label">Quantity</div><div class="value">{{ p.quantity }}</div></div>
-        <div class="mobile-pair"><div class="label">Value</div><div class="value">{{ p.estimated_value | money_currency(currency) }}</div></div>
-        <div class="mobile-pair"><div class="label">Approved</div><div class="value">{{ p.decided_at or '-' }}</div></div>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
 </div>
 {% endif %}
 
@@ -110,7 +92,7 @@
     <span class="note">Including proposals the risk engine blocked</span>
   </div>
   {% if history %}
-  <div class="table-scroll desktop-only">
+  <div class="table-scroll">
   <table>
     <thead>
       <tr>
@@ -134,24 +116,6 @@
       {% endfor %}
     </tbody>
   </table>
-  </div>
-  <div class="mobile-only mobile-cards">
-    {% for p in history %}
-    <div class="mobile-card">
-      <div class="mobile-card-head">
-        <div>
-          <div class="mobile-card-title">{{ p.symbol }}</div>
-          <div class="mobile-card-subtitle">{{ p.run_date }}</div>
-        </div>
-        <div class="tag {{ 'sell' if p.is_sell else 'buy' }}">{{ p.action }}</div>
-      </div>
-      <div class="mobile-pairs">
-        <div class="mobile-pair"><div class="label">Quantity</div><div class="value">{{ p.quantity }}</div></div>
-        <div class="mobile-pair"><div class="label">Outcome</div><div class="value">{{ p.status }}{% if p.decided_by %} · {{ p.decided_by }}{% endif %}</div></div>
-      </div>
-      <div class="mobile-card-copy">{{ p.rejection_reason or '-' }}</div>
-    </div>
-    {% endfor %}
   </div>
   {% else %}
     <p class="empty">No decisions recorded yet.</p>

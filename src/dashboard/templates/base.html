@@ -606,8 +606,6 @@
 
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
-    .desktop-only { display: block; }
-    .mobile-only { display: none; }
     .table-scroll {
       width: 100%;
       overflow-x: auto;
@@ -617,62 +615,6 @@
     .table-scroll > .data-table {
       min-width: 640px;
     }
-    .mobile-cards {
-      display: grid;
-      gap: 12px;
-    }
-    .mobile-card {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 14px;
-      background: var(--panel);
-    }
-    .mobile-card-head {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 10px;
-    }
-    .mobile-card-title {
-      font-size: 15px;
-      font-weight: 620;
-      letter-spacing: -0.01em;
-    }
-    .mobile-card-subtitle {
-      color: var(--ink-soft);
-      font-size: 12px;
-      margin-top: 2px;
-    }
-    .mobile-pairs {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px 14px;
-    }
-    .mobile-pair .label {
-      color: var(--ink-soft);
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 2px;
-    }
-    .mobile-pair .value {
-      font-weight: 600;
-      font-size: 13px;
-      word-break: break-word;
-    }
-    .mobile-card-copy {
-      margin-top: 10px;
-      color: var(--ink-soft);
-      font-size: 13px;
-      line-height: 1.5;
-    }
-    .mobile-actions {
-      display: grid;
-      gap: 8px;
-      margin-top: 12px;
-    }
-
     .region-badge {
       display: inline-block;
       padding: 2px 8px;
@@ -849,8 +791,6 @@
       }
       .stat { padding: 14px; }
       .stat .value { font-size: 17px; }
-      .desktop-only { display: none !important; }
-      .mobile-only { display: block; }
       .mobile-inline { display: inline; }
       .actions,
       form.inline {
@@ -887,10 +827,6 @@
       .bar-label,
       .bar-value {
         width: auto;
-      }
-      .mobile-pairs {
-        grid-template-columns: 1fr;
-        gap: 8px;
       }
       .table-scroll > table,
       .table-scroll > .data-table {
