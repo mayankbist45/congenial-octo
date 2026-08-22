@@ -76,7 +76,7 @@ def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
             "15",
             "8",
             "1-5",
-            f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh daily_monitor",
+            f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh long_cycle",
         )
     )
     lines.append(

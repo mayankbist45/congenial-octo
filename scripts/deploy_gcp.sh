@@ -280,7 +280,7 @@ deploy)
     bootstrap
     echo
     echo "Deployed. The VM now runs on IST:"
-    echo "  08:15  daily_monitor    weekday monitoring and proposals"
+    echo "  08:15  long_cycle       weekday long-horizon paper execution"
     echo "  09:00  weekly_research  Saturday candidate-pack refresh"
     echo "  18:00  close    mark the book and record NAV"
     echo "  19:30  backup   pg_dump of the journal"
@@ -340,7 +340,7 @@ cloudlogs)
         --format 'value(timestamp.date("%Y-%m-%d %H:%M:%S"), jsonPayload.message, textPayload)'
     ;;
 
-daily_monitor | weekly_research | cycle | close | analyse)
+daily_monitor | long_cycle | weekly_research | cycle | close | analyse)
     require_gcloud
     ssh_vm "cd '$REMOTE_DIR' && ./scripts/run_scheduled.sh $1 && tail -30 data/scheduled.log"
     ;;

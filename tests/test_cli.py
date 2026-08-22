@@ -13,7 +13,15 @@ from typing import List, Optional
 
 import pytest
 
-from run_daily import _auto_mode, _clear_pending, _run_learning_for, build_parser
+from run_daily import (
+    _auto_mode,
+    _clear_pending,
+    _run_learning_for,
+    _scheduled_long_personas,
+    build_parser,
+    main,
+)
+from src.config import get_config
 from src.orchestrator import AutoApprovalRefused
 
 
@@ -91,6 +99,40 @@ def test_learn_is_a_supported_command() -> None:
 
 def test_watch_is_a_supported_command() -> None:
     assert build_parser().parse_args(["watch", "--persona", "calan"]).command == "watch"
+
+
+def test_long_cycle_is_a_supported_command() -> None:
+    assert build_parser().parse_args(["long_cycle"]).command == "long_cycle"
+
+
+def test_scheduled_long_cycle_selects_all_paper_long_horizon_personas() -> None:
+    args = build_parser().parse_args(["long_cycle"])
+    personas, problems = _scheduled_long_personas(args, get_config())
+
+    assert problems == []
+    assert personas == [
+        "balanced",
+        "steady_compounder",
+        "small_cap_aggressor",
+        "momentum_rider",
+        "balanced_us",
+        "steady_compounder_us",
+        "momentum_rider_us",
+    ]
+
+
+def test_long_cycle_refuses_ineligible_personas_without_running(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "run_daily._scheduled_long_personas",
+        lambda _args, _config: ([], ["balanced: DRY_RUN must be true for unattended execution"]),
+    )
+    monkeypatch.setattr(
+        "run_daily._run_persona",
+        lambda *_args: pytest.fail("ineligible long cycle must not start a persona"),
+    )
+
+    assert main(["long_cycle"]) == 1
+    assert "Scheduled long cycle refused" in capsys.readouterr().err
 
 
 def test_learning_failures_are_reported_without_raising(monkeypatch, capsys) -> None:

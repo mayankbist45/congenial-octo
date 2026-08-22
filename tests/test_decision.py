@@ -185,6 +185,49 @@ def test_rules_only_path_still_deploys_idle_cash(config) -> None:
     assert all(p.action == Action.BUY for p in decision.proposals)
 
 
+def test_available_llm_cannot_leave_underinvested_fund_without_a_buy(config) -> None:
+    llm = FakeLLM(response([]))
+    portfolio = make_portfolio([], cash=2_000_000)
+
+    decision = run(
+        build(config, llm),
+        portfolio,
+        ["WIPRO", "HCLTECH", "TECHM", "LTIM"],
+        triggers=[deployment_trigger()],
+    )
+
+    assert decision.llm_used
+    assert decision.proposals
+    assert all(proposal.source == "quant_screen" for proposal in decision.proposals)
+    assert "Deterministic cash deployment" in decision.memo
+
+
+def test_llm_buy_prevents_duplicate_cash_deployment_fallback(config) -> None:
+    llm = FakeLLM(
+        response(
+            [
+                {
+                    "symbol": "WIPRO",
+                    "action": "BUY",
+                    "quantity": 10,
+                    "rationale": "Quality and valuation pass the portfolio's gates.",
+                }
+            ]
+        )
+    )
+    portfolio = make_portfolio([], cash=2_000_000)
+
+    decision = run(
+        build(config, llm),
+        portfolio,
+        ["WIPRO", "HCLTECH"],
+        triggers=[deployment_trigger()],
+    )
+
+    assert [proposal.symbol for proposal in decision.proposals] == ["WIPRO"]
+    assert "Deterministic cash deployment" not in decision.memo
+
+
 def test_rules_only_buys_are_capped_per_run(config) -> None:
     """The portfolio is built gradually, under repeated human review."""
     llm = FakeLLM(available=False)

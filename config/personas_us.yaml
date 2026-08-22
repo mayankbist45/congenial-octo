@@ -20,7 +20,7 @@ personas:
     execution:
       product_type: "CASH"
       exchange: US
-      auto_approve: false
+      auto_approve: true
     news:
       feeds:
         - name: "Yahoo Finance"
@@ -71,7 +71,7 @@ personas:
     execution:
       product_type: "CASH"
       exchange: US
-      auto_approve: false
+      auto_approve: true
 
   momentum_rider_us:
     enabled: true
@@ -111,7 +111,7 @@ personas:
     execution:
       product_type: "CASH"
       exchange: US
-      auto_approve: false
+      auto_approve: true
 
   calan_us:
     enabled: true

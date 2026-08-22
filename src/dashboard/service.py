@@ -1083,8 +1083,8 @@ class DashboardService:
 
         cards = [
             self._scheduled_job_card(
-                "daily_monitor",
-                label="Morning portfolio run",
+                "long_cycle",
+                label="Morning long-horizon cycle",
                 schedule=self._market_schedule(self._config.market_id, "swing_cycle"),
                 grace_minutes=int(self._config.get("observability.daily_monitor_grace_minutes", 45) or 45),
                 now=now,
@@ -1324,7 +1324,7 @@ class DashboardService:
         return [
             {
                 "label": "Morning run",
-                "value": lookup["daily_monitor"]["current_state"],
+                "value": lookup["long_cycle"]["current_state"],
             },
             {
                 "label": "Close run",

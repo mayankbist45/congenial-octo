@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "analyse",
             "daily_monitor",
+            "long_cycle",
             "weekly_research",
             "execute",
             "cycle",
@@ -220,6 +221,29 @@ def _resolve_personas(args) -> List[str]:
                 filtered.append(pid)
         return filtered
     return personas
+
+
+def _scheduled_long_personas(args, base_config) -> tuple[List[str], List[str]]:
+    """Return unattended-safe long-horizon personas and configuration failures."""
+    personas = _resolve_personas(args)
+    eligible: List[str] = []
+    problems: List[str] = []
+    for persona_id in personas:
+        try:
+            config = get_persona_config(persona_id, base=base_config)
+        except ValueError as exc:
+            problems.append(str(exc))
+            continue
+        if config.get("intraday.enabled", False):
+            continue
+        if not bool(config.get("execution.auto_approve", False)):
+            problems.append(f"{persona_id}: execution.auto_approve must be true")
+            continue
+        if not config.secrets.dry_run:
+            problems.append(f"{persona_id}: DRY_RUN must be true for unattended execution")
+            continue
+        eligible.append(persona_id)
+    return eligible, problems
 
 
 def _run_learning_for(config, as_of: Optional[date] = None) -> None:
@@ -457,7 +481,7 @@ def _run_persona(persona_id: str, args, base_config) -> int:
                 technicals=result.technicals, fundamentals=result.fundamentals
             )
             print(f"\n[{persona_id}] {summary.describe()}")
-            return 0
+            return 0 if not summary.failed else 1
 
         if args.command == "close":
             manager.close_of_day(as_of=as_of)
@@ -509,6 +533,26 @@ def main(argv: Optional[list] = None) -> int:
 
         serve()
         return 0
+
+    if args.command == "long_cycle":
+        personas, problems = _scheduled_long_personas(args, config)
+        if problems:
+            for problem in problems:
+                print(f"Scheduled long cycle refused: {problem}", file=sys.stderr)
+            return 1
+        if not personas:
+            print("Scheduled long cycle found no eligible long-horizon paper personas.", file=sys.stderr)
+            return 1
+
+        args.command = "cycle"
+        args.auto_approve = True
+        worst_exit = 0
+        for persona_id in personas:
+            exit_code = _run_persona(persona_id, args, config)
+            worst_exit = max(worst_exit, exit_code)
+            if exit_code == 130:
+                break
+        return worst_exit
 
     personas = _resolve_personas(args)
     worst_exit = 0
