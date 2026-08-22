@@ -265,10 +265,14 @@ personas:
       kronos:
         enabled: true
         mode: "shadow"
+        backend: "local"
         repo_path: "../Kronos"
         model_id: "NeoQuasar/Kronos-small"
         tokenizer_id: "NeoQuasar/Kronos-Tokenizer-base"
         device: "cpu"
+        hf_cache_dir: "data/cache/huggingface"
+        endpoint_url: ""
+        request_timeout_seconds: 15.0
         lookback_bars: 128
         pred_len: 3
         max_context: 512
