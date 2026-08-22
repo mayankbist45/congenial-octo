@@ -178,7 +178,7 @@ personas:
         shadow: true
         min_meta_confidence: 0.55
       kronos:
-        enabled: true
+        enabled: false
         mode: "shadow"
         backend: "local"
         repo_path: "../Kronos"

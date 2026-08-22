@@ -32,6 +32,7 @@ def test_remote_backend_populates_ranked_fields(monkeypatch):
     raw = copy.deepcopy(config.raw)
     raw["intraday"]["kronos"]["backend"] = "http"
     raw["intraday"]["kronos"]["endpoint_url"] = "http://kronos-internal:8090"
+    raw["intraday"]["kronos"]["enabled"] = True
     cfg = Config(raw=raw, secrets=config.secrets, root=config.root, persona_id=config.persona_id)
 
     class FakeResponse:
@@ -91,6 +92,7 @@ def test_remote_backend_rejects_partial_forecast_response(monkeypatch):
     raw = copy.deepcopy(config.raw)
     raw["intraday"]["kronos"]["backend"] = "http"
     raw["intraday"]["kronos"]["endpoint_url"] = "http://kronos-internal:8090"
+    raw["intraday"]["kronos"]["enabled"] = True
     cfg = Config(raw=raw, secrets=config.secrets, root=config.root, persona_id=config.persona_id)
 
     class FakeResponse:
