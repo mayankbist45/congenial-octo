@@ -208,7 +208,7 @@ def test_overview_total_return_uses_nav_history(service, repo) -> None:
     assert overview["total_return_pct"] > 0
 
 
-def test_proposal_card_shows_rationale_thesis_and_warnings(client, repo) -> None:
+def test_proposal_shows_rationale_thesis_and_warnings(client, repo) -> None:
     seed_run(repo)
 
     body = client.get("/proposals").text
@@ -216,7 +216,7 @@ def test_proposal_card_shows_rationale_thesis_and_warnings(client, repo) -> None
     assert "Margins hold" in body
     assert "overbought" in body
     assert "initial_build" in body
-    assert "mobile-card" in body
+    assert "Awaiting your decision" in body
 
 
 def test_mandatory_proposal_is_marked_as_rule_enforced(client, repo) -> None:
@@ -233,8 +233,7 @@ def test_holdings_page_lists_positions_with_risk_metrics(client, repo) -> None:
     assert "TCS" in body
     assert "Idio vol" in body
     assert "Sector exposure" in body
-    assert "mobile-cards" in body
-    assert "desktop-only" in body
+    assert "table-scroll" in body
 
 
 def test_holdings_page_shows_thesis_without_rendering_a_second_holdings_section(
@@ -276,7 +275,7 @@ def test_news_page_shows_the_digest(client, repo, temp_config) -> None:
     assert "Inflation eased" in body
     assert "Large deal win" in body
     assert "TATASTEEL" in body
-    assert "mobile-card" in body
+    assert "What was reported" in body
 
 
 def test_journal_links_to_the_run_detail(client, repo) -> None:
@@ -290,14 +289,14 @@ def test_journal_links_to_the_run_detail(client, repo) -> None:
     assert "WIPRO" in detail.text
 
 
-def test_overview_includes_responsive_markup(client, repo) -> None:
+def test_overview_includes_top_holdings_table(client, repo) -> None:
     seed_run(repo)
     seed_history(repo)
 
     body = client.get("/").text
 
-    assert "mobile-card" in body
-    assert "desktop-only" in body
+    assert "Largest holdings" in body
+    assert "table-scroll" in body
 
 
 def test_unknown_run_is_a_404(client) -> None:

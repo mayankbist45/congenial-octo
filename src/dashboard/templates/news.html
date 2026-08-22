@@ -20,7 +20,7 @@
   {% if intraday_news.watchlist %}
   <div class="panel">
     <h2>Watchlist catalysts</h2>
-    <div class="table-scroll desktop-only">
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr><th>Symbol</th><th>Confidence</th><th>Catalyst</th><th>Rationale</th></tr>
@@ -37,27 +37,13 @@
       </tbody>
     </table>
     </div>
-    <div class="mobile-only mobile-cards">
-      {% for w in intraday_news.watchlist %}
-      <div class="mobile-card">
-        <div class="mobile-card-head">
-          <div>
-            <div class="mobile-card-title">{{ w.symbol }}</div>
-            <div class="mobile-card-subtitle">{{ w.catalyst_class or '—' }}</div>
-          </div>
-          <div class="tag">{{ w.confidence | number(2) if w.confidence is defined else '—' }}</div>
-        </div>
-        <div class="mobile-card-copy">{{ w.rationale or '' }}</div>
-      </div>
-      {% endfor %}
-    </div>
   </div>
   {% endif %}
 
   {% if intraday_news.top_candidates %}
   <div class="panel">
     <h2>Top candidates in play</h2>
-    <div class="table-scroll desktop-only">
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr><th>Symbol</th><th>Score</th><th>In play</th><th>Trend</th><th>RVOL</th></tr>
@@ -75,30 +61,13 @@
       </tbody>
     </table>
     </div>
-    <div class="mobile-only mobile-cards">
-      {% for c in intraday_news.top_candidates[:12] %}
-      <div class="mobile-card">
-        <div class="mobile-card-head">
-          <div>
-            <div class="mobile-card-title">{{ c.symbol }}</div>
-            <div class="mobile-card-subtitle">{{ c.in_play }}</div>
-          </div>
-          <div class="tag">{{ c.score | number(1) }}</div>
-        </div>
-        <div class="mobile-pairs">
-          <div class="mobile-pair"><div class="label">Trend</div><div class="value">{{ c.trend_cleanliness | number(2) }}</div></div>
-          <div class="mobile-pair"><div class="label">RVOL</div><div class="value">{{ c.volume_expansion | number(2) }}x</div></div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
   </div>
   {% endif %}
 
   {% if intraday_news.skipped_signals %}
   <div class="panel">
     <h2>Skipped / vetoed signals</h2>
-    <div class="table-scroll desktop-only">
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Side</th><th>Reason</th></tr>
@@ -115,20 +84,6 @@
         {% endfor %}
       </tbody>
     </table>
-    </div>
-    <div class="mobile-only mobile-cards">
-      {% for s in intraday_news.skipped_signals %}
-      <div class="mobile-card">
-        <div class="mobile-card-head">
-          <div>
-            <div class="mobile-card-title">{{ s.symbol }}</div>
-            <div class="mobile-card-subtitle">{{ s.time or '—' }} · {{ s.strategy }}</div>
-          </div>
-          <div class="tag">{{ s.side }}</div>
-        </div>
-        <div class="mobile-card-copy">{{ s.reason or '' }}</div>
-      </div>
-      {% endfor %}
     </div>
   </div>
   {% endif %}
@@ -176,7 +131,7 @@
   <div class="panel">
     <h2>On current holdings</h2>
     {% if digest.holdings_notes %}
-    <div class="table-scroll desktop-only">
+    <div class="table-scroll">
     <table>
       <thead><tr><th>Stock</th><th>What was reported</th></tr></thead>
       <tbody>
@@ -189,14 +144,6 @@
       </tbody>
     </table>
     </div>
-    <div class="mobile-only mobile-cards">
-      {% for symbol, note in digest.holdings_notes.items() %}
-      <div class="mobile-card">
-        <div class="mobile-card-title">{{ symbol }}</div>
-        <div class="mobile-card-copy">{{ note }}</div>
-      </div>
-      {% endfor %}
-    </div>
     {% else %}
       <p class="empty">No news on the fund's holdings today.</p>
     {% endif %}
@@ -205,7 +152,7 @@
   <div class="panel">
     <h2>On watchlist names</h2>
     {% if digest.watchlist_notes %}
-    <div class="table-scroll desktop-only">
+    <div class="table-scroll">
     <table>
       <thead><tr><th>Stock</th><th>What was reported</th></tr></thead>
       <tbody>
@@ -217,14 +164,6 @@
         {% endfor %}
       </tbody>
     </table>
-    </div>
-    <div class="mobile-only mobile-cards">
-      {% for symbol, note in digest.watchlist_notes.items() %}
-      <div class="mobile-card">
-        <div class="mobile-card-title">{{ symbol }}</div>
-        <div class="mobile-card-copy">{{ note }}</div>
-      </div>
-      {% endfor %}
     </div>
     {% else %}
       <p class="empty">Nothing on the watchlist today.</p>

@@ -258,7 +258,7 @@
   <div class="panel">
     <h2>Largest holdings</h2>
     {% if overview.top_holdings %}
-    <div class="desktop-only">
+    <div class="table-scroll">
     <table>
       <thead>
         <tr><th>Stock</th><th class="num">Weight</th><th class="num">Position return</th></tr>
@@ -276,22 +276,6 @@
         {% endfor %}
       </tbody>
     </table>
-    </div>
-    <div class="mobile-only mobile-cards">
-      {% for h in overview.top_holdings %}
-      <div class="mobile-card">
-        <div class="mobile-card-head">
-          <div>
-            <div class="mobile-card-title">{{ h.symbol }}</div>
-            <div class="mobile-card-subtitle">{{ h.sector }}</div>
-          </div>
-          <div class="tag">{{ h.weight_pct | pct(1) }}</div>
-        </div>
-        <div class="mobile-pairs">
-          <div class="mobile-pair"><div class="label">Position return</div><div class="value {{ h.return_pct | sign }}">{{ h.return_pct | pct(1, true) }}</div></div>
-        </div>
-      </div>
-      {% endfor %}
     </div>
     {% else %}
       <p class="empty">The fund holds no positions yet.</p>
