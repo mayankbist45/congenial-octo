@@ -20,9 +20,8 @@ class FakeAdminAuth:
         return {"id": 1, "email": "admin@example.com", "role": "admin"}
 
 
-def client_with_invite(temp_config):
+def client_with_member(temp_config):
     repository = WorkspaceRepository(temp_config)
-    repository.create_invite("member@example.com")
     user = repository.user_for_email("member@example.com")
     assert user["id"] == 1
     return TestClient(create_app(temp_config, workspace_auth=FakeWorkspaceAuth())), repository
@@ -30,7 +29,7 @@ def client_with_invite(temp_config):
 
 def test_workspace_profile_and_job_contract(temp_config, monkeypatch):
     monkeypatch.setattr("src.workspace.service.WorkspaceService.generate", lambda *_: None)
-    client, _ = client_with_invite(temp_config)
+    client, _ = client_with_member(temp_config)
 
     response = client.get("/api/v1/workspace/profile")
     assert response.status_code == 200
@@ -40,18 +39,14 @@ def test_workspace_profile_and_job_contract(temp_config, monkeypatch):
         "/api/v1/workspace/profile",
         json={"profile": {"target_positions": 12, "excluded_sectors": ["Metals"]}},
     )
-    assert response.status_code == 200
-    assert response.json()["profile"]["target_positions"] == 12
+    assert response.status_code == 403
 
     response = client.post("/api/v1/workspace/portfolios")
-    assert response.status_code == 202
-    job = response.json()["job"]
-    assert job["status"] in {"queued", "running", "failed", "completed"}
-    assert client.get(f"/api/v1/workspace/jobs/{job['id']}").status_code == 200
+    assert response.status_code == 403
 
 
 def test_workspace_portfolio_and_inbox_are_user_scoped(temp_config):
-    client, repository = client_with_invite(temp_config)
+    client, repository = client_with_member(temp_config)
     portfolio_id = repository.save_portfolio(1, {"as_of": "2026-08-23T00:00:00Z", "holdings": [], "data_status": "delayed_eod"})
     event_id = repository.add_event(1, {"title": "Quarterly result needs review", "impact": "high"})
 
@@ -59,7 +54,7 @@ def test_workspace_portfolio_and_inbox_are_user_scoped(temp_config):
     inbox = client.get("/api/v1/workspace/inbox")
     assert inbox.status_code == 200
     assert inbox.json()["events"][0]["id"] == event_id
-    assert client.post(f"/api/v1/workspace/events/{event_id}/acknowledge").json()["status"] == "acknowledged"
+    assert client.post(f"/api/v1/workspace/events/{event_id}/acknowledge").status_code == 403
 
 
 def test_workspace_routes_reject_requests_without_google_token(temp_config):
@@ -67,8 +62,30 @@ def test_workspace_routes_reject_requests_without_google_token(temp_config):
     assert response.status_code == 401
 
 
+def test_verified_google_account_is_provisioned_as_member_and_admin_is_preserved(temp_config):
+    repository = WorkspaceRepository(temp_config)
+    member = repository.user_for_email("new.user@example.com", "New User", "https://example.com/avatar.png")
+    assert member["role"] == "member"
+    assert member["display_name"] == "New User"
+    assert member["avatar_url"] == "https://example.com/avatar.png"
+
+    repository.create_invite("admin@example.com", role="admin")
+    admin = repository.user_for_email("admin@example.com")
+    assert admin["role"] == "admin"
+    # A subsequent non-admin sign-in must never demote an existing administrator.
+    assert repository.user_for_email("admin@example.com")["role"] == "admin"
+
+
+def test_workspace_me_returns_account_essentials(temp_config):
+    client, _ = client_with_member(temp_config)
+    response = client.get("/api/v1/workspace/me")
+    assert response.status_code == 200
+    assert response.json()["user"]["email"] == "member@example.com"
+    assert response.json()["user"]["role"] == "member"
+
+
 def test_workspace_dashboard_returns_the_published_eod_snapshot(temp_config):
-    client, _ = client_with_invite(temp_config)
+    client, _ = client_with_member(temp_config)
     publisher = DashboardSnapshotService(temp_config)
     published = publisher.publish(date(2026, 8, 21))
 
@@ -80,7 +97,7 @@ def test_workspace_dashboard_returns_the_published_eod_snapshot(temp_config):
 
 
 def test_workspace_persona_contracts_are_member_read_only(temp_config):
-    client, _ = client_with_invite(temp_config)
+    client, _ = client_with_member(temp_config)
     published = DashboardSnapshotService(temp_config).publish(date(2026, 8, 21))
     persona_id = published["personas"][0]["id"]
 
@@ -90,10 +107,7 @@ def test_workspace_persona_contracts_are_member_read_only(temp_config):
     for suffix in ("", "/holdings", "/performance", "/risk", "/news", "/runs"):
         assert client.get(f"/api/v1/workspace/personas/{persona_id}{suffix}").status_code == 200
     assert client.get("/api/v1/workspace/news").status_code == 200
-    operations = client.get("/api/v1/workspace/operations")
-    assert operations.status_code == 200
-    assert operations.json()["viewer_role"] == "member"
-    # Operational mutations stay protected even when members can inspect them.
+    assert client.get("/api/v1/workspace/operations").status_code == 403
     assert client.post("/api/v1/admin/proposals/1/approve").status_code == 403
 
 
@@ -119,7 +133,7 @@ def test_healthcheck_is_public(temp_config):
 
 
 def test_admin_routes_require_admin_role(temp_config):
-    member_client, _ = client_with_invite(temp_config)
+    member_client, _ = client_with_member(temp_config)
     assert member_client.get("/api/v1/admin/overview").status_code == 403
 
     repository = WorkspaceRepository(temp_config)

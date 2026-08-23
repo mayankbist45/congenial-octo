@@ -1,4 +1,4 @@
-"""Google ID-token verification for the invite-only workspace."""
+"""Google ID-token verification for the public read-only workspace."""
 
 from __future__ import annotations
 
@@ -29,7 +29,11 @@ class WorkspaceAuth:
             payload = id_token.verify_oauth2_token(token, google_requests.Request(), client_id)
             if not payload.get("email_verified") or not payload.get("email"):
                 raise ValueError("A verified Google email is required.")
-            return self._repo.user_for_email(str(payload["email"]))
+            return self._repo.user_for_email(
+                str(payload["email"]),
+                display_name=str(payload.get("name") or ""),
+                avatar_url=str(payload.get("picture") or ""),
+            )
         except WorkspaceAccessError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except Exception as exc:

@@ -817,7 +817,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return JSONResponse(dossier)
 
     # ------------------------------------------------------------------
-    # Invite-only research workspace. These routes intentionally expose no
+    # Public read-only research workspace. These routes intentionally expose no
     # execution capability and only return delayed/end-of-day research data.
     # ------------------------------------------------------------------
     def _workspace_service():
@@ -858,6 +858,21 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         if identity.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Administrator access is required.")
         return identity
+
+    @app.get("/api/v1/workspace/me")
+    def workspace_me(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        return JSONResponse({
+            "user": {
+                "id": identity["id"],
+                "email": identity["email"],
+                "role": identity["role"],
+                "display_name": identity.get("display_name"),
+                "avatar_url": identity.get("avatar_url"),
+                "created_at": identity.get("created_at"),
+                "last_seen_at": identity.get("last_seen_at"),
+            },
+            "disclaimer": "Research workspace. Not investment advice. No live order execution.",
+        })
 
     @app.get("/api/v1/workspace/profile")
     def workspace_profile(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
@@ -930,8 +945,8 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return _workspace_response(snapshot, news=entries)
 
     @app.get("/api/v1/workspace/operations")
-    def workspace_operations(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
-        """Read-only operations visibility for every invited workspace member."""
+    def workspace_operations(identity: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        """Read-only operations visibility for administrators only."""
         snapshot = _workspace_snapshot()
         return _workspace_response(snapshot, viewer_role=identity.get("role", "member"), operations={
             "overview": default_service.operations_overview(),
@@ -970,13 +985,13 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         }], source_freshness=persona.get("source_freshness", {}), warnings=persona.get("warnings", []))
 
     @app.put("/api/v1/workspace/profile")
-    def update_workspace_profile(payload: WorkspaceProfileRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def update_workspace_profile(payload: WorkspaceProfileRequest, identity: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
         service = _workspace_service()
         profile = service.repo.save_profile(int(identity["id"]), payload.profile)
         return JSONResponse({"profile": profile, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     @app.post("/api/v1/workspace/portfolios", status_code=202)
-    def create_workspace_portfolio(background_tasks: BackgroundTasks, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def create_workspace_portfolio(background_tasks: BackgroundTasks, identity: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
         service = _workspace_service()
         job = service.repo.create_job(int(identity["id"]))
         background_tasks.add_task(service.generate, job["id"], int(identity["id"]))
@@ -1018,7 +1033,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return JSONResponse({"events": _workspace_service().repo.inbox(int(identity["id"])), "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     @app.post("/api/v1/workspace/events/{event_id}/acknowledge")
-    def acknowledge_workspace_event(event_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def acknowledge_workspace_event(event_id: str, identity: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
         try:
             _workspace_service().repo.acknowledge_event(event_id, int(identity["id"]))
         except KeyError as exc:
@@ -1026,7 +1041,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return JSONResponse({"status": "acknowledged"})
 
     @app.post("/api/v1/workspace/portfolio-actions")
-    def record_workspace_action(payload: WorkspaceActionRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def record_workspace_action(payload: WorkspaceActionRequest, identity: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
         service = _workspace_service()
         event_id = service.repo.add_event(int(identity["id"]), {"type": "user_review", "impact": "low", "title": payload.action, "detail": payload.note or "Review recorded without broker execution.", "created_at": datetime.now(timezone.utc).isoformat()})
         return JSONResponse({"event_id": event_id, "status": "recorded", "disclaimer": "Research workspace. Not investment advice. No live order execution."})
