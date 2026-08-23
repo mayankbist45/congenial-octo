@@ -68,6 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
             "execute",
             "cycle",
             "close",
+            "publish_dashboard",
             "learn",
             "dashboard",
             "status",
@@ -532,6 +533,13 @@ def main(argv: Optional[list] = None) -> int:
         from src.dashboard.app import serve
 
         serve()
+        return 0
+
+    if args.command == "publish_dashboard":
+        from src.workspace.dashboard_snapshot import DashboardSnapshotService
+
+        snapshot = DashboardSnapshotService(config).publish(_parse_date(args.as_of) or date.today())
+        print(f"Published delayed/EOD dashboard snapshot for {snapshot['snapshot_date']} at {snapshot['as_of']}")
         return 0
 
     if args.command == "long_cycle":

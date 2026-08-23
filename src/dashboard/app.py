@@ -67,6 +67,10 @@ class WorkspaceActionRequest(BaseModel):
     note: Optional[str] = None
 
 
+class AdminProposalRequest(BaseModel):
+    reason: str = ""
+
+
 def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = None) -> FastAPI:
     config = config or get_config()
     default_service = DashboardService(config)
@@ -82,8 +86,8 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         CORSMiddleware,
         allow_origins=[str(origin) for origin in allowed_origins],
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
+        allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Authorization", "Content-Type"],
     )
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
     templates.env.globals["market_label"] = market_label
@@ -108,6 +112,11 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         )
 
     app.add_event_handler("startup", _log_dashboard_start)
+
+    @app.get("/healthz")
+    def healthz() -> Dict[str, str]:
+        """Public liveness check; workspace data remains authenticated."""
+        return {"status": "ok"}
 
     def _get_service(persona: Optional[str] = None) -> DashboardService:
         if not persona:
@@ -815,10 +824,40 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         from src.workspace.service import WorkspaceService
         return WorkspaceService(config)
 
+    def _admin_identity(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> Dict[str, Any]:
+        if identity.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Administrator access is required.")
+        return identity
+
     @app.get("/api/v1/workspace/profile")
     def workspace_profile(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
         service = _workspace_service()
         return JSONResponse({"profile": service.repo.profile(int(identity["id"])), "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.get("/api/v1/workspace/dashboard")
+    def workspace_dashboard(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        from src.workspace.dashboard_snapshot import DashboardSnapshotService
+
+        snapshot = DashboardSnapshotService(config).latest()
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="No delayed/EOD dashboard snapshot has been published yet.")
+        return JSONResponse(snapshot)
+
+    @app.get("/api/v1/workspace/dashboard/stocks/{symbol}")
+    def workspace_dashboard_stock(symbol: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        from src.workspace.dashboard_snapshot import DashboardSnapshotService
+
+        snapshot = DashboardSnapshotService(config).latest()
+        holding = next((item for item in (snapshot or {}).get("holdings", []) if item.get("symbol") == symbol.upper()), None)
+        if holding is None:
+            raise HTTPException(status_code=404, detail="Stock is not in the latest delayed/EOD dashboard snapshot.")
+        return JSONResponse({
+            "stock": holding,
+            "as_of": snapshot["as_of"],
+            "data_status": snapshot["data_status"],
+            "evidence": [{"type": "fund_journal", "label": "Fund holding thesis", "summary": holding.get("thesis") or "No thesis was persisted for this holding."}],
+            "disclaimer": snapshot["disclaimer"],
+        })
 
     @app.put("/api/v1/workspace/profile")
     def update_workspace_profile(payload: WorkspaceProfileRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
@@ -881,6 +920,54 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         service = _workspace_service()
         event_id = service.repo.add_event(int(identity["id"]), {"type": "user_review", "impact": "low", "title": payload.action, "detail": payload.note or "Review recorded without broker execution.", "created_at": datetime.now(timezone.utc).isoformat()})
         return JSONResponse({"event_id": event_id, "status": "recorded", "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    # ------------------------------------------------------------------
+    # React admin console contracts. These reuse the existing read-side
+    # service and preserve its human approval gate without serving Jinja.
+    # ------------------------------------------------------------------
+    @app.get("/api/v1/admin/overview")
+    def admin_overview(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        return JSONResponse(default_service.overview())
+
+    @app.get("/api/v1/admin/proposals")
+    def admin_proposals(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        return JSONResponse({"pending": default_service.pending_proposals(), "approved": default_service.approved_proposals(), "recent": default_service.recent_decisions()})
+
+    @app.post("/api/v1/admin/proposals/{proposal_id}/approve")
+    def admin_approve_proposal(proposal_id: int, _: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        if not default_service.approve(proposal_id):
+            raise HTTPException(status_code=409, detail="Proposal cannot be approved in its current state.")
+        return JSONResponse({"status": "approved", "proposal_id": proposal_id})
+
+    @app.post("/api/v1/admin/proposals/{proposal_id}/reject")
+    def admin_reject_proposal(proposal_id: int, payload: AdminProposalRequest, _: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        if not default_service.reject(proposal_id, payload.reason):
+            raise HTTPException(status_code=409, detail="Proposal cannot be rejected in its current state.")
+        return JSONResponse({"status": "rejected", "proposal_id": proposal_id})
+
+    @app.get("/api/v1/admin/holdings")
+    def admin_holdings(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        return JSONResponse({"holdings": default_service.holdings(), "sector_weights": default_service.sector_weights()})
+
+    @app.get("/api/v1/admin/risk")
+    def admin_risk(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        return JSONResponse(default_service.risk_profile() or {})
+
+    @app.get("/api/v1/admin/performance")
+    def admin_performance(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        return JSONResponse({"report": default_service.performance(), "series": default_service.nav_series()})
+
+    @app.get("/api/v1/admin/runs")
+    def admin_runs(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        return JSONResponse({"runs": default_service.runs()})
+
+    @app.get("/api/v1/admin/operations")
+    def admin_operations(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        return JSONResponse(default_service.operations_overview())
+
+    @app.get("/api/v1/admin/audit-events")
+    def admin_audit_events(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        return JSONResponse({"events": default_service.recent_decisions()})
 
     return app
 

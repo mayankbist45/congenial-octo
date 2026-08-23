@@ -81,6 +81,14 @@ def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
     )
     lines.append(
         _cron_line(
+            "15",
+            "18",
+            "1-5",
+            f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh publish_dashboard",
+        )
+    )
+    lines.append(
+        _cron_line(
             "0",
             "9",
             "6",

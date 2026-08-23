@@ -189,6 +189,22 @@ pg_restore --clean --if-exists --dbname="$DATABASE_URL" journal-2026-08-01.dump
 
 ## Security
 
+### React API proxy
+
+The React workspace must not call the VM's port `8000` directly. Reserve a
+static external IP, create a temporary `sslip.io` hostname for it, then run on
+the VM:
+
+```bash
+sudo DASHBOARD_PUBLIC_HOST=203-0-113-10.sslip.io ./scripts/setup_https_proxy.sh
+```
+
+Open only TCP `80` and `443` on the VM tag and delete the public TCP `8000`
+rule. Caddy terminates TLS and only forwards `/api/*` and `/healthz` to the
+loopback FastAPI service; it does not expose the legacy Jinja pages. Configure
+the Vercel rewrite and FastAPI `web.allowed_origins` with the resulting HTTPS
+origin before setting `VITE_DATA_MODE=live`.
+
 Only SSH is reachable. The dashboard binds to `127.0.0.1` because
 `dashboard.host` says so, PostgreSQL listens on loopback only, and no firewall
 rule is created for port 8000 — the `dashboard` subcommand tunnels it over SSH

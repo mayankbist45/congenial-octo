@@ -413,6 +413,15 @@ CREATE TABLE IF NOT EXISTS workspace_events (
     created_at TEXT NOT NULL
 );
 
+-- A published snapshot is the read-only EOD boundary for the React workspace.
+-- It is intentionally separate from workspace portfolios and fund execution.
+CREATE TABLE IF NOT EXISTS dashboard_snapshots (
+    snapshot_date TEXT PRIMARY KEY,
+    as_of TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -440,6 +449,7 @@ CREATE INDEX IF NOT EXISTS idx_meta_decisions_labeled ON meta_decisions(labeled_
 CREATE INDEX IF NOT EXISTS idx_workspace_jobs_user ON workspace_jobs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_workspace_portfolios_user ON workspace_portfolios(user_id, version);
 CREATE INDEX IF NOT EXISTS idx_workspace_events_user ON workspace_events(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_as_of ON dashboard_snapshots(as_of);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -467,6 +477,7 @@ TABLES = (
     "workspace_jobs",
     "workspace_portfolios",
     "workspace_events",
+    "dashboard_snapshots",
 )
 
 # Tables whose primary key is a generated integer, so a migration that carries

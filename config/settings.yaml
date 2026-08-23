@@ -289,7 +289,8 @@ connectors:
     data_feed: iex
 
 dashboard:
-  host: "0.0.0.0"
+  # Caddy is the only public listener; FastAPI remains private on the VM.
+  host: "127.0.0.1"
   port: 8000
 
 # Separate web clients may call the read-only API from these origins.
@@ -297,6 +298,7 @@ dashboard:
 web:
   allowed_origins:
     - "http://localhost:5173"
+    - "https://investment-research-web.vercel.app"
 
 # End-of-day persona digests → WhatsApp (Twilio). Credentials live in .env.
 notify:
