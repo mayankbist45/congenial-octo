@@ -19,7 +19,9 @@ cat >/etc/caddy/Caddyfile <<EOF
 ${HOST} {
     encode zstd gzip
 
-    @api path /api/* /healthz
+    # Only authenticated, versioned workspace/admin APIs are public. Legacy
+    # Jinja JSON routes remain loopback-only during the React migration.
+    @api path /api/v1/* /healthz
     handle @api {
         reverse_proxy 127.0.0.1:8000
     }

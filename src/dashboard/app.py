@@ -824,6 +824,36 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         from src.workspace.service import WorkspaceService
         return WorkspaceService(config)
 
+    def _workspace_snapshot() -> Dict[str, Any]:
+        from src.workspace.dashboard_snapshot import DashboardSnapshotService
+
+        snapshot = DashboardSnapshotService(config).latest()
+        if snapshot is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No delayed/EOD dashboard snapshot has been published yet.",
+            )
+        return snapshot
+
+    def _workspace_persona(persona_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        snapshot = _workspace_snapshot()
+        persona = next(
+            (row for row in snapshot.get("personas", []) if row.get("id") == persona_id),
+            None,
+        )
+        if persona is None:
+            raise HTTPException(status_code=404, detail="Persona is unavailable in the latest delayed/EOD snapshot.")
+        return snapshot, persona
+
+    def _workspace_response(snapshot: Dict[str, Any], **payload: Any) -> JSONResponse:
+        return JSONResponse({
+            **payload,
+            "as_of": snapshot["as_of"],
+            "snapshot_date": snapshot["snapshot_date"],
+            "data_status": snapshot.get("data_status", "delayed_eod"),
+            "disclaimer": snapshot.get("disclaimer", "Research workspace. Not investment advice. No live order execution."),
+        })
+
     def _admin_identity(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> Dict[str, Any]:
         if identity.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Administrator access is required.")
@@ -836,18 +866,86 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
 
     @app.get("/api/v1/workspace/dashboard")
     def workspace_dashboard(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
-        from src.workspace.dashboard_snapshot import DashboardSnapshotService
+        return JSONResponse(_workspace_snapshot())
 
-        snapshot = DashboardSnapshotService(config).latest()
-        if snapshot is None:
-            raise HTTPException(status_code=404, detail="No delayed/EOD dashboard snapshot has been published yet.")
-        return JSONResponse(snapshot)
+    @app.get("/api/v1/workspace/personas")
+    def workspace_personas(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot = _workspace_snapshot()
+        summaries = []
+        for persona in snapshot.get("personas", []):
+            summaries.append({
+                "id": persona["id"],
+                "metadata": persona.get("metadata", {}),
+                "overview": persona.get("overview", {}),
+                "source_freshness": persona.get("source_freshness", {}),
+                "warnings": persona.get("warnings", []),
+            })
+        return _workspace_response(snapshot, personas=summaries)
+
+    @app.get("/api/v1/workspace/personas/{persona_id}")
+    def workspace_persona(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot, persona = _workspace_persona(persona_id)
+        return _workspace_response(snapshot, persona=persona)
+
+    @app.get("/api/v1/workspace/personas/{persona_id}/holdings")
+    def workspace_persona_holdings(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot, persona = _workspace_persona(persona_id)
+        return _workspace_response(snapshot, persona_id=persona_id, holdings=persona.get("holdings", []), sector_weights=persona.get("sector_weights", []), warnings=persona.get("warnings", []), source_freshness=persona.get("source_freshness", {}))
+
+    @app.get("/api/v1/workspace/personas/{persona_id}/performance")
+    def workspace_persona_performance(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot, persona = _workspace_persona(persona_id)
+        return _workspace_response(snapshot, persona_id=persona_id, performance=persona.get("performance", {}), series=persona.get("performance_series", {}), source_freshness=persona.get("source_freshness", {}))
+
+    @app.get("/api/v1/workspace/personas/{persona_id}/risk")
+    def workspace_persona_risk(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot, persona = _workspace_persona(persona_id)
+        return _workspace_response(snapshot, persona_id=persona_id, risk=persona.get("risk", {}), warnings=persona.get("warnings", []), source_freshness=persona.get("source_freshness", {}))
+
+    @app.get("/api/v1/workspace/personas/{persona_id}/news")
+    def workspace_persona_news(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot, persona = _workspace_persona(persona_id)
+        return _workspace_response(snapshot, persona_id=persona_id, news=persona.get("news", {"has_data": False}), intraday=persona.get("intraday"), source_freshness=persona.get("source_freshness", {}))
+
+    @app.get("/api/v1/workspace/personas/{persona_id}/runs")
+    def workspace_persona_runs(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot, persona = _workspace_persona(persona_id)
+        return _workspace_response(snapshot, persona_id=persona_id, runs=persona.get("runs", []), source_freshness=persona.get("source_freshness", {}))
+
+    @app.get("/api/v1/workspace/news")
+    def workspace_news(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot = _workspace_snapshot()
+        entries = []
+        for persona in snapshot.get("personas", []):
+            news = persona.get("news") or {}
+            if not news.get("has_data", bool(news.get("run_date"))):
+                continue
+            entries.append({
+                "persona_id": persona["id"],
+                "persona": persona.get("metadata", {}),
+                "news": news,
+                "source_freshness": persona.get("source_freshness", {}),
+            })
+        entries.sort(key=lambda item: (item["news"].get("high_impact_count", 0), item["news"].get("run_date") or ""), reverse=True)
+        return _workspace_response(snapshot, news=entries)
+
+    @app.get("/api/v1/workspace/operations")
+    def workspace_operations(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        """Read-only operations visibility for every invited workspace member."""
+        snapshot = _workspace_snapshot()
+        return _workspace_response(snapshot, viewer_role=identity.get("role", "member"), operations={
+            "overview": default_service.operations_overview(),
+            "proposals": {
+                "pending": default_service.pending_proposals(),
+                "approved": default_service.approved_proposals(),
+                "recent": default_service.recent_decisions(),
+            },
+            "audit_events": default_service.recent_decisions(),
+        })
 
     @app.get("/api/v1/workspace/dashboard/stocks/{symbol}")
     def workspace_dashboard_stock(symbol: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
-        from src.workspace.dashboard_snapshot import DashboardSnapshotService
-
-        snapshot = DashboardSnapshotService(config).latest()
+        snapshot = _workspace_snapshot()
         holding = next((item for item in (snapshot or {}).get("holdings", []) if item.get("symbol") == symbol.upper()), None)
         if holding is None:
             raise HTTPException(status_code=404, detail="Stock is not in the latest delayed/EOD dashboard snapshot.")
@@ -858,6 +956,18 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             "evidence": [{"type": "fund_journal", "label": "Fund holding thesis", "summary": holding.get("thesis") or "No thesis was persisted for this holding."}],
             "disclaimer": snapshot["disclaimer"],
         })
+
+    @app.get("/api/v1/workspace/personas/{persona_id}/stocks/{symbol}")
+    def workspace_persona_stock(persona_id: str, symbol: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot, persona = _workspace_persona(persona_id)
+        holding = next((item for item in persona.get("holdings", []) if item.get("symbol") == symbol.upper()), None)
+        if holding is None:
+            raise HTTPException(status_code=404, detail="Stock is not in this persona's latest delayed/EOD snapshot.")
+        return _workspace_response(snapshot, persona_id=persona_id, stock=holding, evidence=[{
+            "type": "fund_journal",
+            "label": "Fund holding thesis",
+            "summary": holding.get("thesis") or "No thesis was persisted for this holding.",
+        }], source_freshness=persona.get("source_freshness", {}), warnings=persona.get("warnings", []))
 
     @app.put("/api/v1/workspace/profile")
     def update_workspace_profile(payload: WorkspaceProfileRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:

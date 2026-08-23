@@ -191,17 +191,19 @@ pg_restore --clean --if-exists --dbname="$DATABASE_URL" journal-2026-08-01.dump
 
 ### React API proxy
 
-The React workspace must not call the VM's port `8000` directly. Reserve a
-static external IP, create a temporary `sslip.io` hostname for it, then run on
-the VM:
+The React workspace must not call the VM's port `8000` directly. Use the VM's
+current external IP to create a temporary `sslip.io` hostname, then run on the
+VM. If the VM is stopped or recreated, update this hostname and the Vercel API
+environment value to match its new ephemeral IP:
 
 ```bash
 sudo DASHBOARD_PUBLIC_HOST=203-0-113-10.sslip.io ./scripts/setup_https_proxy.sh
 ```
 
 Open only TCP `80` and `443` on the VM tag and delete the public TCP `8000`
-rule. Caddy terminates TLS and only forwards `/api/*` and `/healthz` to the
-loopback FastAPI service; it does not expose the legacy Jinja pages. Configure
+rule. Caddy terminates TLS and only forwards authenticated `/api/v1/*` and
+`/healthz` to the loopback FastAPI service; it does not expose the legacy Jinja
+pages or their unauthenticated JSON routes. Configure
 the Vercel rewrite and FastAPI `web.allowed_origins` with the resulting HTTPS
 origin before setting `VITE_DATA_MODE=live`.
 

@@ -5,6 +5,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 
 from src.dashboard.app import create_app
+from src.journal.db import connect
 from src.workspace.dashboard_snapshot import DashboardSnapshotService
 from src.workspace.service import WorkspaceRepository
 
@@ -76,6 +77,41 @@ def test_workspace_dashboard_returns_the_published_eod_snapshot(temp_config):
     assert response.json()["snapshot_date"] == "2026-08-21"
     assert response.json()["data_status"] == "delayed_eod"
     assert publisher.publish(date(2026, 8, 21))["as_of"] == published["as_of"]
+
+
+def test_workspace_persona_contracts_are_member_read_only(temp_config):
+    client, _ = client_with_invite(temp_config)
+    published = DashboardSnapshotService(temp_config).publish(date(2026, 8, 21))
+    persona_id = published["personas"][0]["id"]
+
+    personas = client.get("/api/v1/workspace/personas")
+    assert personas.status_code == 200
+    assert personas.json()["personas"][0]["id"] == persona_id
+    for suffix in ("", "/holdings", "/performance", "/risk", "/news", "/runs"):
+        assert client.get(f"/api/v1/workspace/personas/{persona_id}{suffix}").status_code == 200
+    assert client.get("/api/v1/workspace/news").status_code == 200
+    operations = client.get("/api/v1/workspace/operations")
+    assert operations.status_code == 200
+    assert operations.json()["viewer_role"] == "member"
+    # Operational mutations stay protected even when members can inspect them.
+    assert client.post("/api/v1/admin/proposals/1/approve").status_code == 403
+
+
+def test_legacy_snapshot_is_upgraded_with_personas_once(temp_config):
+    publisher = DashboardSnapshotService(temp_config)
+    day = date(2026, 8, 21).isoformat()
+    conn = connect(temp_config)
+    try:
+        conn.execute(
+            "INSERT INTO dashboard_snapshots (snapshot_date, as_of, payload, created_at) VALUES (?, ?, ?, ?)",
+            (day, "2026-08-21T18:15:00+00:00", '{"snapshot_date":"2026-08-21","as_of":"2026-08-21T18:15:00+00:00"}', "2026-08-21T18:15:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    upgraded = publisher.publish(date(2026, 8, 21))
+    assert upgraded["as_of"] == "2026-08-21T18:15:00+00:00"
+    assert "personas" in upgraded
 
 
 def test_healthcheck_is_public(temp_config):
