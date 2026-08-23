@@ -88,6 +88,12 @@ def test_build_kronos_market_features_reports_bullish_bias():
 
 def test_maybe_enrich_ranked_with_kronos_populates_ranked_fields(monkeypatch):
     config = get_persona_config("calan")
+    # The production persona keeps this optional model disabled; enable it in
+    # the isolated unit test so the enrichment path is exercised explicitly.
+    raw = copy.deepcopy(config.raw)
+    raw["intraday"]["kronos"]["enabled"] = True
+    from src.config import Config
+    config = Config(raw=raw, secrets=config.secrets, root=config.root, persona_id=config.persona_id)
     ranked = [_ranked()]
     frames = {"RELIANCE": _frame()}
 
