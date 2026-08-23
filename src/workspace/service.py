@@ -46,26 +46,32 @@ def _loads(value: Any, default: Any) -> Any:
 
 
 class WorkspaceAccessError(PermissionError):
-    """Raised when an authenticated identity does not have an active invite."""
+    """Raised when a workspace identity cannot be authorized."""
 
 
 class WorkspaceRepository:
     def __init__(self, config: Optional[Config] = None):
         self._config = config or get_config()
 
-    def user_for_email(self, email: str) -> Dict[str, Any]:
+    def user_for_email(self, email: str, display_name: Optional[str] = None, avatar_url: Optional[str] = None) -> Dict[str, Any]:
+        """Provision verified Google accounts as members without weakening admin roles."""
         email = email.strip().lower()
         with self._connection() as conn:
             invite = conn.execute(
                 "SELECT * FROM workspace_invites WHERE email = ?", (email,)
             ).fetchone()
-            if not invite or invite["status"] != "active":
-                raise WorkspaceAccessError("This Google account does not have an active workspace invite.")
             now = _now()
+            existing = conn.execute("SELECT * FROM workspace_users WHERE email = ?", (email,)).fetchone()
+            # Every verified account is a read-only member. An active admin invite
+            # remains the controlled path to operational access.
+            role = "admin" if invite and invite["status"] == "active" and invite["role"] == "admin" else (existing["role"] if existing else "member")
             conn.execute(
-                "INSERT INTO workspace_users (email, role, created_at, last_seen_at) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(email) DO UPDATE SET last_seen_at = excluded.last_seen_at",
-                (email, invite["role"], now, now),
+                "INSERT INTO workspace_users (email, role, display_name, avatar_url, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(email) DO UPDATE SET last_seen_at = excluded.last_seen_at, "
+                "display_name = COALESCE(excluded.display_name, workspace_users.display_name), "
+                "avatar_url = COALESCE(excluded.avatar_url, workspace_users.avatar_url), "
+                "role = CASE WHEN excluded.role = 'admin' THEN 'admin' ELSE workspace_users.role END",
+                (email, role, display_name or None, avatar_url or None, now, now),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM workspace_users WHERE email = ?", (email,)).fetchone()

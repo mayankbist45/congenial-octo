@@ -371,6 +371,8 @@ CREATE TABLE IF NOT EXISTS workspace_users (
     id {ID_PK},
     email TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL DEFAULT 'member',
+    display_name TEXT,
+    avatar_url TEXT,
     created_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL
 );
@@ -647,6 +649,7 @@ def _apply_schema(conn: Connection) -> None:
     _migrate_add_persona_id(conn)
     _migrate_quarterly_analysis_sector_model(conn)
     _migrate_runs_observability(conn)
+    _migrate_workspace_user_identity(conn)
 
     statements = [s.strip() for s in schema_for(conn.dialect).split(";") if s.strip()]
     for statement in statements:
@@ -801,6 +804,15 @@ def _migrate_runs_observability(conn: Connection) -> None:
         if _has_column(conn, "runs", name):
             continue
         conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {column_type}")
+    conn.commit()
+
+
+def _migrate_workspace_user_identity(conn: Connection) -> None:
+    """Store display data only after it has been verified in a Google ID token."""
+    for name in ("display_name", "avatar_url"):
+        if _has_column(conn, "workspace_users", name):
+            continue
+        conn.execute(f"ALTER TABLE workspace_users ADD COLUMN {name} TEXT")
     conn.commit()
 
 
