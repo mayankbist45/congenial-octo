@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+from datetime import date
+
+from fastapi.testclient import TestClient
+
+from src.dashboard.app import create_app
+from src.journal.db import connect
+from src.workspace.dashboard_snapshot import DashboardSnapshotService
+from src.workspace.service import WorkspaceRepository
+
+
+class FakeWorkspaceAuth:
+    def identity(self):
+        return {"id": 1, "email": "member@example.com", "role": "member"}
+
+
+class FakeAdminAuth:
+    def identity(self):
+        return {"id": 1, "email": "admin@example.com", "role": "admin"}
+
+
+def client_with_invite(temp_config):
+    repository = WorkspaceRepository(temp_config)
+    repository.create_invite("member@example.com")
+    user = repository.user_for_email("member@example.com")
+    assert user["id"] == 1
+    return TestClient(create_app(temp_config, workspace_auth=FakeWorkspaceAuth())), repository
+
+
+def test_workspace_profile_and_job_contract(temp_config, monkeypatch):
+    monkeypatch.setattr("src.workspace.service.WorkspaceService.generate", lambda *_: None)
+    client, _ = client_with_invite(temp_config)
+
+    response = client.get("/api/v1/workspace/profile")
+    assert response.status_code == 200
+    assert response.json()["profile"]["target_positions"] == 15
+
+    response = client.put(
+        "/api/v1/workspace/profile",
+        json={"profile": {"target_positions": 12, "excluded_sectors": ["Metals"]}},
+    )
+    assert response.status_code == 200
+    assert response.json()["profile"]["target_positions"] == 12
+
+    response = client.post("/api/v1/workspace/portfolios")
+    assert response.status_code == 202
+    job = response.json()["job"]
+    assert job["status"] in {"queued", "running", "failed", "completed"}
+    assert client.get(f"/api/v1/workspace/jobs/{job['id']}").status_code == 200
+
+
+def test_workspace_portfolio_and_inbox_are_user_scoped(temp_config):
+    client, repository = client_with_invite(temp_config)
+    portfolio_id = repository.save_portfolio(1, {"as_of": "2026-08-23T00:00:00Z", "holdings": [], "data_status": "delayed_eod"})
+    event_id = repository.add_event(1, {"title": "Quarterly result needs review", "impact": "high"})
+
+    assert client.get(f"/api/v1/workspace/portfolios/{portfolio_id}").status_code == 200
+    inbox = client.get("/api/v1/workspace/inbox")
+    assert inbox.status_code == 200
+    assert inbox.json()["events"][0]["id"] == event_id
+    assert client.post(f"/api/v1/workspace/events/{event_id}/acknowledge").json()["status"] == "acknowledged"
+
+
+def test_workspace_routes_reject_requests_without_google_token(temp_config):
+    response = TestClient(create_app(temp_config)).get("/api/v1/workspace/profile")
+    assert response.status_code == 401
+
+
+def test_workspace_dashboard_returns_the_published_eod_snapshot(temp_config):
+    client, _ = client_with_invite(temp_config)
+    publisher = DashboardSnapshotService(temp_config)
+    published = publisher.publish(date(2026, 8, 21))
+
+    response = client.get("/api/v1/workspace/dashboard")
+    assert response.status_code == 200
+    assert response.json()["snapshot_date"] == "2026-08-21"
+    assert response.json()["data_status"] == "delayed_eod"
+    assert publisher.publish(date(2026, 8, 21))["as_of"] == published["as_of"]
+
+
+def test_workspace_persona_contracts_are_member_read_only(temp_config):
+    client, _ = client_with_invite(temp_config)
+    published = DashboardSnapshotService(temp_config).publish(date(2026, 8, 21))
+    persona_id = published["personas"][0]["id"]
+
+    personas = client.get("/api/v1/workspace/personas")
+    assert personas.status_code == 200
+    assert personas.json()["personas"][0]["id"] == persona_id
+    for suffix in ("", "/holdings", "/performance", "/risk", "/news", "/runs"):
+        assert client.get(f"/api/v1/workspace/personas/{persona_id}{suffix}").status_code == 200
+    assert client.get("/api/v1/workspace/news").status_code == 200
+    operations = client.get("/api/v1/workspace/operations")
+    assert operations.status_code == 200
+    assert operations.json()["viewer_role"] == "member"
+    # Operational mutations stay protected even when members can inspect them.
+    assert client.post("/api/v1/admin/proposals/1/approve").status_code == 403
+
+
+def test_legacy_snapshot_is_upgraded_with_personas_once(temp_config):
+    publisher = DashboardSnapshotService(temp_config)
+    day = date(2026, 8, 21).isoformat()
+    conn = connect(temp_config)
+    try:
+        conn.execute(
+            "INSERT INTO dashboard_snapshots (snapshot_date, as_of, payload, created_at) VALUES (?, ?, ?, ?)",
+            (day, "2026-08-21T18:15:00+00:00", '{"snapshot_date":"2026-08-21","as_of":"2026-08-21T18:15:00+00:00"}', "2026-08-21T18:15:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    upgraded = publisher.publish(date(2026, 8, 21))
+    assert upgraded["as_of"] == "2026-08-21T18:15:00+00:00"
+    assert "personas" in upgraded
+
+
+def test_healthcheck_is_public(temp_config):
+    assert TestClient(create_app(temp_config)).get("/healthz").json() == {"status": "ok"}
+
+
+def test_admin_routes_require_admin_role(temp_config):
+    member_client, _ = client_with_invite(temp_config)
+    assert member_client.get("/api/v1/admin/overview").status_code == 403
+
+    repository = WorkspaceRepository(temp_config)
+    repository.create_invite("admin@example.com", role="admin")
+    repository.user_for_email("admin@example.com")
+    admin_client = TestClient(create_app(temp_config, workspace_auth=FakeAdminAuth()))
+    assert admin_client.get("/api/v1/admin/overview").status_code == 200
+    assert admin_client.get("/api/v1/admin/operations").status_code == 200

@@ -10,5 +10,6 @@ def test_generated_schedule_runs_long_cycle_without_replacing_intraday_watches()
     cron = generate_cron(project_dir, "Asia/Kolkata", "fund")
 
     assert "./scripts/run_scheduled.sh long_cycle" in cron
+    assert "./scripts/run_scheduled.sh publish_dashboard" in cron
     assert "./scripts/run_scheduled.sh daily_monitor" not in cron
     assert "mutualfund-india-equity-intraday-watch" in cron

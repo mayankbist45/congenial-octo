@@ -58,6 +58,7 @@ class Secrets:
     initial_capital: float = 1_000_000.0
     # Kept with the secrets because a production DSN carries a password.
     database_url: Optional[str] = None
+    google_oauth_client_id: str = ""
 
     def with_capital(self, capital: float) -> "Secrets":
         return Secrets(
@@ -77,6 +78,7 @@ class Secrets:
             dry_run=self.dry_run,
             initial_capital=capital,
             database_url=self.database_url,
+            google_oauth_client_id=self.google_oauth_client_id,
         )
 
     @property
@@ -347,6 +349,7 @@ def load_secrets() -> Secrets:
         dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),
         initial_capital=initial_capital,
         database_url=(os.getenv("DATABASE_URL") or "").strip() or None,
+        google_oauth_client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip(),
     )
 
 
