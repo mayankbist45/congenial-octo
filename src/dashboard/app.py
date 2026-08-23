@@ -11,10 +11,14 @@ The dashboard bind address is configured from settings rather than hardcoded.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import FastAPI, Form, HTTPException, Query, Request
+import requests
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, HttpUrl
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -46,11 +50,41 @@ logger = get_logger(__name__)
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
-def create_app(config: Optional[Config] = None) -> FastAPI:
+class IpoResearchRequest(BaseModel):
+    """A public-offer document to analyse in the IPO research workspace."""
+
+    issuer: str
+    source_url: HttpUrl
+    document_text: Optional[str] = None
+
+
+class WorkspaceProfileRequest(BaseModel):
+    profile: Dict[str, Any]
+
+
+class WorkspaceActionRequest(BaseModel):
+    action: str
+    note: Optional[str] = None
+
+
+def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = None) -> FastAPI:
     config = config or get_config()
     default_service = DashboardService(config)
+    if workspace_auth is None:
+        from src.workspace.auth import WorkspaceAuth
+        workspace_auth = WorkspaceAuth(config)
 
     app = FastAPI(title=default_service.fund_name, docs_url="/api/docs")
+    allowed_origins = config.get("web.allowed_origins", ["http://localhost:5173"])
+    if not isinstance(allowed_origins, list):
+        allowed_origins = [str(allowed_origins)]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[str(origin) for origin in allowed_origins],
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
     templates.env.globals["market_label"] = market_label
     templates.env.globals["format_market_timestamp"] = format_market_timestamp
@@ -691,7 +725,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         return RedirectResponse(redirect, status_code=303)
 
     # ------------------------------------------------------------------
-    # JSON API, for scripts and the orchestrator
+    # JSON API, for scripts and the separately deployed web app.
     # ------------------------------------------------------------------
     @app.get("/api/overview")
     def api_overview(persona: Optional[str] = Query(default=None)) -> JSONResponse:
@@ -742,6 +776,111 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             return JSONResponse(default_service.intraday_personas(market_id=market))
         active = region.upper() if region else None
         return JSONResponse(default_service.intraday_personas(active))
+
+    @app.get("/api/v1/ipos")
+    def api_ipo_issues(limit: int = Query(default=24, ge=1, le=100)) -> JSONResponse:
+        from src.ipo.service import IpoResearchService
+
+        try:
+            return JSONResponse({"issues": IpoResearchService(config).list_issues(limit)})
+        except Exception as exc:
+            logger.warning("Unable to load SEBI public issues: %s", exc)
+            raise HTTPException(status_code=502, detail="Unable to load SEBI public issues.") from exc
+
+    @app.post("/api/v1/ipos/research")
+    def api_ipo_research(payload: IpoResearchRequest) -> JSONResponse:
+        from src.ipo.service import IpoResearchError, IpoResearchService
+
+        source_host = payload.source_url.host or ""
+        if source_host != "sebi.gov.in" and not source_host.endswith(".sebi.gov.in"):
+            raise HTTPException(
+                status_code=422,
+                detail="IPO research accepts official SEBI document URLs only.",
+            )
+        try:
+            dossier = IpoResearchService(config).research(
+                issuer=payload.issuer,
+                source_url=str(payload.source_url),
+                document_text=payload.document_text,
+            )
+        except (IpoResearchError, requests.RequestException) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse(dossier)
+
+    # ------------------------------------------------------------------
+    # Invite-only research workspace. These routes intentionally expose no
+    # execution capability and only return delayed/end-of-day research data.
+    # ------------------------------------------------------------------
+    def _workspace_service():
+        from src.workspace.service import WorkspaceService
+        return WorkspaceService(config)
+
+    @app.get("/api/v1/workspace/profile")
+    def workspace_profile(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        service = _workspace_service()
+        return JSONResponse({"profile": service.repo.profile(int(identity["id"])), "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.put("/api/v1/workspace/profile")
+    def update_workspace_profile(payload: WorkspaceProfileRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        service = _workspace_service()
+        profile = service.repo.save_profile(int(identity["id"]), payload.profile)
+        return JSONResponse({"profile": profile, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.post("/api/v1/workspace/portfolios", status_code=202)
+    def create_workspace_portfolio(background_tasks: BackgroundTasks, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        service = _workspace_service()
+        job = service.repo.create_job(int(identity["id"]))
+        background_tasks.add_task(service.generate, job["id"], int(identity["id"]))
+        return JSONResponse({"job": job, "disclaimer": "Research workspace. Not investment advice. No live order execution."}, status_code=202)
+
+    @app.get("/api/v1/workspace/jobs/{job_id}")
+    def workspace_job(job_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        try:
+            job = _workspace_service().repo.job(job_id, int(identity["id"]))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"job": job, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.get("/api/v1/workspace/portfolios/latest")
+    def latest_workspace_portfolio(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        portfolio = _workspace_service().repo.latest_portfolio(int(identity["id"]))
+        if portfolio is None:
+            raise HTTPException(status_code=404, detail="No model portfolio has been generated yet.")
+        return JSONResponse(portfolio)
+
+    @app.get("/api/v1/workspace/portfolios/{portfolio_id}")
+    def workspace_portfolio(portfolio_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        try:
+            portfolio = _workspace_service().repo.portfolio(portfolio_id, int(identity["id"]))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(portfolio)
+
+    @app.get("/api/v1/workspace/stocks/{symbol}")
+    def workspace_stock(symbol: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        portfolio = _workspace_service().repo.latest_portfolio(int(identity["id"]))
+        holding = next((item for item in (portfolio or {}).get("holdings", []) if item["symbol"] == symbol.upper()), None)
+        if holding is None:
+            raise HTTPException(status_code=404, detail="Stock research is unavailable in the latest model portfolio.")
+        return JSONResponse({"stock": holding, "as_of": portfolio["as_of"], "data_status": "delayed_eod", "evidence": [{"type": "model", "label": "Research screen", "summary": holding["reason"]}], "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.get("/api/v1/workspace/inbox")
+    def workspace_inbox(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        return JSONResponse({"events": _workspace_service().repo.inbox(int(identity["id"])), "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.post("/api/v1/workspace/events/{event_id}/acknowledge")
+    def acknowledge_workspace_event(event_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        try:
+            _workspace_service().repo.acknowledge_event(event_id, int(identity["id"]))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"status": "acknowledged"})
+
+    @app.post("/api/v1/workspace/portfolio-actions")
+    def record_workspace_action(payload: WorkspaceActionRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        service = _workspace_service()
+        event_id = service.repo.add_event(int(identity["id"]), {"type": "user_review", "impact": "low", "title": payload.action, "detail": payload.note or "Review recorded without broker execution.", "created_at": datetime.now(timezone.utc).isoformat()})
+        return JSONResponse({"event_id": event_id, "status": "recorded", "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     return app
 

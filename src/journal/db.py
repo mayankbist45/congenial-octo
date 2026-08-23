@@ -355,6 +355,64 @@ CREATE TABLE IF NOT EXISTS meta_decisions (
     UNIQUE (persona_id, decision_id)
 );
 
+-- Customer-facing research workspace records are intentionally separate from
+-- the fund journal: they never create proposals, trades, or broker actions.
+CREATE TABLE IF NOT EXISTS workspace_invites (
+    id {ID_PK},
+    email TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL DEFAULT 'member',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    created_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS workspace_users (
+    id {ID_PK},
+    email TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL DEFAULT 'member',
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspace_profiles (
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS workspace_jobs (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    status TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    progress {REAL} NOT NULL DEFAULT 0,
+    warnings TEXT,
+    error TEXT,
+    portfolio_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspace_portfolios (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    version INTEGER NOT NULL,
+    as_of TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS workspace_events (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    payload TEXT NOT NULL,
+    acknowledged_at TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -379,6 +437,9 @@ CREATE INDEX IF NOT EXISTS idx_meta_decisions_persona ON meta_decisions(persona_
 CREATE INDEX IF NOT EXISTS idx_meta_decisions_ts ON meta_decisions(decision_ts);
 CREATE INDEX IF NOT EXISTS idx_meta_decisions_symbol ON meta_decisions(symbol);
 CREATE INDEX IF NOT EXISTS idx_meta_decisions_labeled ON meta_decisions(labeled_at);
+CREATE INDEX IF NOT EXISTS idx_workspace_jobs_user ON workspace_jobs(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_workspace_portfolios_user ON workspace_portfolios(user_id, version);
+CREATE INDEX IF NOT EXISTS idx_workspace_events_user ON workspace_events(user_id, created_at);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -400,6 +461,12 @@ TABLES = (
     "decision_reviews",
     "learning_lessons",
     "meta_decisions",
+    "workspace_invites",
+    "workspace_users",
+    "workspace_profiles",
+    "workspace_jobs",
+    "workspace_portfolios",
+    "workspace_events",
 )
 
 # Tables whose primary key is a generated integer, so a migration that carries
@@ -416,6 +483,8 @@ SEQUENCE_TABLES = (
     "decision_reviews",
     "learning_lessons",
     "meta_decisions",
+    "workspace_invites",
+    "workspace_users",
 )
 
 DbTarget = Union[None, str, Path, Config]

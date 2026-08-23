@@ -292,6 +292,12 @@ dashboard:
   host: "0.0.0.0"
   port: 8000
 
+# Separate web clients may call the read-only API from these origins.
+# Add the production site URL before deployment; do not use a wildcard here.
+web:
+  allowed_origins:
+    - "http://localhost:5173"
+
 # End-of-day persona digests → WhatsApp (Twilio). Credentials live in .env.
 notify:
   whatsapp:
