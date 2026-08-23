@@ -466,6 +466,40 @@ def _run_persona(persona_id: str, args, base_config) -> int:
             print(f"\n[{persona_id}] {summary.describe()}")
             return 0 if not summary.failed else 1
 
+        if args.command == "long_cycle":
+            result = manager.analyse(
+                as_of=as_of,
+                skip_news=args.skip_news,
+                refresh_fundamentals=args.refresh_fundamentals,
+                max_candidates=args.max_candidates,
+            )
+            print(
+                f"\n[{persona_id}] Scheduled long cycle screened "
+                f"{len(result.candidates)} candidate(s)."
+            )
+            if result.proposal_count:
+                print(
+                    f"[{persona_id}] Created {result.proposal_count} proposal(s); "
+                    "auto-approving in paper mode."
+                )
+                try:
+                    approved = manager.auto_approve()
+                except AutoApprovalRefused as exc:
+                    print(
+                        f"[{persona_id}] Scheduled long cycle refused auto-approval: {exc}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                print(f"[{persona_id}] Auto-approved {approved} proposal(s).")
+            else:
+                print(f"[{persona_id}] No actionable proposals were created.")
+
+            summary = manager.execute_approved(
+                technicals=result.technicals, fundamentals=result.fundamentals
+            )
+            print(f"[{persona_id}] {summary.describe()}")
+            return 0 if not summary.failed else 1
+
         if args.command == "cycle":
             result = manager.daily_monitor(
                 as_of=as_of,
@@ -552,7 +586,6 @@ def main(argv: Optional[list] = None) -> int:
             print("Scheduled long cycle found no eligible long-horizon paper personas.", file=sys.stderr)
             return 1
 
-        args.command = "cycle"
         args.auto_approve = True
         worst_exit = 0
         for persona_id in personas:

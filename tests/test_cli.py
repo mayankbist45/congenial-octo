@@ -9,6 +9,7 @@ approve itself, so the routing is pinned down here.
 from __future__ import annotations
 
 from argparse import Namespace
+from types import SimpleNamespace
 from typing import List, Optional
 
 import pytest
@@ -133,6 +134,71 @@ def test_long_cycle_refuses_ineligible_personas_without_running(monkeypatch, cap
 
     assert main(["long_cycle"]) == 1
     assert "Scheduled long cycle refused" in capsys.readouterr().err
+
+
+class ScheduledLongCycleManager:
+    """Minimal manager double for the unattended fresh-analysis path."""
+
+    auto_approval_enabled = True
+
+    def __init__(self, proposal_count: int = 1):
+        self.calls: List[str] = []
+        self.result = SimpleNamespace(
+            candidates=["ABC", "XYZ"],
+            proposal_count=proposal_count,
+            technicals={"ABC": "technical"},
+            fundamentals={"ABC": "fundamental"},
+        )
+        self.summary = SimpleNamespace(failed=[], describe=lambda: "1 order(s) placed")
+
+    def analyse(self, **_kwargs):
+        self.calls.append("analyse")
+        return self.result
+
+    def daily_monitor(self, **_kwargs):
+        pytest.fail("scheduled long cycle must not use daily_monitor")
+
+    def auto_approve(self) -> int:
+        self.calls.append("auto_approve")
+        return self.result.proposal_count
+
+    def execute_approved(self, technicals, fundamentals):
+        self.calls.append("execute_approved")
+        assert technicals is self.result.technicals
+        assert fundamentals is self.result.fundamentals
+        return self.summary
+
+    def disconnect(self) -> None:
+        self.calls.append("disconnect")
+
+
+def test_long_cycle_freshly_analyses_approves_and_executes_without_daily_monitor(
+    monkeypatch, capsys
+) -> None:
+    manager = ScheduledLongCycleManager()
+    monkeypatch.setattr("src.orchestrator.FundManager", lambda **_kwargs: manager)
+
+    assert main(["long_cycle", "--persona", "balanced"]) == 0
+
+    assert manager.calls == ["analyse", "auto_approve", "execute_approved", "disconnect"]
+    output = capsys.readouterr().out
+    assert "screened 2 candidate(s)" in output
+    assert "Created 1 proposal(s)" in output
+    assert "Auto-approved 1 proposal(s)" in output
+    assert "1 order(s) placed" in output
+
+
+def test_long_cycle_executes_cleanly_when_analysis_creates_no_proposals(monkeypatch, capsys) -> None:
+    manager = ScheduledLongCycleManager(proposal_count=0)
+    manager.summary = SimpleNamespace(failed=[], describe=lambda: "No approved trades to execute.")
+    monkeypatch.setattr("src.orchestrator.FundManager", lambda **_kwargs: manager)
+
+    assert main(["long_cycle", "--persona", "balanced"]) == 0
+
+    assert manager.calls == ["analyse", "execute_approved", "disconnect"]
+    output = capsys.readouterr().out
+    assert "No actionable proposals were created." in output
+    assert "No approved trades to execute." in output
 
 
 def test_learning_failures_are_reported_without_raising(monkeypatch, capsys) -> None:
