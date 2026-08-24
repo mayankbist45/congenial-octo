@@ -80,13 +80,18 @@ class AngelOneConnector(BrokerConnector):
 
         if not force_simulated and creds is not None and creds.is_complete and secrets.dry_run:
             from src.broker.dry_run import DryRunBroker
+            from src.broker.simulated import SimulatedBroker
 
             logger.info(
-                "Using Angel One [%s] for read-only data with order placement disabled "
+                "Using Angel One [%s] for quotes with a journal-backed paper book "
                 "(DRY_RUN=true)",
                 creds.label,
             )
-            return DryRunBroker(AngelOneClient(config, credentials=creds))
+            client = AngelOneClient(config, credentials=creds)
+            return DryRunBroker(
+                client,
+                paper_book=SimulatedBroker(config, price_lookup=client),
+            )
 
         from src.broker.simulated import SimulatedBroker
 

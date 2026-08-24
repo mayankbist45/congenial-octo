@@ -1,9 +1,8 @@
 """Dry-run wrapper.
 
-Wraps a live broker so reads (holdings, funds, quotes) hit the real account
-while writes (orders) are intercepted. This is the safest configuration for
-watching the fund make real decisions against a real portfolio before letting
-it trade.
+Wraps a live broker so writes are intercepted while quotes remain live. Callers
+may provide a paper-book broker when simulated holdings and cash must be kept
+separate from the authenticated broker account.
 """
 
 from __future__ import annotations
@@ -23,8 +22,14 @@ logger = get_logger(__name__)
 
 
 class DryRunBroker(BrokerClient):
-    def __init__(self, inner: BrokerClient):
+    def __init__(
+        self,
+        inner: BrokerClient,
+        *,
+        paper_book: Optional[BrokerClient] = None,
+    ):
         self._inner = inner
+        self._paper_book = paper_book
 
     @property
     def name(self) -> str:
@@ -41,9 +46,13 @@ class DryRunBroker(BrokerClient):
         self._inner.disconnect()
 
     def get_holdings(self) -> List[BrokerHolding]:
+        if self._paper_book is not None:
+            return self._paper_book.get_holdings()
         return self._inner.get_holdings()
 
     def get_funds(self) -> BrokerFunds:
+        if self._paper_book is not None:
+            return self._paper_book.get_funds()
         return self._inner.get_funds()
 
     def get_last_price(self, symbol: str) -> Optional[float]:

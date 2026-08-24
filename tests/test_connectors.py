@@ -90,6 +90,7 @@ def _angelone_secrets(**overrides) -> Secrets:
 
 def test_swing_broker_uses_data2_key():
     from src.broker.dry_run import DryRunBroker
+    from src.broker.simulated import SimulatedBroker
     from src.connectors.angelone import _book_credentials
     from src.connectors.registry import build_broker as build
 
@@ -102,6 +103,8 @@ def test_swing_broker_uses_data2_key():
     broker = build(config)
     assert isinstance(broker, DryRunBroker)
     assert broker._inner.credential_label == "data2"
+    assert isinstance(broker._paper_book, SimulatedBroker)
+    assert broker._paper_book._price_lookup is broker.inner
 
 
 def test_intraday_broker_stays_on_primary_key():
