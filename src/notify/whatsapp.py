@@ -55,6 +55,12 @@ def _clean(raw: Optional[str]) -> str:
     return (raw or "").strip().strip('"').strip("'")
 
 
+def _redact_address(address: str) -> str:
+    """Keep delivery diagnostics useful without writing recipients to logs."""
+    digits = "".join(ch for ch in address if ch.isdigit())
+    return f"***{digits[-4:]}" if len(digits) >= 4 else "configured recipient"
+
+
 def load_whatsapp_config() -> WhatsAppConfig:
     load_dotenv(PROJECT_ROOT / ".env", override=True)
     enabled_raw = (os.getenv("WHATSAPP_ENABLED") or "true").strip().lower()
@@ -150,20 +156,20 @@ def send_whatsapp_message(
             )
         except requests.RequestException as exc:
             ok = False
-            logger.error("WhatsApp send failed to %s: %s", to, exc)
-            results.append({"to": to, "ok": False, "error": str(exc)})
+            logger.error("WhatsApp send failed to %s: %s", _redact_address(to), exc)
+            results.append({"recipient": _redact_address(to), "ok": False, "error": str(exc)})
             continue
         if response.status_code >= 300:
             ok = False
             logger.error(
                 "WhatsApp Twilio error to %s: %s %s",
-                to,
+                _redact_address(to),
                 response.status_code,
                 response.text[:300],
             )
             results.append(
                 {
-                    "to": to,
+                    "recipient": _redact_address(to),
                     "ok": False,
                     "status_code": response.status_code,
                     "error": response.text[:300],
@@ -172,7 +178,7 @@ def send_whatsapp_message(
             continue
         payload = response.json() if response.content else {}
         sid = payload.get("sid")
-        logger.info("WhatsApp message sent to %s sid=%s", to, sid)
-        results.append({"to": to, "ok": True, "sid": sid})
+        logger.info("WhatsApp message sent to %s sid=%s", _redact_address(to), sid)
+        results.append({"recipient": _redact_address(to), "ok": True, "sid": sid})
 
     return {"ok": ok, "skipped": False, "results": results}

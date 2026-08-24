@@ -2,9 +2,8 @@
 {% block title %}Overview &middot; {{ fund_name }}{% endblock %}
 
 {% block content %}
-<h1>Overview</h1>
-
 {% if overview.is_intraday %}
+<h1>Overview</h1>
   <p class="subtitle">
     <span class="region-badge region-{{ overview.region | lower }}">{{ overview.region_label }}</span>
     Intraday paper &middot; {{ overview.broker_label }}
@@ -93,6 +92,25 @@
 
 {% else %}
 
+<section class="product-hero" aria-labelledby="product-hero-title">
+  <div class="hero-copy">
+    <div class="hero-eyebrow hero-reveal">Investment intelligence, connected</div>
+    <h1 class="hero-title hero-reveal" id="product-hero-title">See the whole stock story. <em>Decide with conviction.</em></h1>
+    <p class="hero-lede hero-reveal">Turn fundamentals, technical signals, quarterly reports, market news, and portfolio risk into one calm, decision-ready investment view.</p>
+    <div class="hero-capabilities hero-reveal" aria-label="Research capabilities">
+      <span class="hero-capability"><i></i>Fundamentals</span><span class="hero-capability"><i></i>Technicals</span><span class="hero-capability"><i></i>Quarterly reports</span><span class="hero-capability"><i></i>Recent news</span><span class="hero-capability"><i></i>Risk analysis</span>
+    </div>
+    <div class="hero-actions hero-reveal"><a class="btn" href="/proposals{{ persona_qs }}">Review today’s decisions</a><a class="hero-link" href="/news{{ persona_qs }}">Explore the news desk &rarr;</a></div>
+  </div>
+  <div class="hero-visual" aria-label="Research dashboard preview">
+    <div class="hero-screen"><img src="/static/images/research-dashboard-hero.png" alt="Example stock research dashboard with price chart, company score, risk analysis, quarterly results, and news sentiment"></div>
+    <div class="hero-float-card score" aria-hidden="true"><div class="float-label">Research confidence</div><div class="float-value">82 / 100</div><div class="float-note">Thesis strengthening</div></div>
+    <div class="hero-float-card risk" aria-hidden="true"><div class="float-label">Portfolio risk</div><div class="float-value">Measured</div><div class="float-note">Exposure in range</div></div>
+  </div>
+  <div class="hero-trust hero-reveal" aria-label="Research workflow"><strong>From raw filings and market data to decisions.</strong><span class="hero-trust-item"><b>01</b> Screen the signal</span><span class="hero-trust-item"><b>02</b> Understand the thesis</span><span class="hero-trust-item"><b>03</b> Size the risk</span></div>
+</section>
+
+<h2>Your fund at a glance</h2>
 {% if overview.warnings %}
 <div class="panel">
   <h2>Run health</h2>

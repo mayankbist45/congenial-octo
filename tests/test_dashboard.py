@@ -289,6 +289,36 @@ def test_journal_links_to_the_run_detail(client, repo) -> None:
     assert "WIPRO" in detail.text
 
 
+def test_journal_detail_renders_audit_outcome_and_timeline(client, repo) -> None:
+    run_id = repo.start_run(date.today(), False, 1_000_000.0, 300_000.0, command="daily_monitor")
+    repo.record_run_stage(
+        run_id, "candidate_pack_load", "completed", 12,
+        {"mode": "candidate_pack", "input_count": 0, "output_count": 0,
+         "symbols_sample": [], "summary": "No weekly candidate pack was available.",
+         "top_reasons": [], "stale": True, "pack_candidate_count": 0},
+    )
+    repo.record_run_stage(
+        run_id, "news", "skipped", 0,
+        {"mode": "candidate_pack", "input_count": 0, "output_count": 0,
+         "symbols_sample": [], "summary": "News was skipped for this run.",
+         "top_reasons": [], "enabled": False, "article_count": 0,
+         "flagged_symbol_count": 0, "high_impact_count": 0},
+    )
+    repo.finish_run(
+        run_id, "No trades.", False, 0.0,
+        stage_status={"outcome": "no_proposals", "universe_mode": "candidate_pack",
+                      "primary_reason_code": "candidate_pack_stale",
+                      "primary_reason_detail": "New discretionary buys were suppressed.",
+                      "outcome_summary": "No picks: stale candidate pack."},
+    )
+
+    body = client.get(f"/journal/{run_id}").text
+    assert "No picks: stale candidate pack." in body
+    assert "Run timeline" in body
+    assert "This run reused the weekly candidate pack" in body
+    assert "News was skipped for this run." in body
+
+
 def test_overview_includes_top_holdings_table(client, repo) -> None:
     seed_run(repo)
     seed_history(repo)
@@ -540,11 +570,19 @@ def test_operations_overview_marks_weekday_run_healthy_and_intraday_late(temp_co
         ts="2026-08-07T18:05:00Z",
         job="close",
     )
+    append_event(
+        data_dir / "persona_report.log",
+        "whatsapp_digest",
+        "success",
+        ts="2026-08-07T18:06:00Z",
+        market="india_equity",
+    )
 
     ops = service.operations_overview()
     cards = {card["key"]: card for card in ops["cards"]}
     assert cards["long_cycle"]["current_state"] == "healthy"
     assert cards["close"]["current_state"] == "healthy"
+    assert cards["whatsapp_digest"]["current_state"] == "healthy"
     assert cards["intraday-india_equity"]["current_state"] in {"late", "unknown", "healthy"}
 
 

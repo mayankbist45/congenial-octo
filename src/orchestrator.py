@@ -146,67 +146,95 @@ class FundManager:
         ) -> RunResult:
         """Run the full analysis and journal the result."""
         started = time.time()
+        audit: List[Dict[str, Any]] = []
         self._connect()
 
         logger.info("=" * 66)
         logger.info("PERSONA: %s", self._persona_id)
         logger.info("STAGE 1/9  Price history and technical indicators")
-        technicals = self._load_technicals()
+        technicals = self._audit_call(audit, "prices", "full_universe", self._load_technicals)
 
         logger.info("STAGE 2/9  Portfolio state")
-        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
+        portfolio = self._audit_call(
+            audit, "portfolio", "full_universe",
+            lambda: self._portfolios.build(self._broker, technicals, as_of=as_of),
+        )
         as_of = as_of or self._prices.latest_data_date() or date.today()
         portfolio.as_of = as_of
         deep_review = is_deep_review_day(self._config, as_of)
 
         logger.info("STAGE 3/9  Fundamentals")
-        fundamentals = self._load_fundamentals(
-            technicals, portfolio, refresh_fundamentals, max_candidates
+        fundamentals = self._audit_call(
+            audit, "fundamentals", "full_universe",
+            lambda: self._load_fundamentals(
+                technicals, portfolio, refresh_fundamentals, max_candidates
+            ),
+            lambda value: self._fundamentals_details(value, len(technicals)),
         )
 
         logger.info("STAGE 4/9  Factor scoring")
-        scores = self._scoring.score(fundamentals, technicals)
-        candidates = self._scoring.buy_candidates(
-            scores, exclude=portfolio.symbols, limit=20
+        scores, candidates = self._audit_call(
+            audit, "scoring", "full_universe",
+            lambda: self._score_candidates(fundamentals, technicals, portfolio),
+            self._scoring_details,
         )
 
         logger.info("STAGE 5/9  Quarterly reports")
-        quarterly_context = self._load_quarterly_reports(
-            portfolio, candidates, fundamentals, as_of
+        quarterly_context = self._audit_call(
+            audit, "quarterly_reports", "full_universe",
+            lambda: self._load_quarterly_reports(portfolio, candidates, fundamentals, as_of),
         )
 
         logger.info("STAGE 6/9  Risk analytics")
-        risk_profile = self._analyse_risk(portfolio, fundamentals, technicals)
+        risk_profile = self._audit_call(
+            audit, "risk_analytics", "full_universe",
+            lambda: self._analyse_risk(portfolio, fundamentals, technicals),
+            lambda value: self._base_details("full_universe", len(portfolio.symbols), len(portfolio.symbols), portfolio.symbols,
+                "Portfolio risk analytics completed." if value else "Risk analytics was unavailable."),
+        )
         
         logger.info("STAGE 6b   Quarterly earnings")
-        earnings = self._build_earnings(portfolio, candidates, as_of)
+        earnings = self._audit_call(
+            audit, "earnings", "full_universe",
+            lambda: self._build_earnings(portfolio, candidates, as_of),
+        )
 
         logger.info("STAGE 7/9  News")
-        digest = None if skip_news else self._build_digest(portfolio, candidates, as_of)
+        digest = self._audit_call(
+            audit, "news", "full_universe",
+            (lambda: None) if skip_news else lambda: self._build_digest(portfolio, candidates, as_of),
+            lambda value: self._news_details(value, enabled=not skip_news),
+            status="skipped" if skip_news else "completed",
+        )
 
         logger.info("STAGE 8/9  Sell triggers and portfolio limits")
-        triggers = self._evaluate_triggers(
-            portfolio, scores, fundamentals, technicals, digest, risk_profile,
-            candidates, deep_review, quarterly_context, earnings)
+        triggers = self._audit_call(
+            audit, "triggers", "full_universe",
+            lambda: self._evaluate_triggers(
+                portfolio, scores, fundamentals, technicals, digest, risk_profile,
+                candidates, deep_review, quarterly_context, earnings),
+            self._trigger_details,
+        )
         
 
         logger.info("STAGE 9/9  Decision")
-        decision = self._decision.decide(
-            portfolio=portfolio,
-            scores=scores,
-            fundamentals=fundamentals,
-            technicals=technicals,
-            triggers=triggers,
-            candidates=candidates,
-            digest=digest,
-            earnings=earnings,
-            risk_profile=risk_profile,
-            quarterly_context=quarterly_context,
-            as_of=as_of,
+        decision = self._audit_call(
+            audit, "decision", "full_universe",
+            lambda: self._decision.decide(
+                portfolio=portfolio, scores=scores, fundamentals=fundamentals,
+                technicals=technicals, triggers=triggers, candidates=candidates,
+                digest=digest, earnings=earnings, risk_profile=risk_profile,
+                quarterly_context=quarterly_context, as_of=as_of,
+            ),
+            lambda value: self._decision_details(value, candidates, triggers),
         )
 
         run_id = self._journal(
-            decision, portfolio, scores, risk_profile, digest, as_of, deep_review
+            decision, portfolio, scores, risk_profile, digest, as_of, deep_review,
+            stage_status=self._outcome_status(
+                decision, candidates, digest, pack_stale=False, mode="full_universe"
+            ),
+            audit_events=audit,
         )
 
         logger.info("=" * 66)
@@ -241,28 +269,43 @@ class FundManager:
         trigger_source: str = "manual",
     ) -> RunResult:
         """Refresh the screened universe and persist a reusable candidate pack."""
+        audit: List[Dict[str, Any]] = []
         self._connect()
-        technicals = self._load_technicals()
-        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
+        technicals = self._audit_call(audit, "prices", "full_universe", self._load_technicals)
+        portfolio = self._audit_call(
+            audit, "portfolio", "full_universe",
+            lambda: self._portfolios.build(self._broker, technicals, as_of=as_of),
+        )
         as_of = as_of or self._prices.latest_data_date() or date.today()
         portfolio.as_of = as_of
         deep_review = is_deep_review_day(self._config, as_of)
 
-        fundamentals = self._load_fundamentals(
-            technicals, portfolio, refresh_fundamentals, max_candidates
+        fundamentals = self._audit_call(
+            audit, "fundamentals", "full_universe",
+            lambda: self._load_fundamentals(technicals, portfolio, refresh_fundamentals, max_candidates),
+            lambda value: self._fundamentals_details(value, len(technicals)),
         )
-        scores = self._scoring.score(fundamentals, technicals)
-        candidates = self._scoring.buy_candidates(
-            scores, exclude=portfolio.symbols, limit=20
+        scores, candidates = self._audit_call(
+            audit, "scoring", "full_universe",
+            lambda: self._score_candidates(fundamentals, technicals, portfolio), self._scoring_details,
         )
-        risk_profile = self._analyse_risk(portfolio, fundamentals, technicals)
+        risk_profile = self._audit_call(
+            audit, "risk_analytics", "full_universe",
+            lambda: self._analyse_risk(portfolio, fundamentals, technicals),
+        )
         market_regime = (
             risk_profile.market_regime.regime
             if risk_profile and risk_profile.market_regime
             else None
         )
         candidates = self._apply_regime_policy(candidates, market_regime)
-        pack_id = self._repo.save_candidate_pack(as_of, candidates)
+        pack_id = self._audit_call(
+            audit, "candidate_pack_refresh", "full_universe",
+            lambda: self._repo.save_candidate_pack(as_of, candidates),
+            lambda value: {**self._base_details("full_universe", len(scores), len(candidates), [c.symbol for c in candidates],
+                f"Refreshed weekly candidate pack #{value} with {len(candidates)} candidates."),
+                "pack_candidate_count": len(candidates)},
+        )
 
         decision = DailyDecision(
             as_of=as_of,
@@ -291,7 +334,11 @@ class FundManager:
                 "candidate_pack_id": pack_id,
                 "candidate_count": len(candidates),
                 "market_regime": market_regime,
+                "universe_mode": "full_universe",
+                "outcome": "research_refreshed",
+                "outcome_summary": f"Weekly research refreshed {len(candidates)} candidate(s).",
             },
+            audit_events=audit,
         )
         return RunResult(
             run_id=run_id,
@@ -314,14 +361,18 @@ class FundManager:
     ) -> RunResult:
         """Run the holdings-first daily monitor using the latest weekly pack."""
         started = time.time()
+        audit: List[Dict[str, Any]] = []
         self._connect()
 
         logger.info("=" * 66)
         logger.info("PERSONA: %s", self._persona_id)
         logger.info("DAILY MONITOR using latest weekly candidate pack")
 
-        technicals = self._load_technicals()
-        portfolio = self._portfolios.build(self._broker, technicals, as_of=as_of)
+        technicals = self._audit_call(audit, "prices", "candidate_pack", self._load_technicals)
+        portfolio = self._audit_call(
+            audit, "portfolio", "candidate_pack",
+            lambda: self._portfolios.build(self._broker, technicals, as_of=as_of),
+        )
         as_of = as_of or self._prices.latest_data_date() or date.today()
         portfolio.as_of = as_of
         deep_review = is_deep_review_day(self._config, as_of)
@@ -336,16 +387,37 @@ class FundManager:
         )
         pack_stale = pack_age_days is None or pack_age_days > pack_max_age
 
+        self._audit_event(
+            audit, "candidate_pack_load", "completed", 0, {
+                **self._base_details("candidate_pack", 0, int(pack.get("candidate_count") or 0) if pack else 0, [],
+                    "Loaded the latest weekly candidate pack." if pack else "No weekly candidate pack was available."),
+                "pack_date": pack_date.isoformat() if pack_date else None,
+                "pack_age_days": pack_age_days,
+                "stale": pack_stale,
+                "pack_candidate_count": int(pack.get("candidate_count") or 0) if pack else 0,
+            },
+        )
+
         candidate_scores = self._candidate_pack_scores(pack) if pack and not pack_stale else []
         candidate_symbols = [score.symbol for score in candidate_scores]
-        fundamentals = self._load_named_fundamentals(
-            technicals,
-            portfolio,
-            refresh_fundamentals,
-            candidate_symbols,
+        fundamentals = self._audit_call(
+            audit, "fundamentals", "candidate_pack",
+            lambda: self._load_named_fundamentals(
+                technicals, portfolio, refresh_fundamentals, candidate_symbols,
+            ),
+            lambda value: self._fundamentals_details(value, len(set(portfolio.symbols + candidate_symbols))),
         )
-        live_scores = self._refresh_candidate_scores(candidate_scores, fundamentals, technicals)
-        risk_profile = self._analyse_risk(portfolio, fundamentals, technicals)
+        live_scores = self._audit_call(
+            audit, "candidate_refresh", "candidate_pack",
+            lambda: self._refresh_candidate_scores(candidate_scores, fundamentals, technicals),
+            lambda value: self._candidate_refresh_details(value, candidate_scores),
+        )
+        risk_profile = self._audit_call(
+            audit, "risk_analytics", "candidate_pack",
+            lambda: self._analyse_risk(portfolio, fundamentals, technicals),
+            lambda value: self._base_details("candidate_pack", len(portfolio.symbols), len(portfolio.symbols), portfolio.symbols,
+                "Portfolio risk analytics completed." if value else "Risk analytics was unavailable."),
+        )
         market_regime = (
             risk_profile.market_regime.regime
             if risk_profile and risk_profile.market_regime
@@ -353,36 +425,44 @@ class FundManager:
         )
         candidates = self._apply_regime_policy(live_scores, market_regime)
 
-        quarterly_context = self._load_quarterly_reports(
-            portfolio, candidates, fundamentals, as_of
+        quarterly_context = self._audit_call(
+            audit, "quarterly_reports", "candidate_pack",
+            lambda: self._load_quarterly_reports(portfolio, candidates, fundamentals, as_of),
         )
-        earnings = self._build_earnings(portfolio, candidates, as_of)
-        digest = None if skip_news else self._build_digest(portfolio, candidates, as_of)
-        scores = self._scoring.score(fundamentals, technicals)
-        triggers = self._evaluate_triggers(
-            portfolio,
-            scores,
-            fundamentals,
-            technicals,
-            digest,
-            risk_profile,
-            candidates if not pack_stale else [],
-            deep_review,
-            quarterly_context,
-            earnings,
+        earnings = self._audit_call(
+            audit, "earnings", "candidate_pack",
+            lambda: self._build_earnings(portfolio, candidates, as_of),
         )
-        decision = self._decision.decide(
-            portfolio=portfolio,
-            scores=scores,
-            fundamentals=fundamentals,
-            technicals=technicals,
-            triggers=triggers,
-            candidates=[] if pack_stale else candidates,
-            digest=digest,
-            earnings=earnings,
-            risk_profile=risk_profile,
-            quarterly_context=quarterly_context,
-            as_of=as_of,
+        digest = self._audit_call(
+            audit, "news", "candidate_pack",
+            (lambda: None) if skip_news else lambda: self._build_digest(portfolio, candidates, as_of),
+            lambda value: self._news_details(value, enabled=not skip_news),
+            status="skipped" if skip_news else "completed",
+        )
+        scores = self._audit_call(
+            audit, "full_book_scoring", "candidate_pack",
+            lambda: self._scoring.score(fundamentals, technicals),
+            lambda value: self._base_details("candidate_pack", len(fundamentals), len(value), list(value),
+                "Scored holdings and the candidate-pack symbols for trigger coverage."),
+        )
+        triggers = self._audit_call(
+            audit, "triggers", "candidate_pack",
+            lambda: self._evaluate_triggers(
+                portfolio, scores, fundamentals, technicals, digest, risk_profile,
+                candidates if not pack_stale else [], deep_review, quarterly_context, earnings,
+            ),
+            self._trigger_details,
+        )
+        decision_candidates = [] if pack_stale else candidates
+        decision = self._audit_call(
+            audit, "decision", "candidate_pack",
+            lambda: self._decision.decide(
+                portfolio=portfolio, scores=scores, fundamentals=fundamentals,
+                technicals=technicals, triggers=triggers, candidates=decision_candidates,
+                digest=digest, earnings=earnings, risk_profile=risk_profile,
+                quarterly_context=quarterly_context, as_of=as_of,
+            ),
+            lambda value: self._decision_details(value, decision_candidates, triggers),
         )
         if pack_stale:
             note = "No usable weekly candidate pack was available, so new discretionary buys were suppressed."
@@ -409,7 +489,9 @@ class FundManager:
                 "candidate_pack_age_days": pack_age_days,
                 "market_regime": market_regime,
                 "elapsed_seconds": round(time.time() - started, 2),
+                **self._outcome_status(decision, candidates, digest, pack_stale=pack_stale, mode="candidate_pack"),
             },
+            audit_events=audit,
         )
         logger.info(
             "Daily monitor complete in %.0fs: %d proposal(s) awaiting approval",
@@ -435,6 +517,142 @@ class FundManager:
     # ------------------------------------------------------------------
     # Stages
     # ------------------------------------------------------------------
+    def _audit_call(
+        self,
+        events: List[Dict[str, Any]],
+        stage_name: str,
+        mode: str,
+        operation: Any,
+        details_builder: Optional[Any] = None,
+        status: str = "completed",
+    ) -> Any:
+        """Time a pipeline stage and retain product-safe facts for the run audit."""
+        started = time.perf_counter()
+        try:
+            value = operation()
+        except Exception as exc:
+            self._audit_event(
+                events, stage_name, "failed", (time.perf_counter() - started) * 1000,
+                self._base_details(mode, 0, 0, [], f"{stage_name.replace('_', ' ')} failed."),
+                str(exc),
+            )
+            raise
+        details = details_builder(value) if details_builder else self._base_details(
+            mode, 0, 0, [], f"{stage_name.replace('_', ' ')} completed."
+        )
+        # Builders describe stage-specific facts; the caller owns the run mode.
+        details["mode"] = mode
+        self._audit_event(
+            events, stage_name, status, (time.perf_counter() - started) * 1000, details
+        )
+        return value
+
+    @staticmethod
+    def _audit_event(
+        events: List[Dict[str, Any]], stage_name: str, status: str,
+        duration_ms: float, details: Dict[str, Any], error: Optional[str] = None,
+    ) -> None:
+        events.append({
+            "stage_name": stage_name, "status": status,
+            "duration_ms": round(duration_ms, 2), "details": details, "error": error,
+        })
+
+    @staticmethod
+    def _base_details(mode: str, input_count: int, output_count: int,
+                      symbols: List[str], summary: str) -> Dict[str, Any]:
+        return {
+            "mode": mode, "input_count": input_count, "output_count": output_count,
+            "symbols_sample": list(symbols)[:10], "summary": summary,
+            "top_reasons": [],
+        }
+
+    def _fundamentals_details(self, fundamentals: Dict[str, FundamentalSnapshot], requested: int) -> Dict[str, Any]:
+        return {
+            **self._base_details("full_universe", requested, len(fundamentals), list(fundamentals),
+                f"Loaded fundamentals for {len(fundamentals)} of {requested} requested symbols."),
+            "requested_count": requested, "loaded_count": len(fundamentals),
+            "missing_count": max(0, requested - len(fundamentals)),
+        }
+
+    def _score_candidates(self, fundamentals: Dict[str, FundamentalSnapshot], technicals: Dict[str, TechnicalSnapshot], portfolio: PortfolioState) -> Any:
+        scores = self._scoring.score(fundamentals, technicals)
+        return scores, self._scoring.buy_candidates(scores, exclude=portfolio.symbols, limit=20)
+
+    def _scoring_details(self, result: Any) -> Dict[str, Any]:
+        scores, candidates = result
+        suppressed = [score for score in scores.values() if getattr(score, "suppressed_reasons", [])]
+        return {
+            **self._base_details("full_universe", len(scores), len(candidates), [c.symbol for c in candidates],
+                f"Scored {len(scores)} symbols and found {len(candidates)} buy candidates."),
+            "scored_count": len(scores),
+            "passed_gates_count": sum(1 for score in scores.values() if score.passes_gates),
+            "buy_candidate_count": len(candidates), "suppressed_count": len(suppressed),
+        }
+
+    def _candidate_refresh_details(self, scores: List[FactorScores], cached: List[FactorScores]) -> Dict[str, Any]:
+        suppressed = [score for score in scores if getattr(score, "suppressed_reasons", [])]
+        return {
+            **self._base_details("candidate_pack", len(cached), len(scores), [s.symbol for s in scores],
+                f"Refreshed {len(scores)} of {len(cached)} candidate-pack symbols."),
+            "scored_count": len(scores), "passed_gates_count": sum(1 for s in scores if s.passes_gates),
+            "buy_candidate_count": len([s for s in scores if s.passes_gates]),
+            "suppressed_count": len(suppressed),
+        }
+
+    def _news_details(self, digest: Optional[NewsDigest], enabled: bool) -> Dict[str, Any]:
+        if not enabled:
+            return {**self._base_details("candidate_pack", 0, 0, [], "News was skipped for this run."), "enabled": False,
+                    "article_count": 0, "flagged_symbol_count": 0, "high_impact_count": 0, "generated_digest": False}
+        return {**self._base_details("candidate_pack", 0, int(digest.article_count or 0) if digest else 0,
+                    list(digest.flagged_symbols) if digest else [],
+                    "News digest generated." if digest else "News was unavailable; the run continued without a digest."),
+                "enabled": True, "article_count": int(digest.article_count or 0) if digest else 0,
+                "flagged_symbol_count": len(digest.flagged_symbols) if digest else 0,
+                "high_impact_count": int(digest.high_impact_count or 0) if digest else 0,
+                "generated_digest": bool(digest)}
+
+    def _trigger_details(self, triggers: List[Trigger]) -> Dict[str, Any]:
+        types: Dict[str, int] = {}
+        severities: Dict[str, int] = {}
+        for trigger in triggers:
+            types[trigger.trigger_type.value] = types.get(trigger.trigger_type.value, 0) + 1
+            severities[trigger.severity.value] = severities.get(trigger.severity.value, 0) + 1
+        return {**self._base_details("candidate_pack", 0, len(triggers), [t.symbol for t in triggers],
+                    f"Evaluated triggers; {len(triggers)} fired."), "total_trigger_count": len(triggers),
+                "trigger_type_counts": types, "severity_counts": severities}
+
+    def _decision_details(self, decision: DailyDecision, candidates: List[FactorScores], triggers: List[Trigger]) -> Dict[str, Any]:
+        mandatory = sum(1 for trigger in triggers if trigger.severity.value == "mandatory")
+        return {**self._base_details("candidate_pack", len(candidates), len(decision.proposals),
+                    [p.symbol for p in decision.proposals], f"Decision produced {len(decision.proposals)} proposal(s)."),
+                "mandatory_proposal_count": mandatory, "llm_used": decision.llm_used,
+                "discretionary_proposal_count": max(0, len(decision.proposals) - mandatory),
+                "rules_only_fallback_used": "Deterministic cash deployment was used" in decision.memo,
+                "suppressed_candidates": list(decision.suppressed_candidates),
+            }
+
+    def _outcome_status(self, decision: DailyDecision, candidates: List[FactorScores], digest: Optional[NewsDigest], *, pack_stale: bool, mode: str) -> Dict[str, Any]:
+        if decision.proposals:
+            return {"outcome": "proposals", "outcome_summary": f"{len(decision.proposals)} proposal(s) generated.", "universe_mode": mode}
+        reasons: List[Dict[str, str]] = []
+        if pack_stale:
+            reasons.append({"code": "candidate_pack_stale", "label": "Stale or unavailable candidate pack", "detail": "New discretionary buys were suppressed because weekly research was unavailable or too old."})
+        elif decision.rejected:
+            reasons.append({"code": "all_proposals_failed_risk", "label": "Risk validation rejected all proposals", "detail": "Every proposed trade failed hard portfolio risk checks."})
+        elif not candidates:
+            reasons.append({"code": "no_candidates_after_scoring", "label": "No candidates survived scoring", "detail": "No eligible buy candidates were available after scoring and regime policy."})
+        elif not decision.llm_used:
+            reasons.append({"code": "rules_only_no_actionable_buy", "label": "Rules found no actionable buy", "detail": "The rules-only decision path did not identify an actionable trade."})
+        else:
+            reasons.append({"code": "llm_declined_all", "label": "Decision layer declined discretionary trades", "detail": "The decision layer found no trade justified by the available evidence."})
+        if digest is None:
+            reasons.append({"code": "news_unavailable", "label": "News unavailable or skipped", "detail": "The run continued without a news digest."})
+        primary = reasons[0]
+        return {"outcome": "no_proposals", "universe_mode": mode,
+                "primary_reason_code": primary["code"], "primary_reason_label": primary["label"],
+                "primary_reason_detail": primary["detail"], "contributing_reasons": reasons,
+                "outcome_summary": f"No picks: {primary['label'].lower()}."}
+
     def _connect(self) -> None:
         try:
             if not self._broker.connect():
@@ -661,6 +879,7 @@ class FundManager:
         candidate_pack_date: Optional[date] = None,
         candidate_pack_age_days: Optional[float] = None,
         stage_status: Optional[Dict[str, Any]] = None,
+        audit_events: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         market_regime = risk_profile.market_regime if risk_profile else None
         run_id = self._repo.start_run(
@@ -692,6 +911,42 @@ class FundManager:
             llm_used=decision.llm_used,
             turnover_used_pct=decision.turnover_used_pct,
             stage_status=stage_status,
+        )
+        for event in audit_events or []:
+            self._repo.record_run_stage(run_id, **event)
+        if command != "weekly_research":
+            rejection_counts: Dict[str, int] = {}
+            for _, reason in decision.rejected:
+                rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+            self._repo.record_run_stage(
+                run_id,
+                "risk_validation",
+                "completed",
+                details={
+                    **self._base_details(
+                        "candidate_pack" if command == "daily_monitor" else "full_universe",
+                        len(decision.proposals) + len(decision.rejected), len(decision.proposals),
+                        [proposal.symbol for proposal in decision.proposals],
+                        "Hard portfolio risk validation completed.",
+                    ),
+                    "approved_count": len(decision.proposals),
+                    "rejected_count": len(decision.rejected),
+                    "rejection_reasons": rejection_counts,
+                },
+            )
+        journal_started = time.perf_counter()
+        self._repo.record_run_stage(
+            run_id,
+            "journal",
+            "completed",
+            duration_ms=round((time.perf_counter() - journal_started) * 1000, 2),
+            details={
+                **self._base_details("candidate_pack" if command == "daily_monitor" else "full_universe", 0, len(decision.proposals),
+                    [proposal.symbol for proposal in decision.proposals], "Run results were saved to the journal."),
+                "proposal_count": len(decision.proposals),
+                "rejected_count": len(decision.rejected),
+                "briefing_saved": (self._config.briefing_dir / f"briefing_{as_of.isoformat()}.txt").exists(),
+            },
         )
         return run_id
 

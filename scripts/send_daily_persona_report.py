@@ -81,9 +81,10 @@ def main() -> int:
         print(f"WhatsApp send failed: {result}", file=sys.stderr)
         return 1
     if args.dry_run:
-        print(f"dry-run ok ({result.get('chars')} chars → {result.get('recipients')})")
+        print(f"dry-run ok ({result.get('chars')} chars to {len(result.get('recipients') or [])} recipient(s))")
     else:
-        print(f"sent: {result}")
+        delivered = sum(1 for item in result.get("results", []) if item.get("ok"))
+        print(f"WhatsApp digest sent to {delivered} recipient(s).")
     return 0
 
 

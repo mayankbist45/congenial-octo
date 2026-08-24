@@ -54,6 +54,10 @@ class Secrets:
     alpaca_paper: bool = True
     openai_api_key: str = ""
     openai_base_url: Optional[str] = None
+    groq_api_key: str = ""
+    deepseek_api_key: str = ""
+    kimi_api_key: str = ""
+    llm_provider: str = ""
     dry_run: bool = True
     initial_capital: float = 1_000_000.0
     # Kept with the secrets because a production DSN carries a password.
@@ -75,6 +79,10 @@ class Secrets:
             alpaca_paper=self.alpaca_paper,
             openai_api_key=self.openai_api_key,
             openai_base_url=self.openai_base_url,
+            groq_api_key=self.groq_api_key,
+            deepseek_api_key=self.deepseek_api_key,
+            kimi_api_key=self.kimi_api_key,
+            llm_provider=self.llm_provider,
             dry_run=self.dry_run,
             initial_capital=capital,
             database_url=self.database_url,
@@ -115,7 +123,25 @@ class Secrets:
 
     @property
     def has_llm_credentials(self) -> bool:
-        return bool(self.openai_api_key)
+        return bool(
+            self.openai_api_key
+            or self.groq_api_key
+            or self.deepseek_api_key
+            or self.kimi_api_key
+        )
+
+    def llm_api_key(self, provider: str) -> str:
+        """Return the key for a named OpenAI-compatible LLM provider."""
+        normalized = provider.strip().lower()
+        if normalized == "deepseek":
+            return self.deepseek_api_key
+        if normalized == "groq":
+            # Preserve existing installations that stored the Groq key under
+            # OPENAI_API_KEY before named provider credentials existed.
+            return self.groq_api_key or self.openai_api_key
+        if normalized in {"kimi", "moonshot"}:
+            return self.kimi_api_key
+        return self.openai_api_key
 
 
 @dataclass(frozen=True)
@@ -346,6 +372,10 @@ def load_secrets() -> Secrets:
         alpaca_paper=_as_bool(os.getenv("ALPACA_PAPER"), default=True),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_base_url=base_url,
+        groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
+        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", "").strip(),
+        kimi_api_key=(os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or "").strip(),
+        llm_provider=os.getenv("LLM_PROVIDER", "").strip().lower(),
         dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),
         initial_capital=initial_capital,
         database_url=(os.getenv("DATABASE_URL") or "").strip() or None,

@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, HttpUrl
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -48,6 +49,7 @@ from src.operations import log_structured_event
 logger = get_logger(__name__)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 class IpoResearchRequest(BaseModel):
@@ -79,7 +81,11 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         workspace_auth = WorkspaceAuth(config)
 
     app = FastAPI(title=default_service.fund_name, docs_url="/api/docs")
-    allowed_origins = config.get("web.allowed_origins", ["http://localhost:5173"])
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    allowed_origins = config.get(
+        "web.allowed_origins",
+        ["http://localhost:5173", "http://127.0.0.1:5173"],
+    )
     if not isinstance(allowed_origins, list):
         allowed_origins = [str(allowed_origins)]
     app.add_middleware(
@@ -900,7 +906,11 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     @app.get("/api/v1/workspace/personas/{persona_id}")
     def workspace_persona(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
-        return _workspace_response(snapshot, persona=persona)
+        # Holdings and portfolio context stay frozen at the EOD publication
+        # boundary, while journalled run history is safe to expose immediately.
+        view = dict(persona)
+        view["runs"] = _get_service(persona_id).runs()
+        return _workspace_response(snapshot, persona=view)
 
     @app.get("/api/v1/workspace/personas/{persona_id}/holdings")
     def workspace_persona_holdings(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
@@ -925,7 +935,31 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     @app.get("/api/v1/workspace/personas/{persona_id}/runs")
     def workspace_persona_runs(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
-        return _workspace_response(snapshot, persona_id=persona_id, runs=persona.get("runs", []), source_freshness=persona.get("source_freshness", {}))
+        return _workspace_response(snapshot, persona_id=persona_id, runs=_get_service(persona_id).runs(), source_freshness=persona.get("source_freshness", {}))
+
+    @app.get("/api/v1/workspace/personas/{persona_id}/runs/{run_id}")
+    def workspace_persona_run_detail(
+        persona_id: str,
+        run_id: int,
+        identity: Dict[str, Any] = Depends(workspace_auth.identity),
+    ) -> JSONResponse:
+        """Return one auditable run, scoped to the persona in the URL."""
+        snapshot, persona = _workspace_persona(persona_id)
+        run = _get_service(persona_id).run_detail(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run is unavailable for this persona.")
+        return _workspace_response(
+            snapshot,
+            persona_id=persona_id,
+            persona={
+                "id": persona_id,
+                "metadata": persona.get("metadata", {}),
+                "source_freshness": persona.get("source_freshness", {}),
+            },
+            run=run,
+            recent_runs=_get_service(persona_id).runs(),
+            source_freshness=persona.get("source_freshness", {}),
+        )
 
     @app.get("/api/v1/workspace/news")
     def workspace_news(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:

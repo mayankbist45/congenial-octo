@@ -338,6 +338,11 @@ class DashboardService:
         }
 
     def _run_view(self, run: Dict[str, Any]) -> Dict[str, Any]:
+        stage_status = _loads(run.get("stage_status"), {})
+        command = run.get("command") or "analyse"
+        universe_mode = stage_status.get("universe_mode") or (
+            "candidate_pack" if command == "daily_monitor" else "full_universe"
+        )
         return {
             "id": run["id"],
             "run_date": run["run_date"],
@@ -351,14 +356,38 @@ class DashboardService:
             "memo_length": run.get("memo_length"),
             "turnover_used_pct": run["turnover_used_pct"],
             "portfolio_value": run["portfolio_value"],
-            "command": run.get("command") or "analyse",
+            "command": command,
+            "run_mode": command,
+            "universe_mode": universe_mode,
             "trigger_source": run.get("trigger_source") or "manual",
             "candidate_pack_date": run.get("candidate_pack_date"),
             "candidate_pack_age_days": run.get("candidate_pack_age_days"),
             "market_regime": run.get("market_regime"),
             "market_regime_score": run.get("market_regime_score"),
-            "stage_status": _loads(run.get("stage_status"), {}),
+            "stage_status": stage_status,
+            "outcome_summary": stage_status.get("outcome_summary") or self._legacy_outcome_summary(run),
         }
+
+    @staticmethod
+    def _legacy_outcome_summary(run: Dict[str, Any]) -> str:
+        return "Run completed; audit details were not recorded for this historical run."
+
+    @staticmethod
+    def _normalise_stage_event(row: Dict[str, Any]) -> Dict[str, Any]:
+        details = _loads(row.get("details"), {})
+        return {
+            "stage_name": row["stage_name"], "status": row["status"],
+            "duration_ms": row.get("duration_ms"), "details": details,
+            "error": row.get("error"),
+            "summary": details.get("summary") or str(row["stage_name"]).replace("_", " ").title(),
+            "input_count": details.get("input_count", 0),
+            "output_count": details.get("output_count", 0),
+            "top_reasons": details.get("top_reasons") or [],
+        }
+
+    @staticmethod
+    def _stage_lookup(events: List[Dict[str, Any]], name: str) -> Optional[Dict[str, Any]]:
+        return next((event for event in events if event["stage_name"] == name), None)
 
     def _candidate_pack_view(self, pack: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not pack:
@@ -967,16 +996,11 @@ class DashboardService:
         rows = []
         for run in self._repo.recent_runs(limit=limit):
             view = self._run_view(run)
-            view["stage_events"] = [
-                {
-                    "stage_name": row["stage_name"],
-                    "status": row["status"],
-                    "duration_ms": row["duration_ms"],
-                    "details": _loads(row["details"], {}),
-                    "error": row["error"],
-                }
-                for row in self._repo.run_stage_events(run["id"])
-            ]
+            view["stage_events"] = [self._normalise_stage_event(row) for row in self._repo.run_stage_events(run["id"])]
+            news = self._stage_lookup(view["stage_events"], "news")
+            risk = self._stage_lookup(view["stage_events"], "risk_validation") or self._stage_lookup(view["stage_events"], "risk_analytics")
+            view["news_status"] = news["status"] if news else "not recorded"
+            view["risk_status"] = risk["status"] if risk else "not recorded"
             rows.append(view)
         return rows
 
@@ -988,16 +1012,22 @@ class DashboardService:
                     self._proposal_view(p) for p in self._repo.proposals_for_run(run_id)
                 ]
                 view["quarterly_updates"] = self.quarterly_updates_for_run(run["run_date"])
-                view["stage_events"] = [
-                    {
-                        "stage_name": row["stage_name"],
-                        "status": row["status"],
-                        "duration_ms": row["duration_ms"],
-                        "details": _loads(row["details"], {}),
-                        "error": row["error"],
-                    }
-                    for row in self._repo.run_stage_events(run_id)
-                ]
+                view["stage_events"] = [self._normalise_stage_event(row) for row in self._repo.run_stage_events(run_id)]
+                pack = self._stage_lookup(view["stage_events"], "candidate_pack_load")
+                risk = self._stage_lookup(view["stage_events"], "risk_validation")
+                decision = self._stage_lookup(view["stage_events"], "decision")
+                context = dict(pack["details"]) if pack else {"mode": view["universe_mode"]}
+                context["stage_summary"] = context.get("summary")
+                context["summary"] = (
+                    "This run reused the weekly candidate pack; it did not perform a full-universe discovery pass."
+                    if view["command"] == "daily_monitor" else
+                    "This run explored the screenable universe and refreshed the candidate pack."
+                    if view["command"] == "weekly_research" else
+                    "This run explored the full screenable universe."
+                )
+                view["candidate_pack_context"] = context
+                view["risk_rejections_summary"] = (risk or {}).get("details", {}).get("rejection_reasons", {})
+                view["suppressed_candidates_summary"] = (decision or {}).get("details", {}).get("suppressed_candidates", [])
                 return view
         return None
 
@@ -1098,6 +1128,7 @@ class DashboardService:
                 now=now,
                 events=events,
             ),
+            self._whatsapp_digest_card(now, events),
             self._backup_card(now, events),
         ]
 
@@ -1111,6 +1142,38 @@ class DashboardService:
             "freshness": self._freshness_summary(cards),
             "generated_at": now.isoformat(timespec="seconds"),
             "log_hint": "Search Cloud Logging for OPS_EVENT and one of the event names: scheduled_run, backup_run, backup_upload, intraday_launcher, intraday_watch, intraday_heartbeat, dashboard_service.",
+        }
+
+    def _whatsapp_digest_card(self, now: datetime, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        digest_events = [event for event in events if event.get("event") == "whatsapp_digest"]
+        starts = [event for event in digest_events if event.get("status") == "start"]
+        successes = [event for event in digest_events if event.get("status") == "success"]
+        failures = [event for event in digest_events if event.get("status") == "failure"]
+        last_start = starts[-1] if starts else None
+        last_success = successes[-1] if successes else None
+        last_failure = failures[-1] if failures else None
+        target = self._today_at("18:00", now)
+        current_state = "unknown"
+        if self._is_weekday(now):
+            if last_failure and self._event_time(last_failure) >= self._event_time(last_success):
+                current_state = "failed"
+            elif last_success and self._event_time(last_success) >= target:
+                current_state = "healthy"
+            elif now > target + timedelta(minutes=60):
+                current_state = "late"
+            else:
+                current_state = "healthy"
+        return {
+            "key": "whatsapp_digest",
+            "label": "India WhatsApp digest",
+            "kind": "notification",
+            "expected_schedule": f"Weekdays after close {self._config.market.tz_abbrev}",
+            "last_start_time": self._event_ts(last_start),
+            "last_success_time": self._event_ts(last_success),
+            "last_failure_time": self._event_ts(last_failure),
+            "current_state": current_state,
+            "latest_error": (last_failure or {}).get("error"),
+            "latest_note": "Sent only after a successful close and dashboard publication.",
         }
 
     def _market_schedule(self, market_id: str, field: str) -> str:

@@ -81,14 +81,6 @@ def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
     )
     lines.append(
         _cron_line(
-            "15",
-            "18",
-            "1-5",
-            f"{app_user} cd {project_dir} && ./scripts/run_scheduled.sh publish_dashboard",
-        )
-    )
-    lines.append(
-        _cron_line(
             "0",
             "9",
             "6",
@@ -125,21 +117,6 @@ def generate_cron(project_dir: Path, vm_tz_name: str, app_user: str) -> str:
                 f"root systemctl stop {service}",
             )
         )
-        # EOD persona digest → WhatsApp a few minutes after the watch unit stops.
-        report_dt = cal_stop + timedelta(minutes=5)
-        report_m, report_h, _ = _to_vm_cron(report_dt, vm_tz)
-        report_dow = _stop_dow_expr(cal_start, report_dt, vm_tz, market)
-        lines.append(
-            _cron_line(
-                report_m,
-                report_h,
-                report_dow,
-                f"{app_user} cd {project_dir} && "
-                f"./scripts/run_daily_persona_report.sh --market {market.id} "
-                f">> data/persona_report.log 2>&1",
-            )
-        )
-
     # Shared close + backup (India-oriented close kept for all swing books).
     lines.append(
         _cron_line(

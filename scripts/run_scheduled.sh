@@ -32,6 +32,18 @@ emit_event() {
         --field "source=run_scheduled.sh"
 }
 
+run_persona_report() {
+    local report_log="$PROJECT_DIR/data/persona_report.log"
+    "$PROJECT_DIR/scripts/run_daily_persona_report.sh" --market india_equity >>"$report_log" 2>&1
+    local report_status=$?
+    if [ $report_status -eq 0 ]; then
+        echo "--- India WhatsApp digest sent at $(date '+%H:%M:%S') ---" >>"$LOG"
+    else
+        # The close is complete even if a downstream notification provider fails.
+        echo "--- India WhatsApp digest failed with exit $report_status at $(date '+%H:%M:%S') ---" >>"$LOG"
+    fi
+}
+
 {
     echo ""
     echo "=================================================================="
@@ -52,6 +64,17 @@ STATUS=$?
 if [ $STATUS -eq 0 ]; then
     echo "--- finished cleanly at $(date '+%H:%M:%S') ---" >>"$LOG"
     emit_event "success" "exit_code=0"
+    if [ "$COMMAND" = "close" ]; then
+        "$PYTHON" run_daily.py publish_dashboard >>"$LOG" 2>&1
+        SNAPSHOT_STATUS=$?
+        if [ $SNAPSHOT_STATUS -eq 0 ]; then
+            emit_event "success" "job=publish_dashboard" "exit_code=0"
+            run_persona_report
+        else
+            echo "--- dashboard snapshot failed with exit $SNAPSHOT_STATUS at $(date '+%H:%M:%S') ---" >>"$LOG"
+            emit_event "failure" "job=publish_dashboard" "exit_code=$SNAPSHOT_STATUS"
+        fi
+    fi
 else
     echo "--- FAILED with exit $STATUS at $(date '+%H:%M:%S') ---" >>"$LOG"
     emit_event "failure" "exit_code=$STATUS"

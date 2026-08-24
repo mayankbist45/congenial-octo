@@ -9,6 +9,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ fund_name }}{% endblock %}</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" defer></script>
   <script>
     (function () {
       try {
@@ -759,6 +760,60 @@
       letter-spacing: 0.04em;
     }
     .small { font-size: 12px; }
+
+    /* Overview hero: product narrative above the operational dashboard. */
+    .product-hero {
+      --hero-ink: #eef6ff;
+      --hero-muted: #b7c8db;
+      --hero-line: rgba(173, 216, 255, 0.16);
+      --hero-accent: #65c7ff;
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
+      display: grid;
+      grid-template-columns: minmax(0, 0.93fr) minmax(420px, 1.07fr);
+      gap: 42px;
+      align-items: center;
+      min-height: 510px;
+      margin: -4px 0 28px;
+      padding: clamp(30px, 5vw, 64px);
+      border: 1px solid rgba(116, 194, 255, 0.23);
+      border-radius: 24px;
+      background: radial-gradient(circle at 8% 0%, rgba(70, 160, 255, 0.32), transparent 39%), radial-gradient(circle at 94% 90%, rgba(16, 185, 129, 0.21), transparent 34%), linear-gradient(132deg, #07192f 0%, #0b2746 54%, #07162b 100%);
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.13);
+    }
+    .product-hero::before, .product-hero::after { content: ""; position: absolute; z-index: -1; width: 260px; aspect-ratio: 1; border: 1px solid rgba(130, 205, 255, 0.17); border-radius: 50%; }
+    .product-hero::before { top: -150px; right: 33%; }
+    .product-hero::after { right: -128px; bottom: -152px; width: 340px; }
+    .hero-copy { position: relative; z-index: 2; }
+    .hero-eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 16px; color: var(--hero-accent); font-size: 11px; font-weight: 750; letter-spacing: 0.13em; text-transform: uppercase; }
+    .hero-eyebrow::before { content: ""; width: 24px; height: 1px; background: currentColor; }
+    .hero-title { max-width: 610px; margin: 0; color: var(--hero-ink); font-size: clamp(34px, 4.2vw, 57px); font-weight: 720; line-height: 1.03; letter-spacing: -0.055em; }
+    .hero-title em { color: #81e6bd; font-style: normal; }
+    .hero-lede { max-width: 540px; margin: 20px 0 0; color: var(--hero-muted); font-size: 16px; line-height: 1.65; }
+    .hero-capabilities { display: flex; flex-wrap: wrap; gap: 8px; margin: 25px 0; }
+    .hero-capability { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--hero-line); border-radius: 999px; background: rgba(255, 255, 255, 0.06); color: #e8f3ff; font-size: 12px; font-weight: 620; }
+    .hero-capability i { width: 7px; height: 7px; border-radius: 50%; background: #6ee7b7; box-shadow: 0 0 0 3px rgba(110, 231, 183, 0.13); }
+    .hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .hero-actions .btn { border-color: #77cdfd; background: #dff3ff; color: #08213c; font-weight: 700; }
+    .hero-actions .btn:hover { background: #fff; text-decoration: none; }
+    .hero-link { color: #d0eaff; font-size: 13px; font-weight: 650; }
+    .hero-link:hover { color: #fff; }
+    .hero-visual { position: relative; min-width: 0; padding: 22px 0 16px 22px; }
+    .hero-screen { position: relative; z-index: 1; overflow: hidden; border: 1px solid rgba(173, 216, 255, 0.27); border-radius: 15px; background: #06172b; box-shadow: 0 25px 50px rgba(0, 0, 0, 0.31); transform: perspective(1200px) rotateY(-4deg) rotateX(2deg); transform-origin: center; }
+    .hero-screen img { display: block; width: 100%; height: auto; }
+    .hero-float-card { position: absolute; z-index: 2; min-width: 148px; padding: 12px 14px; border: 1px solid rgba(183, 228, 255, 0.26); border-radius: 12px; background: rgba(7, 28, 50, 0.9); box-shadow: 0 16px 32px rgba(0, 0, 0, 0.24); color: #eef7ff; backdrop-filter: blur(12px); }
+    .hero-float-card .float-label { color: #aac3d9; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .hero-float-card .float-value { margin-top: 3px; font-size: 18px; font-weight: 720; letter-spacing: -0.03em; }
+    .hero-float-card .float-note { margin-top: 2px; color: #72e2b1; font-size: 11px; font-weight: 650; }
+    .hero-float-card.score { top: 0; right: -20px; }
+    .hero-float-card.risk { bottom: 0; left: -4px; }
+    .hero-float-card.risk .float-note { color: #f6c463; }
+    .hero-trust { grid-column: 1 / -1; display: grid; grid-template-columns: auto repeat(3, 1fr); gap: 18px; align-items: center; padding-top: 20px; border-top: 1px solid var(--hero-line); color: var(--hero-muted); font-size: 12px; }
+    .hero-trust strong { color: #edf7ff; font-size: 13px; }
+    .hero-trust-item { display: flex; align-items: center; gap: 8px; }
+    .hero-trust-item b { color: #81e6bd; font-size: 14px; }
+    @media (prefers-reduced-motion: reduce) { .product-hero *, .product-hero::before, .product-hero::after { animation: none !important; transition: none !important; } }
     @media (max-width: 960px) {
       header { padding: 0 16px; }
       main { padding: 20px 16px 56px; }
@@ -781,6 +836,11 @@
         align-items: flex-start;
       }
       .actions { width: 100%; }
+      .product-hero { grid-template-columns: 1fr; gap: 30px; min-height: auto; }
+      .hero-copy { max-width: 680px; }
+      .hero-visual { width: min(700px, 94%); margin: 0 auto; }
+      .hero-trust { grid-template-columns: repeat(3, 1fr); }
+      .hero-trust strong { grid-column: 1 / -1; }
     }
     @media (max-width: 720px) {
       body { font-size: 14px; }
@@ -820,6 +880,15 @@
         flex-wrap: wrap;
         gap: 10px;
       }
+      .product-hero { margin-bottom: 22px; padding: 30px 22px; border-radius: 18px; }
+      .hero-title { font-size: clamp(32px, 10vw, 46px); }
+      .hero-lede { font-size: 14px; }
+      .hero-visual { width: 100%; padding: 18px 8px 18px 10px; }
+      .hero-float-card { min-width: 126px; padding: 9px 10px; }
+      .hero-float-card .float-value { font-size: 15px; }
+      .hero-float-card.score { right: -8px; }
+      .hero-float-card.risk { left: -5px; }
+      .hero-trust { grid-template-columns: 1fr; gap: 10px; }
       .bar-row {
         flex-direction: column;
         align-items: flex-start;
@@ -849,6 +918,7 @@
         padding: 7px 10px;
         font-size: 13px;
       }
+      .hero-actions { align-items: flex-start; flex-direction: column; }
     }
   </style>
 </head>
@@ -1030,6 +1100,33 @@
       document.addEventListener("keydown", function (event) {
         if (event.key === "Escape") closePicker();
       });
+    })();
+  </script>
+  <script>
+    (function () {
+      function animateHero() {
+        var hero = document.querySelector(".product-hero");
+        if (!hero || !window.gsap || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+        var reveal = hero.querySelectorAll(".hero-reveal");
+        var floating = hero.querySelectorAll(".hero-float-card");
+        window.gsap.timeline({ defaults: { ease: "power3.out" } })
+          .from(reveal, { autoAlpha: 0, y: 18, duration: 0.65, stagger: 0.09 })
+          .from(".hero-screen", { autoAlpha: 0, x: 24, y: 18, duration: 0.85 }, "-=0.55")
+          .from(floating, { autoAlpha: 0, scale: 0.88, duration: 0.5, stagger: 0.13 }, "-=0.45")
+          .from(".hero-trust", { autoAlpha: 0, y: 10, duration: 0.5 }, "-=0.2");
+        window.gsap.to(".hero-float-card.score", { y: -8, duration: 2.8, yoyo: true, repeat: -1, ease: "sine.inOut" });
+        window.gsap.to(".hero-float-card.risk", { y: 7, duration: 3.3, yoyo: true, repeat: -1, ease: "sine.inOut" });
+        hero.addEventListener("pointermove", function (event) {
+          var bounds = hero.getBoundingClientRect();
+          var x = (event.clientX - bounds.left) / bounds.width - 0.5;
+          var y = (event.clientY - bounds.top) / bounds.height - 0.5;
+          window.gsap.to(".hero-screen", { rotateY: -4 + x * 2, rotateX: 2 - y * 2, duration: 0.6, ease: "power2.out" });
+        });
+        hero.addEventListener("pointerleave", function () {
+          window.gsap.to(".hero-screen", { rotateY: -4, rotateX: 2, duration: 0.7, ease: "power2.out" });
+        });
+      }
+      window.addEventListener("load", animateHero, { once: true });
     })();
   </script>
 </body>

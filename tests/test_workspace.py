@@ -4,8 +4,10 @@ from datetime import date
 
 from fastapi.testclient import TestClient
 
+from src.config import get_persona_config
 from src.dashboard.app import create_app
 from src.journal.db import connect
+from src.journal.repository import JournalRepository
 from src.workspace.dashboard_snapshot import DashboardSnapshotService
 from src.workspace.service import WorkspaceRepository
 
@@ -62,6 +64,20 @@ def test_workspace_routes_reject_requests_without_google_token(temp_config):
     assert response.status_code == 401
 
 
+def test_workspace_accepts_local_vite_authorization_preflight(temp_config):
+    response = TestClient(create_app(temp_config)).options(
+        "/api/v1/workspace/me",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+
 def test_verified_google_account_is_provisioned_as_member_and_admin_is_preserved(temp_config):
     repository = WorkspaceRepository(temp_config)
     member = repository.user_for_email("new.user@example.com", "New User", "https://example.com/avatar.png")
@@ -109,6 +125,36 @@ def test_workspace_persona_contracts_are_member_read_only(temp_config):
     assert client.get("/api/v1/workspace/news").status_code == 200
     assert client.get("/api/v1/workspace/operations").status_code == 403
     assert client.post("/api/v1/admin/proposals/1/approve").status_code == 403
+
+
+def test_workspace_persona_run_detail_is_scoped_and_preserves_snapshot_metadata(temp_config):
+    client, _ = client_with_member(temp_config)
+    published = DashboardSnapshotService(temp_config).publish(date(2026, 8, 21))
+    persona_id = published["personas"][0]["id"]
+    repo = JournalRepository(get_persona_config(persona_id, base=temp_config))
+    run_id = repo.start_run(date(2026, 8, 21), False, 1_000_000.0, 100_000.0, command="daily_monitor")
+    repo.record_run_stage(
+        run_id,
+        "candidate_pack_load",
+        "warning",
+        0,
+        {"summary": "Weekly candidate pack was stale.", "input_count": 1, "output_count": 0, "stale": True},
+    )
+    repo.finish_run(run_id, "No picks.", True, 0.0, stage_status={"outcome_summary": "No picks: stale candidate pack."})
+
+    response = client.get(f"/api/v1/workspace/personas/{persona_id}/runs/{run_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["persona_id"] == persona_id
+    assert payload["snapshot_date"] == "2026-08-21"
+    assert payload["run"]["id"] == run_id
+    assert payload["run"]["stage_events"][0]["stage_name"] == "candidate_pack_load"
+    assert payload["recent_runs"][0]["id"] == run_id
+    assert client.get(f"/api/v1/workspace/personas/{persona_id}").json()["persona"]["runs"][0]["id"] == run_id
+
+    other_persona = next(row["id"] for row in published["personas"] if row["id"] != persona_id)
+    assert client.get(f"/api/v1/workspace/personas/{other_persona}/runs/{run_id}").status_code == 404
 
 
 def test_legacy_snapshot_is_upgraded_with_personas_once(temp_config):

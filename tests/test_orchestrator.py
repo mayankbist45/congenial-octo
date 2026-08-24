@@ -410,6 +410,40 @@ def test_a_full_run_journals_everything(manager, repo) -> None:
     assert len(repo.latest_position_snapshot()) == 2
 
 
+def test_full_run_records_a_structured_audit_timeline(manager, repo) -> None:
+    result = manager.analyse(skip_news=True)
+
+    events = repo.run_stage_events(result.run_id)
+    assert [event["stage_name"] for event in events] == [
+        "prices", "portfolio", "fundamentals", "scoring", "quarterly_reports",
+        "risk_analytics", "earnings", "news", "triggers", "decision",
+        "risk_validation", "journal",
+    ]
+    news = next(event for event in events if event["stage_name"] == "news")
+    assert news["status"] == "skipped"
+    assert '"enabled": false' in news["details"]
+    assert all(event["details"] for event in events)
+
+
+def test_daily_monitor_records_candidate_pack_audit_stages(manager, repo, monkeypatch) -> None:
+    monkeypatch.setattr(
+        manager, "_load_named_fundamentals",
+        lambda technicals, portfolio, refresh, symbols: {},
+    )
+
+    result = manager.daily_monitor(skip_news=True)
+
+    events = repo.run_stage_events(result.run_id)
+    assert [event["stage_name"] for event in events] == [
+        "prices", "portfolio", "candidate_pack_load", "fundamentals",
+        "candidate_refresh", "risk_analytics", "quarterly_reports", "earnings",
+        "news", "full_book_scoring", "triggers", "decision", "risk_validation",
+        "journal",
+    ]
+    run = repo.latest_run()
+    assert '"universe_mode": "candidate_pack"' in run["stage_status"]
+
+
 def test_a_run_with_no_llm_still_produces_a_memo(manager) -> None:
     result = manager.analyse()
 

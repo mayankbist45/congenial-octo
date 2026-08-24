@@ -106,13 +106,13 @@
 </p>
 
 <div class="panel">
-  <h2>Daily runs</h2>
+  <h2>Recent runs</h2>
   {% if runs %}
   <div class="table-scroll">
   <table>
     <thead>
       <tr>
-        <th>Date</th><th>Command</th><th>Status</th>
+        <th>Date</th><th>Run type</th><th>Universe</th><th>News</th><th>Risk</th><th>Result</th>
         <th class="num">Fund value</th><th class="num">Turnover</th>
         <th>Decision layer</th><th></th>
       </tr>
@@ -122,10 +122,13 @@
       <tr>
         <td>{{ run.run_date }}</td>
         <td>
-          {{ run.command }}
+          {{ run.run_mode }}
           {% if run.candidate_pack_date %}<div class="sub-line">pack {{ run.candidate_pack_date }}</div>{% endif %}
         </td>
-        <td>{{ run.status }}</td>
+        <td>{{ 'Candidate pack' if run.universe_mode == 'candidate_pack' else 'Full universe' }}</td>
+        <td>{{ run.news_status }}</td>
+        <td>{{ run.risk_status }}</td>
+        <td>{{ run.outcome_summary }}</td>
         <td class="num">{{ run.portfolio_value | money }}</td>
         <td class="num">{{ run.turnover_used_pct | pct(1) }}</td>
         <td class="sub-line">{{ 'active' if run.llm_used else 'rules only' }}</td>

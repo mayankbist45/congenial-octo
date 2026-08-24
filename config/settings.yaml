@@ -150,7 +150,7 @@ news:
   lookback_hours: 36
   max_articles_per_feed: 60
   # Kept small so the digest fits Groq free-tier TPM on llama-3.1-8b-instant.
-  max_articles_in_digest: 12
+  max_articles_in_digest: 25
   feeds:
     - name: "Moneycontrol Markets"
       url: "https://www.moneycontrol.com/rss/marketreports.xml"
@@ -215,13 +215,44 @@ observability:
     - "calanpereira98@gmail.com"
 
 llm:
-  model: "llama-3.3-70b-versatile"       # default for decisions
-  digest_model: "llama-3.1-8b-instant" 
-  provider: "openai"            # OpenAI-compatible endpoint
-  # model: "gpt-4o"
-  # digest_model: "gpt-4o-mini"   # Cheaper model for bulk news summarization
+  # Switch provider with LLM_PROVIDER in .env, or change this default.
+  provider: "deepseek"
+  providers:
+    deepseek:
+      base_url: "https://api.deepseek.com"
+      model: "deepseek-v4-flash"
+      digest_model: "deepseek-v4-flash"
+      request_overrides:
+        thinking:
+          type: "disabled"
+      max_input_tokens: 8000
+      max_output_tokens: 1000
+      rate_limit_tokens_per_minute: 0
+      rate_limit_max_retries: 2
+    groq:
+      base_url: "https://api.groq.com/openai/v1"
+      model: "openai/gpt-oss-120b"
+      digest_model: "openai/gpt-oss-20b"
+      max_input_tokens: 3500
+      max_output_tokens: 1000
+      rate_limit_tokens_per_minute: 7000
+      rate_limit_max_retries: 2
+    kimi:
+      base_url: "https://api.moonshot.ai/v1"
+      model: "kimi-k2.6"
+      digest_model: "kimi-k2.6"
+      max_input_tokens: 3500
+      max_output_tokens: 1000
+      rate_limit_tokens_per_minute: 0
+      rate_limit_max_retries: 2
+    openai:
+      model: "gpt-5.4-mini"
+      digest_model: "gpt-5.4-nano"
+      max_input_tokens: 3500
+      max_output_tokens: 1000
+      rate_limit_tokens_per_minute: 0
+      rate_limit_max_retries: 2
   temperature: 0.2
-  max_output_tokens: 2000
   timeout_seconds: 180
 
 earnings:
@@ -298,6 +329,7 @@ dashboard:
 web:
   allowed_origins:
     - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
     - "https://investment-research-web.vercel.app"
 
 # End-of-day persona digests → WhatsApp (Twilio). Credentials live in .env.

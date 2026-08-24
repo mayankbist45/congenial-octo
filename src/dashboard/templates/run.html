@@ -15,13 +15,65 @@
 
 {% if run.stage_status %}
 <div class="panel">
-  <h2>Run telemetry</h2>
+  <h2>Run outcome</h2>
   <p class="muted" style="margin:0">
+    <strong>{{ run.outcome_summary }}</strong>
+    {% if run.stage_status.primary_reason_detail %}<br>{{ run.stage_status.primary_reason_detail }}{% endif %}
+    <br>
     {% if run.candidate_pack_date %}Candidate pack {{ run.candidate_pack_date }}{% endif %}
     {% if run.market_regime %}&middot; regime {{ run.market_regime|title }}{% endif %}
     {% if run.memo_present is not none %}&middot; memo {{ 'saved' if run.memo_present else 'missing' }}{% endif %}
   </p>
 </div>
+{% endif %}
+
+<div class="panel">
+  <h2>Universe / candidate pack</h2>
+  <p style="margin:0">{{ run.candidate_pack_context.summary }}</p>
+  {% if run.candidate_pack_context.stage_summary %}<p class="note">{{ run.candidate_pack_context.stage_summary }}</p>{% endif %}
+  {% if run.candidate_pack_context.pack_date %}
+  <p class="note">Pack date {{ run.candidate_pack_context.pack_date }}{% if run.candidate_pack_context.pack_age_days is not none %} · {{ run.candidate_pack_context.pack_age_days }} days old{% endif %}{% if run.candidate_pack_context.stale %} · stale{% endif %}</p>
+  {% endif %}
+</div>
+
+{% if run.stage_events %}
+<div class="panel">
+  <h2>Run timeline</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Stage</th><th>Status</th><th>Counts</th><th>Summary</th><th>Time</th></tr></thead>
+    <tbody>
+    {% for event in run.stage_events %}
+      <tr>
+        <td><strong>{{ event.stage_name | replace('_', ' ') | title }}</strong></td>
+        <td>{{ event.status }}</td>
+        <td>{{ event.input_count }} → {{ event.output_count }}</td>
+        <td>{{ event.summary }}{% if event.error %}<div class="note">{{ event.error }}</div>{% endif %}</td>
+        <td>{{ event.duration_ms | number(0) if event.duration_ms is not none else '-' }} ms</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% set news_event = run.stage_events | selectattr('stage_name', 'equalto', 'news') | list | first %}
+{% if news_event %}
+<div class="panel">
+  <h2>News</h2>
+  <p style="margin:0">{{ news_event.summary }}</p>
+  <p class="note">{{ news_event.details.article_count or 0 }} articles · {{ news_event.details.flagged_symbol_count or 0 }} flagged symbols · {{ news_event.details.high_impact_count or 0 }} high-impact items</p>
+</div>
+{% endif %}
+
+{% set risk_event = run.stage_events | selectattr('stage_name', 'equalto', 'risk_validation') | list | first %}
+{% if risk_event %}
+<div class="panel">
+  <h2>Risk &amp; validation</h2>
+  <p style="margin:0">{{ risk_event.details.approved_count or 0 }} approved · {{ risk_event.details.rejected_count or 0 }} rejected</p>
+  {% if run.risk_rejections_summary %}<p class="note">{{ run.risk_rejections_summary }}</p>{% endif %}
+</div>
+{% endif %}
 {% endif %}
 
 {% if run.memo %}
@@ -57,7 +109,7 @@
       {% include "_proposal.html" %}
     {% endfor %}
   {% else %}
-    <p class="empty">This run proposed no trades.</p>
+    <p class="empty">{{ run.outcome_summary }}</p>
   {% endif %}
 </div>
 
