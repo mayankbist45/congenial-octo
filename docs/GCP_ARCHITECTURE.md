@@ -168,12 +168,14 @@ Fund policy (risk limits, turnover budget, universe) stays in tracked
 | Time | Script | What happens |
 | --- | --- | --- |
 | 08:15 | `run_scheduled.sh cycle` | Fetch prices, fundamentals, news → quant screen → LLM proposals → risk validation → auto-approve (paper) → place simulated orders |
-| 18:00 | `run_scheduled.sh close` | Mark portfolio at closing prices, record NAV and risk metrics. Waits until 18:00 because Yahoo's official close lags the bell. |
+| 18:00 | `run_scheduled.sh close` | Mark portfolio at closing prices, record NAV and risk metrics, then publish the workspace snapshot with IPO research and NSE subscription data. Waits until 18:00 because Yahoo's official close lags the bell. |
 | 19:30 | `backup_journal.sh` | Dump journal to disk and GCS |
 
 The dashboard is not on a schedule. It runs continuously as a systemd service
 for manual review when needed. In unattended mode (`execution.auto_approve: true`
 and `DRY_RUN=true`), the morning cycle does not wait for anyone at the dashboard.
+
+To publish IPO research independently, run `.venv/bin/python run_daily.py publish_dashboard`. This is safe to schedule on weekday mornings; keep the post-close publication for current subscription coverage. The IPO payload is source-gated: unreadable or incomplete RHP coverage publishes as unavailable with confidence 0. GMP is manually reviewed, append-only operational data and appears only after fresh same-day IST observations from both InvestorGain and Zoom News; it never contributes to research confidence or a verdict.
 
 ## Accessing the dashboard
 

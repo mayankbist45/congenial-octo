@@ -182,6 +182,24 @@ class WorkspaceRepository:
         if cursor.rowcount == 0:
             raise KeyError("Workspace event not found.")
 
+    def add_gmp_observation(
+        self, ipo_id: str, source_name: str, gmp_value: float, source_url: str,
+        observed_at: str, reviewer_user_id: int,
+    ) -> Dict[str, Any]:
+        """Record reviewed GMP evidence without permitting edits to prior observations."""
+        observation_id, created_at = str(uuid.uuid4()), _now()
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO ipo_gmp_observations (id, ipo_id, source_name, gmp_value, source_url, observed_at, reviewer_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (observation_id, ipo_id, source_name, gmp_value, source_url, observed_at, reviewer_user_id, created_at),
+            )
+            conn.commit()
+        return {
+            "id": observation_id, "ipo_id": ipo_id, "source_name": source_name,
+            "gmp_value": gmp_value, "source_url": source_url, "observed_at": observed_at,
+            "reviewer_user_id": reviewer_user_id, "created_at": created_at,
+        }
+
     class _ConnectionContext:
         def __init__(self, config: Config): self.conn = connect(config)
         def __enter__(self): return self.conn

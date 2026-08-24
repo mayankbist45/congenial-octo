@@ -99,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="ignore the fundamentals cache and re-scrape everything (slow)",
     )
     parser.add_argument(
+        "--refresh-ipo-research",
+        action="store_true",
+        help="replace only today's published IPO research data",
+    )
+    parser.add_argument(
         "--max-candidates",
         type=int,
         metavar="N",
@@ -570,9 +575,15 @@ def main(argv: Optional[list] = None) -> int:
         return 0
 
     if args.command == "publish_dashboard":
+        from src.ipo.service import IpoResearchService
         from src.workspace.dashboard_snapshot import DashboardSnapshotService
 
-        snapshot = DashboardSnapshotService(config).publish(_parse_date(args.as_of) or date.today())
+        ipo_analysis = IpoResearchService(config).daily_analysis()
+        snapshot = DashboardSnapshotService(config).publish(
+            _parse_date(args.as_of) or date.today(),
+            ipos=ipo_analysis,
+            refresh_ipos=args.refresh_ipo_research,
+        )
         print(f"Published delayed/EOD dashboard snapshot for {snapshot['snapshot_date']} at {snapshot['as_of']}")
         return 0
 

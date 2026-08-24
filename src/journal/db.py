@@ -424,6 +424,19 @@ CREATE TABLE IF NOT EXISTS dashboard_snapshots (
     created_at TEXT NOT NULL
 );
 
+-- GMP is manually reviewed, append-only market colour. It is deliberately
+-- separate from official IPO research and cannot affect an investment verdict.
+CREATE TABLE IF NOT EXISTS ipo_gmp_observations (
+    id TEXT PRIMARY KEY,
+    ipo_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    gmp_value {REAL} NOT NULL,
+    source_url TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    reviewer_user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -452,6 +465,7 @@ CREATE INDEX IF NOT EXISTS idx_workspace_jobs_user ON workspace_jobs(user_id, cr
 CREATE INDEX IF NOT EXISTS idx_workspace_portfolios_user ON workspace_portfolios(user_id, version);
 CREATE INDEX IF NOT EXISTS idx_workspace_events_user ON workspace_events(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_as_of ON dashboard_snapshots(as_of);
+CREATE INDEX IF NOT EXISTS idx_ipo_gmp_observations_issue_source_time ON ipo_gmp_observations(ipo_id, source_name, observed_at);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -480,6 +494,7 @@ TABLES = (
     "workspace_portfolios",
     "workspace_events",
     "dashboard_snapshots",
+    "ipo_gmp_observations",
 )
 
 # Tables whose primary key is a generated integer, so a migration that carries

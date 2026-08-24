@@ -12,6 +12,7 @@ The dashboard bind address is configured from settings rather than hardcoded.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -71,6 +72,13 @@ class WorkspaceActionRequest(BaseModel):
 
 class AdminProposalRequest(BaseModel):
     reason: str = ""
+
+
+class GmpObservationRequest(BaseModel):
+    source_name: str
+    gmp_value: float
+    source_url: HttpUrl
+    observed_at: datetime
 
 
 def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = None) -> FastAPI:
@@ -888,6 +896,35 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     @app.get("/api/v1/workspace/dashboard")
     def workspace_dashboard(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
         return JSONResponse(_workspace_snapshot())
+
+    @app.get("/api/v1/workspace/ipos")
+    def workspace_ipos(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot = _workspace_snapshot()
+        return _workspace_response(snapshot, ipos=snapshot.get("ipos", {"issues": [], "warnings": [], "data_status": "unavailable"}))
+
+    @app.get("/api/v1/workspace/ipos/{ipo_id}")
+    def workspace_ipo(ipo_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        snapshot = _workspace_snapshot()
+        issue = next((item for item in snapshot.get("ipos", {}).get("issues", []) if item.get("id") == ipo_id), None)
+        if issue is None:
+            raise HTTPException(status_code=404, detail="IPO research is unavailable in the latest delayed/EOD snapshot.")
+        return _workspace_response(snapshot, ipo=issue)
+
+    @app.post("/api/v1/admin/ipos/{ipo_id}/gmp-observations", status_code=201)
+    def add_gmp_observation(ipo_id: str, payload: GmpObservationRequest, identity: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
+        source_name = payload.source_name.strip().lower()
+        if source_name not in {"investorgain", "zoom_news"}:
+            raise HTTPException(status_code=422, detail="GMP observations must be from InvestorGain or Zoom News.")
+        if not math.isfinite(payload.gmp_value):
+            raise HTTPException(status_code=422, detail="GMP value must be a finite number.")
+        snapshot = _workspace_snapshot()
+        if not any(item.get("id") == ipo_id for item in snapshot.get("ipos", {}).get("issues", [])):
+            raise HTTPException(status_code=404, detail="IPO is unavailable in the latest delayed/EOD snapshot.")
+        observation = _workspace_service().repo.add_gmp_observation(
+            ipo_id, source_name, payload.gmp_value, str(payload.source_url),
+            payload.observed_at.astimezone(timezone.utc).isoformat(), int(identity["id"]),
+        )
+        return JSONResponse({"observation": observation}, status_code=201)
 
     @app.get("/api/v1/workspace/personas")
     def workspace_personas(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:

@@ -110,6 +110,25 @@ python run_daily.py execute --require-approval  # place only what you approved
 Auto-approved trades are journalled with `decided_by = auto`, so a later review
 can always separate what the machine waved through from what a human agreed to.
 
+### IPO research
+
+Publish the latest IPO research now:
+
+```bash
+.venv/bin/python run_daily.py publish_dashboard
+```
+
+To replace only today's IPO data after a source or parser fix, append
+`--refresh-ipo-research`.
+
+IPO research is source-gated: business, financial, and risk coverage must be readable from an official RHP before a verdict or non-zero confidence is published. Running IPO terms and subscription data use NSE first, with an official BSE issue-page fallback where supplied data is missing. GMP is not researched automatically and never affects the verdict: an administrator records append-only, source-linked observations from both InvestorGain and Zoom News; only two fresh observations from the same IST day publish a range after the next refresh.
+
+This refreshes the workspace snapshot with SEBI offer-document analysis and the
+current NSE total subscription multiple for active issues. `run_scheduled.sh close`
+already runs this command after each successful weekday close job. A morning run
+can use the same command; retain the close run because subscription data is more
+useful after the market has been open.
+
 ### Running it on a schedule
 
 ```bash

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
@@ -103,13 +104,34 @@ def test_workspace_me_returns_account_essentials(temp_config):
 def test_workspace_dashboard_returns_the_published_eod_snapshot(temp_config):
     client, _ = client_with_member(temp_config)
     publisher = DashboardSnapshotService(temp_config)
-    published = publisher.publish(date(2026, 8, 21))
+    day = date.today()
+    published = publisher.publish(day)
 
     response = client.get("/api/v1/workspace/dashboard")
     assert response.status_code == 200
-    assert response.json()["snapshot_date"] == "2026-08-21"
+    assert response.json()["snapshot_date"] == day.isoformat()
     assert response.json()["data_status"] == "delayed_eod"
-    assert publisher.publish(date(2026, 8, 21))["as_of"] == published["as_of"]
+    assert publisher.publish(day)["as_of"] == published["as_of"]
+
+
+def test_workspace_ipo_routes_return_published_research(temp_config):
+    client, _ = client_with_member(temp_config)
+    DashboardSnapshotService(temp_config).publish(date(2026, 8, 21), ipos={"issues": [{"id": "acme-1", "issuer": "Acme Limited"}], "warnings": [], "data_status": "available"})
+
+    assert client.get("/api/v1/workspace/ipos").json()["ipos"]["issues"][0]["id"] == "acme-1"
+    assert client.get("/api/v1/workspace/ipos/acme-1").json()["ipo"]["issuer"] == "Acme Limited"
+    assert client.get("/api/v1/workspace/ipos/missing").status_code == 404
+
+
+def test_workspace_ipo_refresh_preserves_the_daily_snapshot(temp_config):
+    publisher = DashboardSnapshotService(temp_config)
+    day = date.today()
+    published = publisher.publish(day, ipos={"issues": [{"id": "old"}]})
+
+    refreshed = publisher.publish(day, ipos={"issues": [{"id": "new"}]}, refresh_ipos=True)
+
+    assert refreshed["as_of"] == published["as_of"]
+    assert refreshed["ipos"]["issues"][0]["id"] == "new"
 
 
 def test_workspace_persona_contracts_are_member_read_only(temp_config):
@@ -188,3 +210,19 @@ def test_admin_routes_require_admin_role(temp_config):
     admin_client = TestClient(create_app(temp_config, workspace_auth=FakeAdminAuth()))
     assert admin_client.get("/api/v1/admin/overview").status_code == 200
     assert admin_client.get("/api/v1/admin/operations").status_code == 200
+
+
+def test_gmp_observations_are_admin_only_and_append_only(temp_config):
+    member_client, _ = client_with_member(temp_config)
+    DashboardSnapshotService(temp_config).publish(date.today(), ipos={"issues": [{"id": "acme"}]})
+    payload = {"source_name": "investorgain", "gmp_value": 10, "source_url": "https://www.investorgain.com/acme", "observed_at": datetime.now(timezone.utc).isoformat()}
+    assert member_client.post("/api/v1/admin/ipos/acme/gmp-observations", json=payload).status_code == 403
+
+    repository = WorkspaceRepository(temp_config)
+    repository.create_invite("admin@example.com", role="admin")
+    repository.user_for_email("admin@example.com")
+    admin_client = TestClient(create_app(temp_config, workspace_auth=FakeAdminAuth()))
+    response = admin_client.post("/api/v1/admin/ipos/acme/gmp-observations", json=payload)
+
+    assert response.status_code == 201
+    assert response.json()["observation"]["reviewer_user_id"] == 1

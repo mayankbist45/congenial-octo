@@ -17,16 +17,29 @@ class DashboardSnapshotService:
     def __init__(self, config: Optional[Config] = None):
         self._config = config or get_config()
 
-    def publish(self, snapshot_date: Optional[date] = None) -> Dict[str, Any]:
+    def publish(self, snapshot_date: Optional[date] = None, ipos: Optional[Dict[str, Any]] = None, refresh_ipos: bool = False) -> Dict[str, Any]:
         day = (snapshot_date or date.today()).isoformat()
         existing = self.for_date(day)
         if existing is not None:
-            if "personas" in existing:
+            if refresh_ipos and ipos is not None:
+                refreshed = dict(existing)
+                refreshed["ipos"] = ipos
+                conn = connect(self._config)
+                try:
+                    conn.execute(
+                        "UPDATE dashboard_snapshots SET payload = ? WHERE snapshot_date = ?",
+                        (json.dumps(refreshed), day),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                return refreshed
+            if "personas" in existing and (ipos is None or "ipos" in existing):
                 return existing
             # A pre-persona snapshot is a legacy read model, not a different
             # market observation. Upgrade its shape once while preserving its
             # original publication timestamp and date.
-            upgraded = self._build_payload(day, as_of=existing["as_of"])
+            upgraded = self._build_payload(day, as_of=existing["as_of"], ipos=ipos)
             conn = connect(self._config)
             try:
                 conn.execute(
@@ -38,7 +51,7 @@ class DashboardSnapshotService:
                 conn.close()
             return upgraded
 
-        payload = self._build_payload(day)
+        payload = self._build_payload(day, ipos=ipos)
         conn = connect(self._config)
         try:
             conn.execute(
@@ -50,7 +63,7 @@ class DashboardSnapshotService:
             conn.close()
         return payload
 
-    def _build_payload(self, day: str, as_of: Optional[str] = None) -> Dict[str, Any]:
+    def _build_payload(self, day: str, as_of: Optional[str] = None, ipos: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         dashboard = DashboardService(self._config)
         overview = dashboard.overview()
         personas = self._persona_payloads(dashboard)
@@ -71,6 +84,7 @@ class DashboardSnapshotService:
             # The original fields above intentionally remain for compatibility.
             # New workspace readers consume these immutable per-persona records.
             "personas": personas,
+            "ipos": ipos or {"issues": [], "warnings": [], "data_status": "unavailable"},
             "disclaimer": DISCLAIMER,
         }
 
