@@ -20,9 +20,6 @@ class AlpacaConnector(BrokerConnector):
     def label(self) -> str:
         return "Alpaca Markets"
 
-    def has_credentials(self, config: Config) -> bool:
-        return config.secrets.has_alpaca_credentials
-
     def build_broker(
         self,
         config: Config,
@@ -49,11 +46,3 @@ class AlpacaConnector(BrokerConnector):
         mode = "paper" if secrets.alpaca_paper else "live"
         logger.info("Using Alpaca broker (%s)", mode)
         return AlpacaClient(config)
-
-    def build_market_data_broker(
-        self,
-        config: Config,
-        *,
-        force_simulated: bool = False,
-    ) -> BrokerClient:
-        return self.build_broker(config, force_simulated=force_simulated)

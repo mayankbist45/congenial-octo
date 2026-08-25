@@ -23,10 +23,6 @@ class BrokerConnector(ABC):
         """Human-readable name for logs."""
 
     @abstractmethod
-    def has_credentials(self, config: Config) -> bool:
-        """Whether this connector can authenticate."""
-
-    @abstractmethod
     def build_broker(
         self,
         config: Config,

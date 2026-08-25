@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.broker.factory import build_market_data_broker
+from src.connectors.registry import build_market_data_broker
 from src.config import get_persona_config
 from src.logging_setup import bind_log_context, make_run_label, setup_logging
 from src.universe import load_universe

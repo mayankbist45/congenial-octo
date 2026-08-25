@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.broker.base import BrokerClient, BrokerError
-from src.broker.factory import build_broker
+from src.connectors.registry import build_broker
 from src.config import Config, get_config
 from src.decision.engine import DecisionEngine, is_deep_review_day
 from src.execution.executor import ExecutionSummary, OrderExecutor

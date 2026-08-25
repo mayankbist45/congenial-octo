@@ -55,9 +55,6 @@ class AngelOneConnector(BrokerConnector):
     def label(self) -> str:
         return "Angel One SmartAPI"
 
-    def has_credentials(self, config: Config) -> bool:
-        return config.secrets.has_broker_credentials
-
     def build_broker(
         self,
         config: Config,

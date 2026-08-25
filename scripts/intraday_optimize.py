@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.broker.factory import build_market_data_broker
+from src.connectors.registry import build_market_data_broker
 from src.config import Config, get_persona_config
 from src.intraday.agent import IntradayAgent
 from src.intraday.data import IntradayDataService

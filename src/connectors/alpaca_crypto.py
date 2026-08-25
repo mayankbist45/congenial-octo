@@ -19,9 +19,6 @@ class AlpacaCryptoConnector(BrokerConnector):
     def label(self) -> str:
         return "Alpaca Crypto"
 
-    def has_credentials(self, config: Config) -> bool:
-        return config.secrets.has_alpaca_credentials
-
     def build_broker(
         self,
         config: Config,
@@ -41,4 +38,3 @@ class AlpacaCryptoConnector(BrokerConnector):
         mode = "paper" if config.secrets.alpaca_paper else "live"
         logger.info("Using Alpaca crypto broker (%s)", mode)
         return AlpacaCryptoClient(config)
-

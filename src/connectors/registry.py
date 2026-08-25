@@ -14,11 +14,8 @@ from src.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
-_REGISTRY: Dict[str, BrokerConnector] = {
-    AngelOneConnector().provider_id: AngelOneConnector(),
-    AlpacaConnector().provider_id: AlpacaConnector(),
-    AlpacaCryptoConnector().provider_id: AlpacaCryptoConnector(),
-}
+_CONNECTORS = (AngelOneConnector(), AlpacaConnector(), AlpacaCryptoConnector())
+_REGISTRY: Dict[str, BrokerConnector] = {connector.provider_id: connector for connector in _CONNECTORS}
 
 DEFAULT_PROVIDER = "angelone"
 

@@ -69,7 +69,7 @@ class IntradayBrokerExecutor:
 
     def _ensure_broker(self) -> BrokerClient:
         if self._broker is None:
-            from src.broker.factory import build_broker
+            from src.connectors.registry import build_broker
 
             self._broker = build_broker(self._config)
         if not self._connected:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.broker.factory import build_broker
+from src.connectors.registry import build_broker
 from src.config import get_persona_config
 from src.intraday.data import IntradayDataService
 from src.intraday.watch import IntradayWatchEngine
