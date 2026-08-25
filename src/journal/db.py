@@ -374,7 +374,18 @@ CREATE TABLE IF NOT EXISTS workspace_users (
     display_name TEXT,
     avatar_url TEXT,
     created_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL
+    last_seen_at TEXT NOT NULL,
+    billing_trial_started_at TEXT,
+    billing_subscription_id TEXT,
+    billing_subscription_status TEXT,
+    billing_paid_through_at TEXT,
+    billing_checkout_url TEXT
+);
+
+CREATE TABLE IF NOT EXISTS workspace_billing_events (
+    id TEXT PRIMARY KEY,
+    subscription_id TEXT,
+    received_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS workspace_profiles (
@@ -496,6 +507,7 @@ TABLES = (
     "meta_decisions",
     "workspace_invites",
     "workspace_users",
+    "workspace_billing_events",
     "workspace_profiles",
     "workspace_jobs",
     "workspace_portfolios",
@@ -673,6 +685,7 @@ def _apply_schema(conn: Connection) -> None:
     _migrate_quarterly_analysis_sector_model(conn)
     _migrate_runs_observability(conn)
     _migrate_workspace_user_identity(conn)
+    _migrate_workspace_billing(conn)
 
     statements = [s.strip() for s in schema_for(conn.dialect).split(";") if s.strip()]
     for statement in statements:
@@ -836,6 +849,20 @@ def _migrate_workspace_user_identity(conn: Connection) -> None:
         if _has_column(conn, "workspace_users", name):
             continue
         conn.execute(f"ALTER TABLE workspace_users ADD COLUMN {name} TEXT")
+    conn.commit()
+
+
+def _migrate_workspace_billing(conn: Connection) -> None:
+    """Add opt-in billing state without disrupting existing workspace users."""
+    for name in (
+        "billing_trial_started_at",
+        "billing_subscription_id",
+        "billing_subscription_status",
+        "billing_paid_through_at",
+        "billing_checkout_url",
+    ):
+        if not _has_column(conn, "workspace_users", name):
+            conn.execute(f"ALTER TABLE workspace_users ADD COLUMN {name} TEXT")
     conn.commit()
 
 

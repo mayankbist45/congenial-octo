@@ -85,6 +85,12 @@ class SchedulerControlRequest(BaseModel):
     enabled: bool
 
 
+class RazorpaySubscriptionPaymentRequest(BaseModel):
+    razorpay_payment_id: str
+    razorpay_subscription_id: str
+    razorpay_signature: str
+
+
 def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = None) -> FastAPI:
     config = config or get_config()
     default_service = DashboardService(config)
@@ -877,6 +883,12 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             raise HTTPException(status_code=403, detail="Administrator access is required.")
         return identity
 
+    from src.workspace.billing import WorkspaceBilling
+    billing = WorkspaceBilling(config)
+
+    def _workspace_identity(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> Dict[str, Any]:
+        return billing.require_access(identity)
+
     @app.get("/api/v1/workspace/me")
     def workspace_me(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
         return JSONResponse({
@@ -888,26 +900,27 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
                 "avatar_url": identity.get("avatar_url"),
                 "created_at": identity.get("created_at"),
                 "last_seen_at": identity.get("last_seen_at"),
+                "entitlement": billing.entitlement(identity),
             },
             "disclaimer": "Research workspace. Not investment advice. No live order execution.",
         })
 
     @app.get("/api/v1/workspace/profile")
-    def workspace_profile(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_profile(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         service = _workspace_service()
         return JSONResponse({"profile": service.repo.profile(int(identity["id"])), "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     @app.get("/api/v1/workspace/dashboard")
-    def workspace_dashboard(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_dashboard(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         return JSONResponse(_workspace_snapshot())
 
     @app.get("/api/v1/workspace/ipos")
-    def workspace_ipos(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_ipos(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot = _workspace_snapshot()
         return _workspace_response(snapshot, ipos=snapshot.get("ipos", {"issues": [], "warnings": [], "data_status": "unavailable"}))
 
     @app.get("/api/v1/workspace/ipos/{ipo_id}")
-    def workspace_ipo(ipo_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_ipo(ipo_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot = _workspace_snapshot()
         issue = next((item for item in snapshot.get("ipos", {}).get("issues", []) if item.get("id") == ipo_id), None)
         if issue is None:
@@ -930,8 +943,25 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         )
         return JSONResponse({"observation": observation}, status_code=201)
 
+    @app.post("/api/v1/workspace/billing/checkout")
+    def workspace_billing_checkout(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        return JSONResponse(billing.checkout(identity))
+
+    @app.post("/api/v1/workspace/billing/verify-payment")
+    def workspace_billing_verify_payment(payload: RazorpaySubscriptionPaymentRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        return JSONResponse(billing.verify_payment(identity, payload.razorpay_payment_id, payload.razorpay_subscription_id, payload.razorpay_signature))
+
+    @app.post("/api/v1/workspace/billing/cancel")
+    def workspace_billing_cancel(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        return JSONResponse(billing.cancel(identity))
+
+    @app.post("/api/v1/workspace/billing/webhook")
+    async def workspace_billing_webhook(request: Request) -> JSONResponse:
+        billing.handle_webhook(await request.body(), request.headers.get("X-Razorpay-Signature", ""))
+        return JSONResponse({"status": "ok"})
+
     @app.get("/api/v1/workspace/personas")
-    def workspace_personas(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_personas(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot = _workspace_snapshot()
         summaries = []
         for persona in snapshot.get("personas", []):
@@ -945,7 +975,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return _workspace_response(snapshot, personas=summaries)
 
     @app.get("/api/v1/workspace/personas/{persona_id}")
-    def workspace_persona(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_persona(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
         # Holdings and portfolio context stay frozen at the EOD publication
         # boundary, while journalled run history is safe to expose immediately.
@@ -954,27 +984,27 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return _workspace_response(snapshot, persona=view)
 
     @app.get("/api/v1/workspace/personas/{persona_id}/holdings")
-    def workspace_persona_holdings(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_persona_holdings(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
         return _workspace_response(snapshot, persona_id=persona_id, holdings=persona.get("holdings", []), sector_weights=persona.get("sector_weights", []), warnings=persona.get("warnings", []), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/performance")
-    def workspace_persona_performance(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_persona_performance(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
         return _workspace_response(snapshot, persona_id=persona_id, performance=persona.get("performance", {}), series=persona.get("performance_series", {}), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/risk")
-    def workspace_persona_risk(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_persona_risk(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
         return _workspace_response(snapshot, persona_id=persona_id, risk=persona.get("risk", {}), warnings=persona.get("warnings", []), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/news")
-    def workspace_persona_news(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_persona_news(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
         return _workspace_response(snapshot, persona_id=persona_id, news=persona.get("news", {"has_data": False}), intraday=persona.get("intraday"), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/runs")
-    def workspace_persona_runs(persona_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_persona_runs(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
         return _workspace_response(snapshot, persona_id=persona_id, runs=_get_service(persona_id).runs(), source_freshness=persona.get("source_freshness", {}))
 
@@ -982,7 +1012,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     def workspace_persona_run_detail(
         persona_id: str,
         run_id: int,
-        identity: Dict[str, Any] = Depends(workspace_auth.identity),
+        identity: Dict[str, Any] = Depends(_workspace_identity),
     ) -> JSONResponse:
         """Return one auditable run, scoped to the persona in the URL."""
         snapshot, persona = _workspace_persona(persona_id)
@@ -1003,7 +1033,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         )
 
     @app.get("/api/v1/workspace/news")
-    def workspace_news(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_news(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot = _workspace_snapshot()
         entries = []
         for persona in snapshot.get("personas", []):
@@ -1034,7 +1064,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         })
 
     @app.get("/api/v1/workspace/dashboard/stocks/{symbol}")
-    def workspace_dashboard_stock(symbol: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_dashboard_stock(symbol: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot = _workspace_snapshot()
         holding = next((item for item in (snapshot or {}).get("holdings", []) if item.get("symbol") == symbol.upper()), None)
         if holding is None:
@@ -1048,7 +1078,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         })
 
     @app.get("/api/v1/workspace/personas/{persona_id}/stocks/{symbol}")
-    def workspace_persona_stock(persona_id: str, symbol: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_persona_stock(persona_id: str, symbol: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         snapshot, persona = _workspace_persona(persona_id)
         holding = next((item for item in persona.get("holdings", []) if item.get("symbol") == symbol.upper()), None)
         if holding is None:
@@ -1073,7 +1103,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return JSONResponse({"job": job, "disclaimer": "Research workspace. Not investment advice. No live order execution."}, status_code=202)
 
     @app.get("/api/v1/workspace/jobs/{job_id}")
-    def workspace_job(job_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_job(job_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         try:
             job = _workspace_service().repo.job(job_id, int(identity["id"]))
         except KeyError as exc:
@@ -1081,14 +1111,14 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return JSONResponse({"job": job, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     @app.get("/api/v1/workspace/portfolios/latest")
-    def latest_workspace_portfolio(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def latest_workspace_portfolio(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         portfolio = _workspace_service().repo.latest_portfolio(int(identity["id"]))
         if portfolio is None:
             raise HTTPException(status_code=404, detail="No model portfolio has been generated yet.")
         return JSONResponse(portfolio)
 
     @app.get("/api/v1/workspace/portfolios/{portfolio_id}")
-    def workspace_portfolio(portfolio_id: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_portfolio(portfolio_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         try:
             portfolio = _workspace_service().repo.portfolio(portfolio_id, int(identity["id"]))
         except KeyError as exc:
@@ -1096,7 +1126,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return JSONResponse(portfolio)
 
     @app.get("/api/v1/workspace/stocks/{symbol}")
-    def workspace_stock(symbol: str, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_stock(symbol: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         portfolio = _workspace_service().repo.latest_portfolio(int(identity["id"]))
         holding = next((item for item in (portfolio or {}).get("holdings", []) if item["symbol"] == symbol.upper()), None)
         if holding is None:
@@ -1104,7 +1134,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return JSONResponse({"stock": holding, "as_of": portfolio["as_of"], "data_status": "delayed_eod", "evidence": [{"type": "model", "label": "Research screen", "summary": holding["reason"]}], "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     @app.get("/api/v1/workspace/inbox")
-    def workspace_inbox(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+    def workspace_inbox(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         return JSONResponse({"events": _workspace_service().repo.inbox(int(identity["id"])), "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     @app.post("/api/v1/workspace/events/{event_id}/acknowledge")

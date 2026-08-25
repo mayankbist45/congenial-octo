@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 from datetime import datetime, timezone
+import hashlib
+import hmac
+import json
 
 from fastapi.testclient import TestClient
 
@@ -21,6 +24,15 @@ class FakeWorkspaceAuth:
 class FakeAdminAuth:
     def identity(self):
         return {"id": 1, "email": "admin@example.com", "role": "admin"}
+
+
+class RepositoryAuth:
+    def __init__(self, repository, email: str):
+        self.repository = repository
+        self.email = email
+
+    def identity(self):
+        return self.repository.user_for_email(self.email)
 
 
 def client_with_member(temp_config):
@@ -99,6 +111,76 @@ def test_workspace_me_returns_account_essentials(temp_config):
     assert response.status_code == 200
     assert response.json()["user"]["email"] == "member@example.com"
     assert response.json()["user"]["role"] == "member"
+
+
+def test_expired_members_are_redirected_to_subscription_at_the_api_boundary(temp_config, monkeypatch):
+    monkeypatch.setenv("WORKSPACE_BILLING_ENABLED", "true")
+    monkeypatch.setenv("WORKSPACE_BILLING_LAUNCH_AT", "2026-01-01T00:00:00+00:00")
+    monkeypatch.setenv("WORKSPACE_TRIAL_DAYS", "1")
+    monkeypatch.setenv("RAZORPAY_PLAN_ID", "plan_test")
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "key_test")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "secret_test")
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "webhook_test")
+    repository = WorkspaceRepository(temp_config)
+    user = repository.user_for_email("expired@example.com")
+    conn = connect(temp_config)
+    try:
+        conn.execute("UPDATE workspace_users SET created_at = ? WHERE id = ?", ("2025-01-01T00:00:00+00:00", user["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+    client = TestClient(create_app(temp_config, workspace_auth=RepositoryAuth(repository, "expired@example.com")))
+
+    me = client.get("/api/v1/workspace/me")
+    assert me.status_code == 200
+    assert me.json()["user"]["entitlement"]["state"] == "expired"
+    assert client.get("/api/v1/workspace/dashboard").status_code == 403
+
+
+def test_razorpay_webhook_is_verified_and_idempotent(temp_config, monkeypatch):
+    monkeypatch.setenv("WORKSPACE_BILLING_ENABLED", "true")
+    monkeypatch.setenv("WORKSPACE_BILLING_LAUNCH_AT", "2026-01-01T00:00:00+00:00")
+    monkeypatch.setenv("RAZORPAY_PLAN_ID", "plan_test")
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "key_test")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "secret_test")
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "webhook_test")
+    repository = WorkspaceRepository(temp_config)
+    user = repository.user_for_email("paid@example.com")
+    conn = connect(temp_config)
+    try:
+        conn.execute("UPDATE workspace_users SET billing_subscription_id = ? WHERE id = ?", ("sub_test", user["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+    payload = {"payload": {"subscription": {"entity": {"id": "sub_test", "status": "active", "current_end": 1900000000}}}}
+    body = json.dumps(payload).encode()
+    signature = hmac.new(b"webhook_test", body, hashlib.sha256).hexdigest()
+    client = TestClient(create_app(temp_config, workspace_auth=RepositoryAuth(repository, "paid@example.com")))
+
+    assert client.post("/api/v1/workspace/billing/webhook", content=body, headers={"X-Razorpay-Signature": signature}).status_code == 200
+    assert client.post("/api/v1/workspace/billing/webhook", content=body, headers={"X-Razorpay-Signature": signature}).status_code == 200
+    assert client.get("/api/v1/workspace/me").json()["user"]["entitlement"]["state"] == "active"
+
+
+def test_razorpay_subscription_checkout_verifies_the_payment_signature(temp_config, monkeypatch):
+    monkeypatch.setenv("WORKSPACE_BILLING_ENABLED", "true")
+    monkeypatch.setenv("WORKSPACE_BILLING_LAUNCH_AT", "2026-01-01T00:00:00+00:00")
+    monkeypatch.setenv("RAZORPAY_PLAN_ID", "plan_test")
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "key_test")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "secret_test")
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "webhook_test")
+    monkeypatch.setattr("src.workspace.billing.WorkspaceBilling._razorpay", lambda *_: {"id": "sub_test", "status": "created"})
+    repository = WorkspaceRepository(temp_config)
+    repository.user_for_email("checkout@example.com")
+    client = TestClient(create_app(temp_config, workspace_auth=RepositoryAuth(repository, "checkout@example.com")))
+
+    checkout = client.post("/api/v1/workspace/billing/checkout")
+    assert checkout.status_code == 200
+    assert checkout.json()["subscription_id"] == "sub_test"
+    payment_id = "pay_test"
+    signature = hmac.new(b"secret_test", b"pay_test|sub_test", hashlib.sha256).hexdigest()
+    assert client.post("/api/v1/workspace/billing/verify-payment", json={"razorpay_payment_id": payment_id, "razorpay_subscription_id": "sub_test", "razorpay_signature": signature}).json() == {"verified": True}
+    assert client.post("/api/v1/workspace/billing/verify-payment", json={"razorpay_payment_id": payment_id, "razorpay_subscription_id": "sub_test", "razorpay_signature": "wrong"}).status_code == 400
 
 
 def test_workspace_dashboard_returns_the_published_eod_snapshot(temp_config):
