@@ -25,6 +25,7 @@ prices rather than the pre-market marks:
 
 from __future__ import annotations
 
+import os
 import argparse
 import sys
 from datetime import date
@@ -249,6 +250,14 @@ def _scheduled_long_personas(args, base_config) -> tuple[List[str], List[str]]:
             problems.append(f"{persona_id}: DRY_RUN must be true for unattended execution")
             continue
         eligible.append(persona_id)
+    if os.environ.get("FUND_SCHEDULED_RUN") == "1":
+        from src.scheduler_controls import SchedulerControls
+
+        controls = SchedulerControls(base_config)
+        eligible = [
+            persona_id for persona_id in eligible
+            if controls.enabled(f"{'india' if get_persona_config(persona_id, base=base_config).market_id == 'india_equity' else 'us'}_long_cycle")
+        ]
     return eligible, problems
 
 
@@ -594,6 +603,13 @@ def main(argv: Optional[list] = None) -> int:
                 print(f"Scheduled long cycle refused: {problem}", file=sys.stderr)
             return 1
         if not personas:
+            if os.environ.get("FUND_SCHEDULED_RUN") == "1":
+                from src.scheduler_controls import SchedulerControls
+
+                controls = SchedulerControls(config)
+                if not controls.enabled("india_long_cycle") and not controls.enabled("us_long_cycle"):
+                    print("Scheduled long cycle skipped: all market controls are disabled.")
+                    return 0
             print("Scheduled long cycle found no eligible long-horizon paper personas.", file=sys.stderr)
             return 1
 

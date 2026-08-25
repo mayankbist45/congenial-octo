@@ -1136,8 +1136,27 @@ class DashboardService:
             cards.append(self._intraday_market_card(market_id, now, events))
         cards.append(self._dashboard_service_card(now, events))
 
+        controls = self._repo.all()
+        enabled = {control["key"]: control["enabled"] for control in controls}
+        for card in cards:
+            key = {
+                "close": "close",
+                "backup": "backup",
+                "intraday-india_equity": "india_intraday",
+                "intraday-us_equity": "us_intraday",
+                "whatsapp_digest": "close",
+            }.get(card.get("key"))
+            if key and not enabled.get(key, True):
+                card["current_state"] = "disabled"
+                card["latest_note"] = "Disabled by an Operations administrator."
+        if not enabled.get("india_long_cycle", True) and not enabled.get("us_long_cycle", True):
+            for card in cards:
+                if card.get("key") == "long_cycle":
+                    card["current_state"] = "disabled"
+                    card["latest_note"] = "Disabled by an Operations administrator."
         return {
             "cards": cards,
+            "controls": controls,
             "incidents": self._operations_incidents(events, runs),
             "freshness": self._freshness_summary(cards),
             "generated_at": now.isoformat(timespec="seconds"),

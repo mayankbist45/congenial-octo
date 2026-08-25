@@ -437,6 +437,13 @@ CREATE TABLE IF NOT EXISTS ipo_gmp_observations (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scheduler_controls (
+    control_key TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -495,6 +502,7 @@ TABLES = (
     "workspace_events",
     "dashboard_snapshots",
     "ipo_gmp_observations",
+    "scheduler_controls",
 )
 
 # Tables whose primary key is a generated integer, so a migration that carries

@@ -56,6 +56,13 @@ if [ ! -x "$PYTHON" ] || [ ! -x "$WATCH" ]; then
     exit 1
 fi
 
+CONTROL="${MARKET%%_*}_intraday"
+if [ "$("$PYTHON" -m src.scheduler_controls enabled "$CONTROL")" != "1" ]; then
+    echo "Intraday watch skipped: $CONTROL is disabled in Operations" >>"$LOG"
+    emit_event "skipped" --field "control=$CONTROL" --field "state=disabled"
+    exit 0
+fi
+
 mapfile -t PERSONAS < <(
     "$PYTHON" -c "
 import sys

@@ -24,6 +24,7 @@ from run_daily import (
 )
 from src.config import get_config
 from src.orchestrator import AutoApprovalRefused
+from src.scheduler_controls import SchedulerControls
 
 
 class StubManager:
@@ -120,6 +121,18 @@ def test_scheduled_long_cycle_selects_all_paper_long_horizon_personas() -> None:
         "steady_compounder_us",
         "momentum_rider_us",
     ]
+
+
+def test_scheduled_long_cycle_filters_disabled_market_but_manual_does_not(temp_config, monkeypatch) -> None:
+    SchedulerControls(temp_config).set("us_long_cycle", False, "admin@example.com")
+    args = build_parser().parse_args(["long_cycle"])
+
+    manual, _ = _scheduled_long_personas(args, temp_config)
+    monkeypatch.setenv("FUND_SCHEDULED_RUN", "1")
+    scheduled, _ = _scheduled_long_personas(args, temp_config)
+
+    assert "balanced_us" in manual
+    assert all(not persona.endswith("_us") for persona in scheduled)
 
 
 def test_long_cycle_refuses_ineligible_personas_without_running(monkeypatch, capsys) -> None:

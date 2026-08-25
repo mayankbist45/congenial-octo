@@ -81,6 +81,10 @@ class GmpObservationRequest(BaseModel):
     observed_at: datetime
 
 
+class SchedulerControlRequest(BaseModel):
+    enabled: bool
+
+
 def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = None) -> FastAPI:
     config = config or get_config()
     default_service = DashboardService(config)
@@ -1160,6 +1164,19 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     @app.get("/api/v1/admin/operations")
     def admin_operations(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:
         return JSONResponse(default_service.operations_overview())
+
+    @app.put("/api/v1/admin/operations/schedule-controls/{control_key}")
+    def update_scheduler_control(
+        control_key: str,
+        payload: SchedulerControlRequest,
+        identity: Dict[str, Any] = Depends(_admin_identity),
+    ) -> JSONResponse:
+        try:
+            control = default_service._repo.set(control_key, payload.enabled, str(identity["email"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        log_structured_event(logger, "scheduler_control", "success", control=control_key, enabled=payload.enabled)
+        return JSONResponse(control)
 
     @app.get("/api/v1/admin/audit-events")
     def admin_audit_events(_: Dict[str, Any] = Depends(_admin_identity)) -> JSONResponse:

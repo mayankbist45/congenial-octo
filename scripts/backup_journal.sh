@@ -24,6 +24,7 @@ KEEP_DAYS="${FUND_BACKUP_KEEP_DAYS:-14}"
 export PATH="/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 LOG_PATH="${FUND_BACKUP_LOG_PATH:-$PROJECT_DIR/data/backup.log}"
+PYTHON="$PROJECT_DIR/.venv/bin/python"
 
 emit_event() {
     local status="$1"
@@ -46,6 +47,12 @@ emit_upload_event() {
         --field "source=backup_journal.sh" \
         "$@"
 }
+
+if [ -x "$PYTHON" ] && [ "$("$PYTHON" -m src.scheduler_controls enabled backup)" != "1" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S %Z')  backup skipped: disabled in Operations"
+    emit_event "skipped" --field "control=backup" --field "state=disabled"
+    exit 0
+fi
 
 # Read the DSN the same way the application does: environment first, then .env.
 # Nothing is sourced, because .env is data, not shell.

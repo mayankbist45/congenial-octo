@@ -23,13 +23,21 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bi
 emit_event() {
     local status="$1"
     shift || true
+    local fields=()
+    for field in "$@"; do fields+=(--field "$field"); done
     python3 -m src.operations emit \
         --log "$LOG" \
         --event "scheduled_run" \
         --status "$status" \
-        --field "job=$COMMAND" \
-        --field "args=$*" \
+        --field "job=$COMMAND" "${fields[@]}" \
         --field "source=run_scheduled.sh"
+}
+
+control_for_command() {
+    case "$1" in
+        weekly_research|close) echo "$1" ;;
+        *) echo "" ;;
+    esac
 }
 
 run_persona_report() {
@@ -57,8 +65,25 @@ if [ ! -x "$PYTHON" ]; then
     exit 1
 fi
 
+CONTROL="$(control_for_command "$COMMAND")"
+if [ -n "$CONTROL" ] && [ "$("$PYTHON" -m src.scheduler_controls enabled "$CONTROL")" != "1" ]; then
+    echo "--- skipped: $CONTROL is disabled in Operations ---" >>"$LOG"
+    emit_event "skipped" "control=$CONTROL" "state=disabled"
+    exit 0
+fi
+if [ "$COMMAND" = "long_cycle" ]; then
+    INDIA_ENABLED="$("$PYTHON" -m src.scheduler_controls enabled india_long_cycle)"
+    US_ENABLED="$("$PYTHON" -m src.scheduler_controls enabled us_long_cycle)"
+    [ "$INDIA_ENABLED" = "1" ] || emit_event "skipped" "control=india_long_cycle" "state=disabled"
+    [ "$US_ENABLED" = "1" ] || emit_event "skipped" "control=us_long_cycle" "state=disabled"
+    if [ "$INDIA_ENABLED" != "1" ] && [ "$US_ENABLED" != "1" ]; then
+        echo "--- skipped: all long-cycle markets are disabled in Operations ---" >>"$LOG"
+        exit 0
+    fi
+fi
+
 emit_event "start"
-"$PYTHON" run_daily.py "$COMMAND" "$@" >>"$LOG" 2>&1
+FUND_SCHEDULED_RUN=1 "$PYTHON" run_daily.py "$COMMAND" "$@" >>"$LOG" 2>&1
 STATUS=$?
 
 if [ $STATUS -eq 0 ]; then

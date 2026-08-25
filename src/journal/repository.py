@@ -10,6 +10,7 @@ from src.journal.learning_repository import LearningRepository
 from src.journal.nav_repository import NavRepository
 from src.journal.proposal_repository import ProposalRepository
 from src.journal.run_repository import RunRepository
+from src.scheduler_controls import SchedulerControls
 from src.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -26,12 +27,14 @@ class JournalRepository:
         self._nav = NavRepository(self._config)
         self._learning = LearningRepository(self._config)
         self._intraday = IntradayRepository(self._config)
+        self._scheduler_controls = SchedulerControls(self._config)
         self._delegates = (
             self._runs,
             self._proposals,
             self._nav,
             self._learning,
             self._intraday,
+            self._scheduler_controls,
         )
 
     def __getattr__(self, name: str) -> Any:
