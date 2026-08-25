@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
-from src.llm import LLMClient
+import pytest
+
+from src.llm import LLMClient, LLMUnavailable
 
 
 class FakeConfig:
@@ -26,15 +28,20 @@ class FakeConfig:
 
 
 class FakeCompletions:
-    def __init__(self):
+    def __init__(self, *responses):
         self.request = None
+        self.requests = []
+        self.responses = list(responses) or [
+            SimpleNamespace(message=SimpleNamespace(content='{"status": "ok"}'), finish_reason="stop")
+        ]
 
     def create(self, **request):
         self.request = request
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content='{"status": "ok"}'))],
-            usage=None,
-        )
+        self.requests.append(request)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return SimpleNamespace(choices=[response], usage=None)
 
 
 def test_gpt_oss_json_request_avoids_native_json_mode_and_bounds_prompt():
@@ -69,3 +76,93 @@ def test_named_provider_profile_selects_its_model_and_endpoint():
     assert client._base_url() == "https://api.deepseek.com"
     assert client._request_overrides() == {"thinking": {"type": "disabled"}}
     assert client.available
+
+
+def test_deepseek_json_failure_retries_once_with_groq(monkeypatch):
+    config = FakeConfig()
+    config.secrets = SimpleNamespace(
+        openai_api_key="groq-key",
+        openai_base_url=None,
+        llm_provider="deepseek",
+        llm_api_key=lambda provider: f"{provider}-key",
+    )
+    config.values["llm.fallback_provider"] = "groq"
+    config.values["llm.providers"] = {
+        "deepseek": {"model": "deepseek-v4-flash", "digest_model": "deepseek-v4-flash"},
+        "groq": {"model": "openai/gpt-oss-120b", "digest_model": "openai/gpt-oss-20b"},
+    }
+    primary = FakeCompletions(
+        SimpleNamespace(message=SimpleNamespace(content='{"status":'), finish_reason="length")
+    )
+    fallback = FakeCompletions(
+        SimpleNamespace(message=SimpleNamespace(content='{"status": "ok"}'), finish_reason="stop")
+    )
+    clients = {
+        "deepseek": SimpleNamespace(chat=SimpleNamespace(completions=primary)),
+        "groq": SimpleNamespace(chat=SimpleNamespace(completions=fallback)),
+    }
+    monkeypatch.setattr(LLMClient, "_ensure_client", lambda self: clients[self.provider])
+
+    result = LLMClient(config).complete_json("system", "user", model="deepseek-v4-flash")
+
+    assert result == {"status": "ok"}
+    assert len(primary.requests) == len(fallback.requests) == 1
+    assert fallback.request["model"] == "openai/gpt-oss-20b"
+    assert fallback.request["messages"] == primary.request["messages"]
+
+
+@pytest.mark.parametrize("content", ["not json", "[]", "", '{"status":'])
+def test_invalid_deepseek_json_retries_once_with_groq(monkeypatch, content):
+    config = FakeConfig()
+    config.secrets = SimpleNamespace(
+        openai_api_key="groq-key",
+        openai_base_url=None,
+        llm_provider="deepseek",
+        llm_api_key=lambda provider: f"{provider}-key",
+    )
+    config.values["llm.fallback_provider"] = "groq"
+    config.values["llm.providers"] = {
+        "deepseek": {"model": "deepseek-v4-flash", "digest_model": "deepseek-v4-flash"},
+        "groq": {"model": "openai/gpt-oss-120b", "digest_model": "openai/gpt-oss-20b"},
+    }
+    primary = FakeCompletions(
+        SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")
+    )
+    fallback = FakeCompletions(
+        SimpleNamespace(message=SimpleNamespace(content='{"status": "ok"}'), finish_reason="stop")
+    )
+    clients = {
+        "deepseek": SimpleNamespace(chat=SimpleNamespace(completions=primary)),
+        "groq": SimpleNamespace(chat=SimpleNamespace(completions=fallback)),
+    }
+    monkeypatch.setattr(LLMClient, "_ensure_client", lambda self: clients[self.provider])
+
+    assert LLMClient(config).complete_json("system", "user") == {"status": "ok"}
+    assert len(primary.requests) == len(fallback.requests) == 1
+
+
+def test_groq_failure_after_deepseek_failure_does_not_retry_again(monkeypatch):
+    config = FakeConfig()
+    config.secrets = SimpleNamespace(
+        openai_api_key="groq-key",
+        openai_base_url=None,
+        llm_provider="deepseek",
+        llm_api_key=lambda provider: f"{provider}-key",
+    )
+    config.values["llm.fallback_provider"] = "groq"
+    config.values["llm.providers"] = {
+        "deepseek": {"model": "deepseek-v4-flash"},
+        "groq": {"model": "openai/gpt-oss-120b"},
+    }
+    primary = FakeCompletions(RuntimeError("DeepSeek unavailable"))
+    fallback = FakeCompletions(RuntimeError("Groq unavailable"))
+    clients = {
+        "deepseek": SimpleNamespace(chat=SimpleNamespace(completions=primary)),
+        "groq": SimpleNamespace(chat=SimpleNamespace(completions=fallback)),
+    }
+    monkeypatch.setattr(LLMClient, "_ensure_client", lambda self: clients[self.provider])
+
+    with pytest.raises(LLMUnavailable, match="fallback groq failed"):
+        LLMClient(config).complete_json("system", "user")
+
+    assert len(primary.requests) == len(fallback.requests) == 1

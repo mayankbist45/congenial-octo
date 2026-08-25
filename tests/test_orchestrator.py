@@ -181,6 +181,9 @@ def test_a_gapped_stock_is_not_traded(temp_config, repo) -> None:
 
     assert broker.orders == []
     assert not summary.placed
+    assert not summary.failed
+    assert summary.skipped
+    assert summary.describe() == "0 order(s) placed, 1 skipped"
     [outcome] = summary.outcomes
     assert "price moved" in outcome.error
     assert repo.get_proposal(proposal["id"])["status"] == "abandoned"
@@ -244,6 +247,8 @@ def test_a_broker_exception_does_not_stop_the_batch(temp_config, repo) -> None:
     summary = OrderExecutor(broker, temp_config, repo).execute([proposal])
 
     assert not summary.placed
+    assert summary.failed
+    assert not summary.skipped
     assert "session expired" in summary.outcomes[0].error
 
 
@@ -445,6 +450,7 @@ def test_daily_monitor_records_candidate_pack_audit_stages(manager, repo, monkey
 
 
 def test_a_run_with_no_llm_still_produces_a_memo(manager) -> None:
+    manager._decision._llm = type("OfflineLLM", (), {"available": False})()
     result = manager.analyse()
 
     assert not result.decision.llm_used

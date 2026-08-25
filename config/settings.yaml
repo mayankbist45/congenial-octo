@@ -217,6 +217,7 @@ observability:
 llm:
   # Switch provider with LLM_PROVIDER in .env, or change this default.
   provider: "deepseek"
+  fallback_provider: "groq"
   providers:
     deepseek:
       base_url: "https://api.deepseek.com"
@@ -225,16 +226,16 @@ llm:
       request_overrides:
         thinking:
           type: "disabled"
-      max_input_tokens: 8000
-      max_output_tokens: 1000
+      max_input_tokens: 616000
+      max_output_tokens: 384000
       rate_limit_tokens_per_minute: 0
       rate_limit_max_retries: 2
     groq:
       base_url: "https://api.groq.com/openai/v1"
       model: "openai/gpt-oss-120b"
       digest_model: "openai/gpt-oss-20b"
-      max_input_tokens: 3500
-      max_output_tokens: 1000
+      max_input_tokens: 65536
+      max_output_tokens: 65536
       rate_limit_tokens_per_minute: 7000
       rate_limit_max_retries: 2
     kimi:

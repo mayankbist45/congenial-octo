@@ -80,19 +80,25 @@ def _truncate_prompt(text: str, limit_chars: int) -> str:
 class LLMClient:
     """Thin, provider-agnostic chat completion client."""
 
-    def __init__(self, config: Optional[Config] = None):
+    def __init__(self, config: Optional[Config] = None, provider: Optional[str] = None):
         self._config = config or get_config()
         self._secrets = self._config.secrets
+        self._provider = (provider or "").strip().lower()
         self._client: Optional[Any] = None
 
     @property
     def available(self) -> bool:
-        return bool(self._api_key())
+        return bool(self._api_key() or self._fallback_api_key())
 
     @property
     def provider(self) -> str:
-        configured = self._secrets.llm_provider or self._config.get("llm.provider", "openai")
+        configured = self._provider or self._secrets.llm_provider or self._config.get("llm.provider", "openai")
         return str(configured).strip().lower() or "openai"
+
+    @property
+    def fallback_provider(self) -> Optional[str]:
+        configured = str(self._config.get("llm.fallback_provider", "") or "").strip().lower()
+        return configured if configured and configured != self.provider else None
 
     @property
     def _profile(self) -> Dict[str, Any]:
@@ -107,6 +113,15 @@ class LLMClient:
         resolver = getattr(self._secrets, "llm_api_key", None)
         if callable(resolver):
             return resolver(self.provider)
+        return str(getattr(self._secrets, "openai_api_key", "") or "")
+
+    def _fallback_api_key(self) -> str:
+        provider = self.fallback_provider
+        if not provider:
+            return ""
+        resolver = getattr(self._secrets, "llm_api_key", None)
+        if callable(resolver):
+            return str(resolver(provider) or "")
         return str(getattr(self._secrets, "openai_api_key", "") or "")
 
     def _base_url(self) -> Optional[str]:
@@ -251,29 +266,59 @@ class LLMClient:
         if not choices:
             raise LLMUnavailable("LLM returned no choices")
 
-        content = choices[0].message.content or ""
+        choice = choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason == "length":
+            usage = getattr(response, "usage", None)
+            logger.warning(
+                "LLM call truncated: provider=%s model=%s finish_reason=%s prompt=%s completion=%s tokens",
+                self.provider,
+                selected_model,
+                finish_reason,
+                getattr(usage, "prompt_tokens", "?"),
+                getattr(usage, "completion_tokens", "?"),
+            )
+            raise LLMUnavailable(
+                f"LLM response truncated: provider={self.provider} model={selected_model} "
+                f"max_tokens={output_tokens}"
+            )
+        if finish_reason not in (None, "stop"):
+            raise LLMUnavailable(
+                f"LLM response stopped unexpectedly: provider={self.provider} "
+                f"model={selected_model} finish_reason={finish_reason}"
+            )
+
+        content = choice.message.content or ""
         if not content.strip():
             raise LLMUnavailable("LLM returned an empty response")
 
         usage = getattr(response, "usage", None)
         if usage is not None:
             logger.info(
-                "LLM call: model=%s prompt=%s completion=%s tokens",
+                "LLM call succeeded: provider=%s model=%s finish_reason=%s prompt=%s completion=%s tokens",
+                self.provider,
                 request["model"],
+                finish_reason or "unknown",
                 getattr(usage, "prompt_tokens", "?"),
                 getattr(usage, "completion_tokens", "?"),
             )
         return content
 
-    def complete_json(
+    def _fallback_model(self, model: Optional[str], fallback: "LLMClient") -> Optional[str]:
+        if model == self.digest_model:
+            return fallback.digest_model
+        if model is None or model == self.model:
+            return fallback.model
+        return model
+
+    def _complete_json_once(
         self,
         system_prompt: str,
         user_prompt: str,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-    ) -> Any:
-        """Request JSON and parse it. Raises on unparseable output."""
+        model: Optional[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+    ) -> Dict[str, Any]:
         text = self.complete(
             system_prompt,
             user_prompt,
@@ -283,6 +328,57 @@ class LLMClient:
             json_mode=True,
         )
         payload = extract_json(text)
-        if payload is None:
-            raise LLMUnavailable("LLM response was not valid JSON")
+        if not isinstance(payload, dict):
+            raise LLMUnavailable("LLM response was not a JSON object")
         return payload
+
+    def complete_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Request a JSON object, retrying once with the configured fallback."""
+        try:
+            return self._complete_json_once(
+                system_prompt, user_prompt, model, temperature, max_tokens
+            )
+        except LLMUnavailable as primary_error:
+            fallback_provider = self.fallback_provider
+            if not fallback_provider:
+                raise
+
+            fallback = LLMClient(self._config, provider=fallback_provider)
+            fallback_model = self._fallback_model(model, fallback)
+            logger.warning(
+                "LLM JSON failed: provider=%s model=%s error=%s; retrying provider=%s model=%s",
+                self.provider,
+                model or self.model,
+                primary_error,
+                fallback.provider,
+                fallback_model or fallback.model,
+            )
+            try:
+                payload = fallback._complete_json_once(
+                    system_prompt, user_prompt, fallback_model, temperature, max_tokens
+                )
+            except LLMUnavailable as fallback_error:
+                logger.error(
+                    "LLM JSON fallback failed: primary_provider=%s fallback_provider=%s error=%s",
+                    self.provider,
+                    fallback.provider,
+                    fallback_error,
+                )
+                raise LLMUnavailable(
+                    f"LLM JSON failed with {self.provider}: {primary_error}; "
+                    f"fallback {fallback.provider} failed: {fallback_error}"
+                ) from fallback_error
+            logger.info(
+                "LLM JSON fallback succeeded: primary_provider=%s fallback_provider=%s model=%s",
+                self.provider,
+                fallback.provider,
+                fallback_model or fallback.model,
+            )
+            return payload

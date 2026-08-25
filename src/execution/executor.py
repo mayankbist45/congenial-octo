@@ -61,12 +61,18 @@ class ExecutionSummary:
 
     @property
     def failed(self) -> List[ExecutionOutcome]:
-        return [o for o in self.outcomes if not o.placed]
+        return [o for o in self.outcomes if not o.placed and o.status != "abandoned"]
+
+    @property
+    def skipped(self) -> List[ExecutionOutcome]:
+        return [o for o in self.outcomes if o.status == "abandoned"]
 
     def describe(self) -> str:
         if not self.outcomes:
             return "No approved trades to execute."
         parts = [f"{len(self.placed)} order(s) placed"]
+        if self.skipped:
+            parts.append(f"{len(self.skipped)} skipped")
         if self.failed:
             parts.append(f"{len(self.failed)} failed")
         return ", ".join(parts)
@@ -159,7 +165,7 @@ class OrderExecutor:
             result = self._broker.place_order(request)
         except BrokerError as exc:
             return self._abandon(
-                proposal_id, symbol, action, quantity, f"broker error: {exc}"
+                proposal_id, symbol, action, quantity, f"broker error: {exc}", status="rejected"
             )
 
         return self._record(proposal, result, limit_price, live_price, fundamentals)
@@ -222,6 +228,7 @@ class OrderExecutor:
         action: str,
         quantity: int,
         reason: str,
+        status: str = "abandoned",
     ) -> ExecutionOutcome:
         logger.warning("Not placing %s %s x%d: %s", action, symbol, quantity, reason)
         self._repo.record_trade(
@@ -229,14 +236,14 @@ class OrderExecutor:
             action=action,
             quantity=quantity,
             price=0.0,
-            status="abandoned",
+            status=status,
             proposal_id=proposal_id,
             error=reason,
         )
         if proposal_id is not None:
             self._repo.set_proposal_status(
                 proposal_id,
-                "abandoned",
+                "failed" if status == "rejected" else "abandoned",
                 decided_by="executor",
                 rejection_reason=reason,
             )
@@ -246,7 +253,7 @@ class OrderExecutor:
             action=action,
             quantity=quantity,
             placed=False,
-            status="abandoned",
+            status=status,
             error=reason,
         )
 
