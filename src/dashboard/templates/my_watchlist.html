@@ -165,6 +165,15 @@
   .holdings-compact {
     margin-top: 18px;
   }
+  .persona-box {
+    margin: 14px 0 18px;
+    padding: 12px 14px;
+    border: 1px solid var(--accent-border);
+    border-radius: 10px;
+    background: var(--accent-soft);
+    font-size: 13px;
+  }
+  .persona-box a { font-weight: 650; }
 </style>
 
 <h1>My Watchlist</h1>
@@ -172,7 +181,7 @@
 
 <div class="dev-banner">
   <strong>Step 1:</strong> Create a watchlist (just a name for your basket, e.g. “Large cap ideas”).<br>
-  <strong>Step 2:</strong> Select it, scroll the stock list, enter ₹ amounts, click Save holdings.
+  <strong>Step 3 (optional):</strong> Save holdings, then <strong>Run as paper fund</strong> to let the bot trade your picks like <code>balanced</code> (DRY_RUN).
 </div>
 
 <div id="watchlist-alert"></div>
@@ -233,6 +242,12 @@
           <span class="status-pill" id="detail-market">—</span>
         </div>
         <button type="button" class="danger small" id="archive-book">Archive</button>
+      </div>
+
+      <div id="persona-box" class="persona-box" hidden></div>
+      <div id="activate-row" hidden>
+        <button type="button" class="primary" id="activate-book">Run as paper fund (balanced)</button>
+        <span class="muted small" style="margin-left:10px;">DRY_RUN · auto-approve · fixed universe</span>
       </div>
 
       <div class="stats" id="detail-stats"></div>
@@ -469,8 +484,9 @@
     document.getElementById("detail-empty").hidden = true;
     document.getElementById("detail-content").hidden = false;
     document.getElementById("detail-name").textContent = book.name;
-    document.getElementById("detail-market").textContent = book.market_id + " · " + book.currency;
+    document.getElementById("detail-market").textContent = book.market_id + " · " + book.currency + " · " + book.status;
     document.getElementById("detail-disclaimer").textContent = payload.disclaimer || "";
+    loadPersonaStatus();
     document.getElementById("detail-stats").innerHTML =
       stat("Total value", money(summary.total_value, book.currency)) +
       stat("Return", pct(summary.total_return_pct), signClass(summary.total_return_pct)) +
@@ -598,6 +614,42 @@
 
   document.getElementById("stock-filter").addEventListener("input", renderStockList);
   document.getElementById("save-holdings").addEventListener("click", saveHoldings);
+
+  function loadPersonaStatus() {
+    var box = document.getElementById("persona-box");
+    var activateRow = document.getElementById("activate-row");
+    if (!selectedBookId) {
+      box.hidden = true;
+      activateRow.hidden = true;
+      return;
+    }
+    api("/books/" + encodeURIComponent(selectedBookId) + "/persona")
+      .then(function (payload) {
+        var persona = payload.persona || {};
+        box.hidden = false;
+        activateRow.hidden = true;
+        box.innerHTML =
+          '<strong>Paper fund active:</strong> <code>' + persona.persona_id + '</code> · ' +
+          'template <code>' + (persona.template_persona_id || "balanced") + '</code> · ' +
+          '<a href="' + (payload.persona_dashboard_path || "/") + '" target="_blank" rel="noopener">Open persona dashboard →</a>';
+      })
+      .catch(function () {
+        box.hidden = true;
+        activateRow.hidden = false;
+      });
+  }
+
+  document.getElementById("activate-book").addEventListener("click", function () {
+    if (!selectedBookId || !confirm("Run this watchlist as a paper fund? The bot will trade only your selected stocks (DRY_RUN).")) return;
+    api("/books/" + encodeURIComponent(selectedBookId) + "/activate?user_id=" + encodeURIComponent(userId()), {
+      method: "POST",
+      body: JSON.stringify({ template_persona_id: "balanced" }),
+    }).then(function (payload) {
+      showAlert("Paper fund active: " + payload.persona_id, "ok");
+      loadBooks();
+      loadDetail();
+    }).catch(function (err) { showAlert(err.message); });
+  });
 
   loadBooks().then(loadDetail);
 })();

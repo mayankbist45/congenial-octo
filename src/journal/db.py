@@ -495,6 +495,18 @@ CREATE TABLE IF NOT EXISTS user_book_snapshots (
     PRIMARY KEY (book_id, snapshot_date)
 );
 
+CREATE TABLE IF NOT EXISTS user_book_personas (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL UNIQUE REFERENCES user_books(id),
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    persona_id TEXT NOT NULL UNIQUE,
+    template_persona_id TEXT NOT NULL DEFAULT 'balanced',
+    status TEXT NOT NULL DEFAULT 'requested',
+    frozen_allocation TEXT NOT NULL,
+    provisioned_at TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -527,6 +539,8 @@ CREATE INDEX IF NOT EXISTS idx_ipo_gmp_observations_issue_source_time ON ipo_gmp
 CREATE INDEX IF NOT EXISTS idx_user_books_user ON user_books(user_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_user_book_lines_book ON user_book_lines(book_id, removed_at);
 CREATE INDEX IF NOT EXISTS idx_user_book_snapshots_book ON user_book_snapshots(book_id, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_user_book_personas_book ON user_book_personas(book_id);
+CREATE INDEX IF NOT EXISTS idx_user_book_personas_persona ON user_book_personas(persona_id, status);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -558,6 +572,7 @@ TABLES = (
     "dashboard_snapshots",
     "ipo_gmp_observations",
     "user_book_snapshots",
+    "user_book_personas",
     "user_book_lines",
     "user_books",
     "scheduler_controls",

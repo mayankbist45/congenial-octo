@@ -327,7 +327,7 @@ class UserBookRepository:
     def list_tracking_books(self) -> List[Tuple[str, int]]:
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT id, user_id FROM user_books WHERE status = 'tracking' ORDER BY updated_at ASC"
+                "SELECT id, user_id FROM user_books WHERE status IN ('tracking', 'active_paper') ORDER BY updated_at ASC"
             ).fetchall()
         return [(str(row["id"]), int(row["user_id"])) for row in rows]
 
@@ -433,8 +433,52 @@ class UserBookService:
         )
 
     def archive_book(self, user_id: int, book_id: str) -> Dict[str, Any]:
+        from src.workspace.user_book_personas import UserBookPersonaProvisioner
+
+        UserBookPersonaProvisioner(self._config).pause_for_book(book_id, user_id)
         self.repo.archive_book(book_id, user_id)
         return self.envelope(status="archived", book_id=book_id)
+
+    def activate_paper_fund(
+        self,
+        user_id: int,
+        book_id: str,
+        *,
+        template_persona_id: str = "balanced",
+    ) -> Dict[str, Any]:
+        from src.workspace.user_book_personas import UserBookPersonaError, UserBookPersonaProvisioner
+
+        book = self.repo.get_book(book_id, user_id)
+        lines = self.repo.list_lines(book_id, user_id)
+        persona = UserBookPersonaProvisioner(self._config).activate(
+            user_id,
+            book,
+            lines,
+            template_persona_id=template_persona_id,
+        )
+        self.repo.update_book(book_id, user_id, status="active_paper")
+        return self.envelope(
+            book_id=book_id,
+            persona=persona,
+            persona_id=persona["persona_id"],
+            persona_dashboard_path=f"/?persona={persona['persona_id']}",
+            status="active",
+        )
+
+    def linked_persona(self, user_id: int, book_id: str) -> Dict[str, Any]:
+        from src.workspace.user_book_personas import UserBookPersonaNotFoundError, UserBookPersonaProvisioner
+
+        self.repo.get_book(book_id, user_id)
+        try:
+            persona = UserBookPersonaProvisioner(self._config).persona_for_book(book_id, user_id)
+        except UserBookPersonaNotFoundError as exc:
+            raise UserBookNotFoundError(str(exc)) from exc
+        return self.envelope(
+            book_id=book_id,
+            persona=persona,
+            persona_id=persona["persona_id"],
+            persona_dashboard_path=f"/?persona={persona['persona_id']}",
+        )
 
     def list_lines(self, user_id: int, book_id: str) -> Dict[str, Any]:
         book = self.repo.get_book(book_id, user_id)

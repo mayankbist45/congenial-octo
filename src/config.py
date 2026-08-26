@@ -561,6 +561,11 @@ def get_persona_config(
     base: Optional[Config] = None,
 ) -> Config:
     base = base or get_config(settings_path)
+    if persona_id.startswith("userbook_"):
+        from src.workspace.user_book_personas import userbook_persona_config
+
+        return userbook_persona_config(persona_id, settings_path=settings_path, base=base)
+
     personas = base.raw.get("personas", {})
     if persona_id not in personas:
         available = ", ".join(personas.keys()) if personas else "(none defined)"
@@ -625,6 +630,14 @@ def get_persona_config(
 
 
 def persona_description(persona_id: str, settings_path: Optional[str] = None) -> str:
+    if persona_id.startswith("userbook_"):
+        from src.workspace.user_book_personas import UserBookPersonaRepository
+
+        row = UserBookPersonaRepository(get_config(settings_path)).get_by_persona_id(persona_id)
+        if row:
+            frozen = row.get("frozen_allocation") or {}
+            name = frozen.get("book_name") or persona_id
+            return f"Paper fund from watchlist: {name}"
     base = get_config(settings_path)
     personas = base.raw.get("personas", {})
     pdef = personas.get(persona_id, {})

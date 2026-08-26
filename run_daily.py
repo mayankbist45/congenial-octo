@@ -213,6 +213,10 @@ def _resolve_personas(args) -> List[str]:
         personas = [args.persona]
     else:
         personas = enabled_personas()
+        from src.workspace.user_book_personas import active_userbook_persona_ids
+
+        base = get_config()
+        personas = list(dict.fromkeys(personas + active_userbook_persona_ids(base)))
     if getattr(args, "market", None):
         market_id = args.market.strip()
         from src.config import get_persona_config

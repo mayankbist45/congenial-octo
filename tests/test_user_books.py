@@ -219,3 +219,74 @@ def test_my_watchlist_dev_page_and_api(temp_config, monkeypatch):
     detail = client.get(f"/my-watchlist/api/books/{book_id}?user_id=1")
     assert detail.status_code == 200
     assert detail.json()["lines"][0]["symbol"] == "TCS"
+
+
+def test_activate_user_book_persona_and_config(temp_config, monkeypatch):
+    from src.config import get_persona_config
+    from src.universe import load_universe
+    from src.workspace.user_book_personas import active_userbook_persona_ids
+
+    monkeypatch.setattr("src.workspace.user_books.PriceService", lambda config=None: FakePriceService())
+    service = UserBookService(temp_config, prices=FakePriceService())
+    WorkspaceRepository(temp_config).user_for_email("member@example.com")
+
+    book_id = service.create_book(1, name="Activate me", market_id="india_equity", starting_capital=500_000)["book"]["id"]
+    service.add_line(1, book_id, symbol="RELIANCE", target_amount=200_000)
+    service.add_line(1, book_id, symbol="TCS", target_amount=150_000)
+
+    activated = service.activate_paper_fund(1, book_id, template_persona_id="balanced")
+    persona_id = activated["persona_id"]
+    assert persona_id.startswith("userbook_")
+    assert activated["status"] == "active"
+
+    book = service.repo.get_book(book_id, 1)
+    assert book["status"] == "active_paper"
+
+    persona = service.linked_persona(1, book_id)
+    assert persona["persona"]["persona_id"] == persona_id
+
+    config = get_persona_config(persona_id, base=temp_config)
+    assert config.get("execution.auto_approve") is True
+    assert config.secrets.dry_run is True
+    universe = load_universe(config)
+    assert set(universe.symbols) == {"RELIANCE", "TCS"}
+    assert persona_id in active_userbook_persona_ids(temp_config)
+
+    service.archive_book(1, book_id)
+    assert persona_id not in active_userbook_persona_ids(temp_config)
+
+
+def test_activate_requires_holdings(temp_config, monkeypatch):
+    monkeypatch.setattr("src.workspace.user_books.PriceService", lambda config=None: FakePriceService())
+    service = UserBookService(temp_config, prices=FakePriceService())
+    WorkspaceRepository(temp_config).user_for_email("member@example.com")
+    book_id = service.create_book(1, name="Empty", market_id="india_equity", starting_capital=100_000)["book"]["id"]
+
+    try:
+        service.activate_paper_fund(1, book_id)
+        raised = False
+    except Exception as exc:
+        raised = True
+        assert "at least one holding" in str(exc).lower()
+    assert raised
+
+
+def test_dev_activate_api(temp_config, monkeypatch):
+    from src.dashboard.app import create_app
+
+    WorkspaceRepository(temp_config).user_for_email("dev-ui@example.com")
+    monkeypatch.setattr("src.workspace.user_books.PriceService", lambda config=None: FakePriceService())
+    client = TestClient(create_app(temp_config))
+    service = UserBookService(temp_config, prices=FakePriceService())
+
+    book_id = service.create_book(1, name="API activate", market_id="india_equity", starting_capital=300_000)["book"]["id"]
+    service.add_line(1, book_id, symbol="INFY", target_amount=100_000)
+
+    response = client.post(
+        f"/my-watchlist/api/books/{book_id}/activate?user_id=1",
+        json={"template_persona_id": "balanced"},
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["persona_id"].startswith("userbook_")
+    assert client.get(f"/my-watchlist/api/books/{book_id}/persona?user_id=1").status_code == 200
