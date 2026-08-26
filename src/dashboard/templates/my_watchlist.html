@@ -1,0 +1,605 @@
+{% extends "base.html" %}
+{% block title %}My Watchlist (dev) &middot; {{ fund_name }}{% endblock %}
+
+{% block content %}
+<style>
+  .watchlist-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .watchlist-layout { grid-template-columns: 1fr; }
+  }
+  .dev-banner {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn-ink);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 18px;
+    font-size: 13px;
+  }
+  .field { margin-bottom: 12px; }
+  .field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 5px;
+  }
+  .field-hint {
+    font-size: 12px;
+    color: var(--ink-soft);
+    margin: -6px 0 10px;
+    line-height: 1.45;
+  }
+  .field input, .field select {
+    width: 100%;
+    font: inherit;
+    font-size: 14px;
+    padding: 8px 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--input-bg);
+    color: var(--ink);
+  }
+  .book-list { display: flex; flex-direction: column; gap: 8px; }
+  .book-item {
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    cursor: pointer;
+  }
+  .book-item:hover { border-color: var(--accent-border); background: var(--accent-soft); }
+  .book-item.active {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent-border);
+    background: var(--accent-soft);
+  }
+  .book-item-title { font-weight: 650; margin-bottom: 4px; }
+  .book-item-meta { font-size: 12px; color: var(--ink-soft); }
+  .status-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--tag-swing-bg);
+    color: var(--tag-swing-ink);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  #watchlist-alert {
+    display: none;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  #watchlist-alert.error {
+    display: block;
+    background: var(--sell-bg);
+    color: var(--down);
+    border: 1px solid var(--danger-border);
+  }
+  #watchlist-alert.ok {
+    display: block;
+    background: var(--buy-bg);
+    color: var(--up);
+    border: 1px solid color-mix(in srgb, var(--up) 35%, transparent);
+  }
+  .stock-picker-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .stock-picker-meta {
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  .stock-list {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    max-height: 420px;
+    overflow-y: auto;
+    background: var(--panel);
+  }
+  .stock-row {
+    display: grid;
+    grid-template-columns: minmax(88px, 110px) minmax(0, 1fr) minmax(120px, 140px);
+    gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .stock-row:last-child { border-bottom: 0; }
+  .stock-row.selected {
+    background: var(--accent-soft);
+  }
+  .stock-row.hidden { display: none; }
+  .stock-symbol { font-weight: 650; font-size: 13px; }
+  .stock-company {
+    font-size: 12px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .stock-sector {
+    display: block;
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-top: 2px;
+  }
+  .stock-amount-input {
+    width: 100%;
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 9px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--input-bg);
+    color: var(--ink);
+    text-align: right;
+  }
+  .stock-amount-input:focus {
+    border-color: var(--accent);
+    outline: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+  .stock-list-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--ink-soft);
+    font-size: 14px;
+  }
+  .holdings-compact {
+    margin-top: 18px;
+  }
+</style>
+
+<h1>My Watchlist</h1>
+<p class="subtitle">Paper portfolio tracker — scroll the stock list, enter amounts, save.</p>
+
+<div class="dev-banner">
+  <strong>Step 1:</strong> Create a watchlist (just a name for your basket, e.g. “Large cap ideas”).<br>
+  <strong>Step 2:</strong> Select it, scroll the stock list, enter ₹ amounts, click Save holdings.
+</div>
+
+<div id="watchlist-alert"></div>
+
+<div class="watchlist-layout">
+  <section class="panel">
+    <h2>Workspace user</h2>
+    <div class="field">
+      <label for="user-select">Signed-in user (dev)</label>
+      <select id="user-select">
+        {% for user in workspace_users %}
+        <option value="{{ user.id }}" {% if user.id == selected_user_id %}selected{% endif %}>
+          {{ user.email }}{% if user.display_name %} — {{ user.display_name }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if not workspace_users %}
+    <p class="muted">No workspace users yet.</p>
+    {% endif %}
+
+    <h2 style="margin-top: 22px;">New watchlist</h2>
+    <p class="field-hint">This is only a label for your basket — not a stock name.</p>
+    <form id="create-form">
+      <div class="field">
+        <label for="book-name">Watchlist name</label>
+        <input id="book-name" type="text" placeholder="e.g. Large cap ideas" required>
+      </div>
+      <div class="field">
+        <label for="book-market">Market</label>
+        <select id="book-market">
+          <option value="india_equity">India equity (INR)</option>
+          <option value="us_equity">US equity (USD)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="book-capital">Starting capital</label>
+        <input id="book-capital" type="number" min="1" step="1000" value="1000000" required>
+      </div>
+      <button type="submit" class="primary">Create watchlist</button>
+    </form>
+
+    <h2 style="margin-top: 22px;">Your watchlists</h2>
+    <div id="book-list" class="book-list">
+      <p class="empty">Loading…</p>
+    </div>
+  </section>
+
+  <section class="panel" id="detail-panel">
+    <div id="detail-empty">
+      <h2>Select a watchlist</h2>
+      <p class="muted">Create one on the left, then pick stocks from the scroll list here.</p>
+    </div>
+    <div id="detail-content" hidden>
+      <div class="panel-head">
+        <div>
+          <h2 id="detail-name">—</h2>
+          <span class="status-pill" id="detail-market">—</span>
+        </div>
+        <button type="button" class="danger small" id="archive-book">Archive</button>
+      </div>
+
+      <div class="stats" id="detail-stats"></div>
+
+      <div class="stock-picker-head">
+        <div>
+          <h3 style="margin:0;">Pick stocks &amp; amounts</h3>
+          <div class="stock-picker-meta" id="picker-meta">Scroll to browse · enter amount to include a stock</div>
+        </div>
+        <button type="button" class="primary" id="save-holdings">Save holdings</button>
+      </div>
+
+      <div class="field" style="margin-top: 12px;">
+        <label for="stock-filter">Filter list</label>
+        <input id="stock-filter" type="text" placeholder="Type symbol or company name…" autocomplete="off">
+      </div>
+
+      <div class="stock-list" id="stock-list">
+        <div class="stock-list-empty">Loading stocks…</div>
+      </div>
+
+      <div class="holdings-compact">
+        <h3>Selected holdings</h3>
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th class="num">Allocated</th>
+                <th class="num">Weight</th>
+                <th class="num">Return</th>
+                <th class="num">Value</th>
+              </tr>
+            </thead>
+            <tbody id="lines-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <p class="muted small" id="detail-disclaimer"></p>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  var selectedBookId = {{ selected_book_id | tojson }};
+  var currentBook = null;
+  var currentLines = {};
+  var universeSymbols = [];
+  var alertBox = document.getElementById("watchlist-alert");
+
+  function showAlert(message, kind) {
+    alertBox.textContent = message;
+    alertBox.className = kind || "error";
+  }
+  function clearAlert() {
+    alertBox.className = "";
+    alertBox.textContent = "";
+  }
+
+  function userId() {
+    return document.getElementById("user-select").value;
+  }
+
+  function api(path, options) {
+    options = options || {};
+    var url = "/my-watchlist/api" + path;
+    var sep = url.indexOf("?") >= 0 ? "&" : "?";
+    if (path.indexOf("user_id=") < 0 && (!options.body || options.method === "GET")) {
+      url += sep + "user_id=" + encodeURIComponent(userId());
+    }
+    return fetch(url, Object.assign({ headers: { "Content-Type": "application/json" } }, options))
+      .then(function (res) {
+        return res.json().then(function (data) {
+          if (!res.ok) throw new Error((data && data.detail) || res.statusText);
+          return data;
+        });
+      });
+  }
+
+  function money(value, currency) {
+    if (value == null || isNaN(value)) return "—";
+    try {
+      return new Intl.NumberFormat(currency === "USD" ? "en-US" : "en-IN", {
+        style: "currency",
+        currency: currency || "INR",
+        maximumFractionDigits: 0,
+      }).format(value);
+    } catch (e) {
+      return String(value);
+    }
+  }
+
+  function pct(value) {
+    if (value == null || isNaN(value)) return "—";
+    var sign = value > 0 ? "+" : "";
+    return sign + Number(value).toFixed(2) + "%";
+  }
+
+  function signClass(value) {
+    if (value == null || isNaN(value) || value === 0) return "flat";
+    return value > 0 ? "up" : "down";
+  }
+
+  function renderBooks(books) {
+    var list = document.getElementById("book-list");
+    if (!books.length) {
+      list.innerHTML = '<p class="empty">No watchlists yet. Create one on the left.</p>';
+      return;
+    }
+    list.innerHTML = books.map(function (book) {
+      var summary = book.summary || {};
+      var active = book.id === selectedBookId ? " active" : "";
+      return (
+        '<button type="button" class="book-item' + active + '" data-book-id="' + book.id + '">' +
+          '<div class="book-item-title">' + book.name + '</div>' +
+          '<div class="book-item-meta">' + book.market_id + ' · ' +
+          money(summary.total_value, book.currency) + ' · ' +
+          pct(summary.total_return_pct) +
+          '</div>' +
+        '</button>'
+      );
+    }).join("");
+    list.querySelectorAll("[data-book-id]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        selectedBookId = btn.getAttribute("data-book-id");
+        var params = new URLSearchParams(window.location.search);
+        params.set("user_id", userId());
+        params.set("book_id", selectedBookId);
+        window.history.replaceState({}, "", "/my-watchlist?" + params.toString());
+        loadBooks();
+        loadDetail();
+      });
+    });
+  }
+
+  function loadBooks() {
+    clearAlert();
+    return api("/books").then(function (payload) {
+      renderBooks(payload.books || []);
+    }).catch(function (err) {
+      showAlert(err.message);
+    });
+  }
+
+  function renderHoldingsTable(lines, currency) {
+    var tbody = document.getElementById("lines-body");
+    if (!lines.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="muted">No stocks selected yet — enter amounts in the list above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = lines.map(function (line) {
+      return (
+        '<tr>' +
+          '<td><span class="sym">' + line.symbol + '</span><div class="sub-line">' + (line.company_name || "") + '</div></td>' +
+          '<td class="num">' + money(line.target_amount, currency) + '</td>' +
+          '<td class="num">' + pct(line.weight_pct) + '</td>' +
+          '<td class="num ' + signClass(line.return_since_added_pct) + '">' + pct(line.return_since_added_pct) + '</td>' +
+          '<td class="num">' + money(line.current_value, currency) + '</td>' +
+        '</tr>'
+      );
+    }).join("");
+  }
+
+  function renderStockList() {
+    var container = document.getElementById("stock-list");
+    var filter = document.getElementById("stock-filter").value.trim().toUpperCase();
+    if (!universeSymbols.length) {
+      container.innerHTML = '<div class="stock-list-empty">No stocks loaded for this market.</div>';
+      return;
+    }
+    var html = universeSymbols.map(function (item) {
+      var hay = (item.symbol + " " + item.company_name + " " + item.sector).toUpperCase();
+      var hidden = filter && hay.indexOf(filter) < 0 ? " hidden" : "";
+      var amount = currentLines[item.symbol] ? currentLines[item.symbol].target_amount : "";
+      var selected = amount ? " selected" : "";
+      return (
+        '<div class="stock-row' + hidden + selected + '" data-symbol="' + item.symbol + '">' +
+          '<div class="stock-symbol">' + item.symbol + '</div>' +
+          '<div>' +
+            '<div class="stock-company" title="' + item.company_name + '">' + item.company_name + '</div>' +
+            '<span class="stock-sector">' + item.sector + '</span>' +
+          '</div>' +
+          '<input type="number" min="0" step="1000" class="stock-amount-input" data-symbol="' + item.symbol + '" ' +
+            'placeholder="0" value="' + (amount ? amount : "") + '">' +
+        '</div>'
+      );
+    }).join("");
+    container.innerHTML = html || '<div class="stock-list-empty">No stocks match your filter.</div>';
+
+    container.querySelectorAll(".stock-amount-input").forEach(function (input) {
+      input.addEventListener("input", function () {
+        var row = input.closest(".stock-row");
+        var val = Number(input.value) || 0;
+        if (val > 0) row.classList.add("selected");
+        else row.classList.remove("selected");
+        updatePickerMeta();
+      });
+    });
+    updatePickerMeta();
+  }
+
+  function updatePickerMeta() {
+    var inputs = document.querySelectorAll(".stock-amount-input");
+    var count = 0;
+    var total = 0;
+    inputs.forEach(function (input) {
+      var val = Number(input.value) || 0;
+      if (val > 0) { count += 1; total += val; }
+    });
+    var cap = currentBook ? Number(currentBook.starting_capital) : 0;
+    var meta = count + " selected · " + money(total, currentBook && currentBook.currency);
+    if (cap > 0) meta += " of " + money(cap, currentBook.currency) + " capital";
+    document.getElementById("picker-meta").textContent = meta;
+  }
+
+  function loadUniverse(marketId) {
+    return api("/universe?market_id=" + encodeURIComponent(marketId)).then(function (payload) {
+      universeSymbols = payload.symbols || [];
+      renderStockList();
+    });
+  }
+
+  function renderDetail(payload) {
+    var book = payload.book;
+    currentBook = book;
+    var summary = payload.summary || {};
+    var lines = payload.lines || [];
+    currentLines = {};
+    lines.forEach(function (line) {
+      currentLines[line.symbol] = line;
+    });
+
+    document.getElementById("detail-empty").hidden = true;
+    document.getElementById("detail-content").hidden = false;
+    document.getElementById("detail-name").textContent = book.name;
+    document.getElementById("detail-market").textContent = book.market_id + " · " + book.currency;
+    document.getElementById("detail-disclaimer").textContent = payload.disclaimer || "";
+    document.getElementById("detail-stats").innerHTML =
+      stat("Total value", money(summary.total_value, book.currency)) +
+      stat("Return", pct(summary.total_return_pct), signClass(summary.total_return_pct)) +
+      stat("Invested", money(summary.invested_amount, book.currency)) +
+      stat("Unallocated", money(summary.unallocated_cash, book.currency));
+
+    renderHoldingsTable(lines, book.currency);
+    document.getElementById("stock-filter").value = "";
+    return loadUniverse(book.market_id);
+  }
+
+  function stat(label, value, extraClass) {
+    return (
+      '<div class="stat">' +
+        '<div class="label">' + label + '</div>' +
+        '<div class="value' + (extraClass ? ' ' + extraClass : '') + '">' + value + '</div>' +
+      '</div>'
+    );
+  }
+
+  function loadDetail() {
+    if (!selectedBookId) {
+      document.getElementById("detail-empty").hidden = false;
+      document.getElementById("detail-content").hidden = true;
+      return Promise.resolve();
+    }
+    return api("/books/" + encodeURIComponent(selectedBookId)).then(renderDetail).catch(function (err) {
+      showAlert(err.message);
+    });
+  }
+
+  function saveHoldings() {
+    if (!selectedBookId) return;
+    var inputs = document.querySelectorAll(".stock-amount-input");
+    var ops = [];
+
+    inputs.forEach(function (input) {
+      var symbol = input.dataset.symbol;
+      var amount = Number(input.value) || 0;
+      var existing = currentLines[symbol];
+
+      if (existing && amount <= 0) {
+        ops.push(
+          api("/books/" + encodeURIComponent(selectedBookId) + "/lines/" + encodeURIComponent(symbol), {
+            method: "DELETE",
+          })
+        );
+      } else if (existing && amount !== Number(existing.target_amount)) {
+        ops.push(
+          api("/books/" + encodeURIComponent(selectedBookId) + "/lines/" + encodeURIComponent(symbol), {
+            method: "PATCH",
+            body: JSON.stringify({ target_amount: amount }),
+          })
+        );
+      } else if (!existing && amount > 0) {
+        ops.push(
+          api("/books/" + encodeURIComponent(selectedBookId) + "/lines?user_id=" + encodeURIComponent(userId()), {
+            method: "POST",
+            body: JSON.stringify({ symbol: symbol, target_amount: amount }),
+          })
+        );
+      }
+    });
+
+    if (!ops.length) {
+      showAlert("No changes to save.", "ok");
+      return;
+    }
+
+    Promise.all(ops)
+      .then(function () {
+        showAlert("Holdings saved.", "ok");
+        loadBooks();
+        loadDetail();
+      })
+      .catch(function (err) {
+        showAlert(err.message);
+        loadDetail();
+      });
+  }
+
+  document.getElementById("user-select").addEventListener("change", function () {
+    selectedBookId = null;
+    var params = new URLSearchParams();
+    params.set("user_id", userId());
+    window.history.replaceState({}, "", "/my-watchlist?" + params.toString());
+    loadBooks();
+    loadDetail();
+  });
+
+  document.getElementById("create-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    api("/books?user_id=" + encodeURIComponent(userId()), {
+      method: "POST",
+      body: JSON.stringify({
+        name: document.getElementById("book-name").value,
+        market_id: document.getElementById("book-market").value,
+        starting_capital: Number(document.getElementById("book-capital").value),
+      }),
+    }).then(function (payload) {
+      selectedBookId = payload.book.id;
+      document.getElementById("book-name").value = "";
+      showAlert("Created watchlist: " + payload.book.name, "ok");
+      var params = new URLSearchParams(window.location.search);
+      params.set("user_id", userId());
+      params.set("book_id", selectedBookId);
+      window.history.replaceState({}, "", "/my-watchlist?" + params.toString());
+      loadBooks();
+      loadDetail();
+    }).catch(function (err) { showAlert(err.message); });
+  });
+
+  document.getElementById("archive-book").addEventListener("click", function () {
+    if (!selectedBookId || !confirm("Archive this watchlist?")) return;
+    api("/books/" + encodeURIComponent(selectedBookId), { method: "DELETE" }).then(function () {
+      selectedBookId = null;
+      var params = new URLSearchParams(window.location.search);
+      params.delete("book_id");
+      window.history.replaceState({}, "", "/my-watchlist?" + params.toString());
+      showAlert("Watchlist archived", "ok");
+      loadBooks();
+      loadDetail();
+    }).catch(function (err) { showAlert(err.message); });
+  });
+
+  document.getElementById("stock-filter").addEventListener("input", renderStockList);
+  document.getElementById("save-holdings").addEventListener("click", saveHoldings);
+
+  loadBooks().then(loadDetail);
+})();
+</script>
+{% endblock %}

@@ -455,6 +455,46 @@ CREATE TABLE IF NOT EXISTS scheduler_controls (
     updated_by TEXT NOT NULL
 );
 
+-- User-curated paper watchlists (UI label My Watchlist, code namespace user_books)
+CREATE TABLE IF NOT EXISTS user_books (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    name TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'tracking',
+    starting_capital {REAL} NOT NULL,
+    allocation_mode TEXT NOT NULL DEFAULT 'amount',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_book_lines (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL REFERENCES user_books(id),
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    symbol TEXT NOT NULL,
+    target_amount {REAL},
+    weight_pct {REAL},
+    entry_price {REAL} NOT NULL,
+    entry_date TEXT NOT NULL,
+    notes TEXT,
+    added_at TEXT NOT NULL,
+    removed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS user_book_snapshots (
+    book_id TEXT NOT NULL REFERENCES user_books(id),
+    snapshot_date TEXT NOT NULL,
+    total_value {REAL} NOT NULL,
+    total_return_pct {REAL} NOT NULL,
+    invested_amount {REAL} NOT NULL,
+    unallocated_cash {REAL} NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (book_id, snapshot_date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -484,6 +524,9 @@ CREATE INDEX IF NOT EXISTS idx_workspace_portfolios_user ON workspace_portfolios
 CREATE INDEX IF NOT EXISTS idx_workspace_events_user ON workspace_events(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_as_of ON dashboard_snapshots(as_of);
 CREATE INDEX IF NOT EXISTS idx_ipo_gmp_observations_issue_source_time ON ipo_gmp_observations(ipo_id, source_name, observed_at);
+CREATE INDEX IF NOT EXISTS idx_user_books_user ON user_books(user_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_user_book_lines_book ON user_book_lines(book_id, removed_at);
+CREATE INDEX IF NOT EXISTS idx_user_book_snapshots_book ON user_book_snapshots(book_id, snapshot_date);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -514,6 +557,9 @@ TABLES = (
     "workspace_events",
     "dashboard_snapshots",
     "ipo_gmp_observations",
+    "user_book_snapshots",
+    "user_book_lines",
+    "user_books",
     "scheduler_controls",
 )
 

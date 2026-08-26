@@ -586,6 +586,7 @@ def main(argv: Optional[list] = None) -> int:
     if args.command == "publish_dashboard":
         from src.ipo.service import IpoResearchService
         from src.workspace.dashboard_snapshot import DashboardSnapshotService
+        from src.workspace.user_books import UserBookService
 
         ipo_analysis = IpoResearchService(config).daily_analysis()
         snapshot = DashboardSnapshotService(config).publish(
@@ -593,7 +594,9 @@ def main(argv: Optional[list] = None) -> int:
             ipos=ipo_analysis,
             refresh_ipos=args.refresh_ipo_research,
         )
+        user_books_recorded = UserBookService(config).record_all_snapshots(snapshot["snapshot_date"])
         print(f"Published delayed/EOD dashboard snapshot for {snapshot['snapshot_date']} at {snapshot['as_of']}")
+        print(f"Recorded {user_books_recorded} user watchlist snapshot(s)")
         return 0
 
     if args.command == "long_cycle":

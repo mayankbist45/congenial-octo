@@ -21,7 +21,7 @@ This must coexist with:
 | `workspace_portfolios` | AI quant screen from profile | User-curated picks |
 | `dashboard_snapshots` | Global fund EOD publish | Per-user data |
 
-**Product name (UI):** **My Book** or **Custom Portfolio**  
+**Product name (UI):** **My Watchlist** (also acceptable: Custom Portfolio)  
 **Code/API namespace:** `user_books` (avoids collision with intraday `watchlist`)
 
 ---
@@ -41,7 +41,7 @@ This must coexist with:
 ### Journey A — Build & track (Phase 1)
 
 ```
-Sign in → My Books → Create book (name, market IN/US)
+Sign in → My Watchlist → Create watchlist (name, market IN/US)
   → Add stock (search) → Enter ₹ amount OR % weight
   → Overview: total value, day change, since-added return
   → Holdings table: symbol, allocation, P&L
@@ -69,10 +69,10 @@ Book detail → "Run as paper fund" (CTA)
 ```mermaid
 flowchart TB
   subgraph fe [Vercel React]
-    BooksList["/my-books"]
-    BookDetail["/my-books/:id"]
-    AddStock["/my-books/:id/add"]
-    Activate["/my-books/:id/activate"]
+    BooksList["/my-watchlist"]
+    BookDetail["/my-watchlist/:id"]
+    AddStock["/my-watchlist/:id/add"]
+    Activate["/my-watchlist/:id/activate"]
   end
 
   subgraph api [FastAPI workspace]
@@ -214,15 +214,15 @@ Admin (optional): queue for first activation approval — same pattern as tracke
 
 | Route | Screen |
 |-------|--------|
-| `/my-books` | List cards + "Create book" |
-| `/my-books/new` | Name, market, starting capital |
-| `/my-books/:id` | Overview chart, total return, CTA activate |
-| `/my-books/:id/holdings` | Table: symbol, ₹ allocated, weight %, return |
-| `/my-books/:id/add` | Symbol search + amount input |
-| `/my-books/:id/activate` | Confirm template + capital + weights |
-| `/my-books/:id/persona` | Status + deep link to `/personas/:personaId` |
+| `/my-watchlist` | List cards + "Create watchlist" |
+| `/my-watchlist/new` | Name, market, starting capital |
+| `/my-watchlist/:id` | Overview chart, total return, CTA activate (Phase 2) |
+| `/my-watchlist/:id/holdings` | Table: symbol, ₹ allocated, weight %, return |
+| `/my-watchlist/:id/add` | Symbol search + amount input |
+| `/my-watchlist/:id/activate` | Confirm template + capital + weights (Phase 2) |
+| `/my-watchlist/:id/persona` | Status + deep link to `/personas/:personaId` (Phase 2) |
 
-**Nav:** "My Books" separate from "Fund personas" and "Suggested model portfolio".
+**Nav:** "My Watchlist" separate from "Fund personas" and "Suggested model portfolio".
 
 ---
 

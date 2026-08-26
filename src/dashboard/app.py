@@ -85,6 +85,28 @@ class SchedulerControlRequest(BaseModel):
     enabled: bool
 
 
+class UserBookCreateRequest(BaseModel):
+    name: str
+    market_id: str
+    starting_capital: float
+
+
+class UserBookUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    starting_capital: Optional[float] = None
+
+
+class UserBookLineRequest(BaseModel):
+    symbol: str
+    target_amount: float
+    notes: Optional[str] = None
+
+
+class UserBookLineUpdateRequest(BaseModel):
+    target_amount: Optional[float] = None
+    notes: Optional[str] = None
+
+
 class RazorpaySubscriptionPaymentRequest(BaseModel):
     razorpay_payment_id: str
     razorpay_subscription_id: str
@@ -632,6 +654,185 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             header_fund_name="Trade Bot Dashboard",
         )
 
+    # ------------------------------------------------------------------
+    # My Watchlist — lite dev UI (no Google auth; picks workspace user).
+    # ------------------------------------------------------------------
+    def _workspace_users_for_dev() -> List[Dict[str, Any]]:
+        from src.journal.db import connect
+
+        conn = connect(config)
+        try:
+            rows = conn.execute(
+                "SELECT id, email, display_name FROM workspace_users ORDER BY id"
+            ).fetchall()
+        finally:
+            conn.close()
+        return [dict(row) for row in rows]
+
+    def _watchlist_dev_service():
+        from src.workspace.user_books import UserBookService
+
+        return UserBookService(config)
+
+    def _watchlist_dev_user_id(user_id: Optional[int] = Query(default=None)) -> int:
+        if user_id is None:
+            raise HTTPException(status_code=400, detail="user_id is required.")
+        return int(user_id)
+
+    @app.get("/my-watchlist", response_class=HTMLResponse)
+    def my_watchlist_page(
+        request: Request,
+        user_id: Optional[int] = Query(default=None),
+        book_id: Optional[str] = Query(default=None),
+    ) -> HTMLResponse:
+        users = _workspace_users_for_dev()
+        selected_user_id = user_id or (users[0]["id"] if users else None)
+        return render(
+            request,
+            "my_watchlist.html",
+            {
+                "page": "my_watchlist",
+                "workspace_users": users,
+                "selected_user_id": selected_user_id,
+                "selected_book_id": book_id,
+            },
+            show_persona_selector=False,
+            header_fund_name="Trade Bot Dashboard",
+        )
+
+    @app.get("/my-watchlist/api/books")
+    def my_watchlist_api_list_books(user_id: int = Depends(_watchlist_dev_user_id)) -> JSONResponse:
+        return JSONResponse(_watchlist_dev_service().list_books(user_id))
+
+    @app.post("/my-watchlist/api/books")
+    def my_watchlist_api_create_book(
+        payload: UserBookCreateRequest,
+        user_id: int = Depends(_watchlist_dev_user_id),
+    ) -> JSONResponse:
+        from src.workspace.user_books import UserBookError
+
+        try:
+            return JSONResponse(
+                _watchlist_dev_service().create_book(
+                    user_id,
+                    name=payload.name,
+                    market_id=payload.market_id,
+                    starting_capital=payload.starting_capital,
+                ),
+                status_code=201,
+            )
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/my-watchlist/api/books/{book_id}")
+    def my_watchlist_api_get_book(book_id: str, user_id: int = Depends(_watchlist_dev_user_id)) -> JSONResponse:
+        from src.workspace.user_books import UserBookNotFoundError
+
+        try:
+            return JSONResponse(_watchlist_dev_service().get_book(user_id, book_id))
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/my-watchlist/api/books/{book_id}")
+    def my_watchlist_api_archive_book(book_id: str, user_id: int = Depends(_watchlist_dev_user_id)) -> JSONResponse:
+        from src.workspace.user_books import UserBookNotFoundError
+
+        try:
+            return JSONResponse(_watchlist_dev_service().archive_book(user_id, book_id))
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/my-watchlist/api/books/{book_id}/lines")
+    def my_watchlist_api_add_line(
+        book_id: str,
+        payload: UserBookLineRequest,
+        user_id: int = Depends(_watchlist_dev_user_id),
+    ) -> JSONResponse:
+        from src.workspace.user_books import UserBookError, UserBookNotFoundError
+
+        try:
+            return JSONResponse(
+                _watchlist_dev_service().add_line(
+                    user_id,
+                    book_id,
+                    symbol=payload.symbol,
+                    target_amount=payload.target_amount,
+                    notes=payload.notes,
+                ),
+                status_code=201,
+            )
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/my-watchlist/api/books/{book_id}/lines/{symbol}")
+    def my_watchlist_api_remove_line(
+        book_id: str,
+        symbol: str,
+        user_id: int = Depends(_watchlist_dev_user_id),
+    ) -> JSONResponse:
+        from src.workspace.user_books import UserBookNotFoundError
+
+        try:
+            return JSONResponse(_watchlist_dev_service().remove_line(user_id, book_id, symbol))
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/my-watchlist/api/books/{book_id}/lines/{symbol}")
+    def my_watchlist_api_update_line(
+        book_id: str,
+        symbol: str,
+        payload: UserBookLineUpdateRequest,
+        user_id: int = Depends(_watchlist_dev_user_id),
+    ) -> JSONResponse:
+        from src.workspace.user_books import UserBookError, UserBookNotFoundError
+
+        if payload.target_amount is None:
+            raise HTTPException(status_code=400, detail="target_amount is required.")
+        try:
+            return JSONResponse(
+                _watchlist_dev_service().update_line(
+                    user_id,
+                    book_id,
+                    symbol,
+                    target_amount=payload.target_amount,
+                    notes=payload.notes,
+                )
+            )
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/my-watchlist/api/universe")
+    def my_watchlist_api_universe(
+        market_id: str = Query(...),
+        q: str = Query(default=""),
+        user_id: int = Depends(_watchlist_dev_user_id),
+    ) -> JSONResponse:
+        from src.workspace.user_books import UserBookError
+
+        del user_id
+        try:
+            return JSONResponse(_watchlist_dev_service().list_universe(market_id, q))
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/my-watchlist/api/symbols")
+    def my_watchlist_api_search_symbols(
+        market_id: str = Query(...),
+        q: str = Query(..., min_length=1),
+        user_id: int = Depends(_watchlist_dev_user_id),
+    ) -> JSONResponse:
+        from src.workspace.user_books import UserBookError
+
+        del user_id  # dev parity with workspace route signature
+        try:
+            return JSONResponse(_watchlist_dev_service().search_symbols(market_id, q))
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/intraday", response_class=HTMLResponse)
     def intraday_page(
         request: Request,
@@ -1150,6 +1351,154 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         service = _workspace_service()
         event_id = service.repo.add_event(int(identity["id"]), {"type": "user_review", "impact": "low", "title": payload.action, "detail": payload.note or "Review recorded without broker execution.", "created_at": datetime.now(timezone.utc).isoformat()})
         return JSONResponse({"event_id": event_id, "status": "recorded", "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    def _user_book_service():
+        from src.workspace.user_books import UserBookService
+
+        return UserBookService(config)
+
+    @app.get("/api/v1/workspace/user-books")
+    def list_user_books(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        return JSONResponse(_user_book_service().list_books(int(identity["id"])))
+
+    @app.post("/api/v1/workspace/user-books")
+    def create_user_book(payload: UserBookCreateRequest, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.user_books import UserBookError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(service.create_book(int(identity["id"]), name=payload.name, market_id=payload.market_id, starting_capital=payload.starting_capital), status_code=201)
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/workspace/user-books/symbols")
+    def search_user_book_symbols(
+        market_id: str = Query(...),
+        q: str = Query(..., min_length=1),
+        identity: Dict[str, Any] = Depends(_workspace_identity),
+    ) -> JSONResponse:
+        from src.workspace.user_books import UserBookError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(service.search_symbols(market_id, q))
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/workspace/user-books/{book_id}")
+    def get_user_book(book_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.user_books import UserBookNotFoundError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(service.get_book(int(identity["id"]), book_id))
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/api/v1/workspace/user-books/{book_id}")
+    def update_user_book(book_id: str, payload: UserBookUpdateRequest, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.user_books import UserBookError, UserBookNotFoundError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(
+                service.update_book(
+                    int(identity["id"]),
+                    book_id,
+                    name=payload.name,
+                    starting_capital=payload.starting_capital,
+                )
+            )
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/workspace/user-books/{book_id}")
+    def archive_user_book(book_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.user_books import UserBookNotFoundError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(service.archive_book(int(identity["id"]), book_id))
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/v1/workspace/user-books/{book_id}/lines")
+    def list_user_book_lines(book_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.user_books import UserBookNotFoundError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(service.list_lines(int(identity["id"]), book_id))
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/v1/workspace/user-books/{book_id}/lines")
+    def add_user_book_line(book_id: str, payload: UserBookLineRequest, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.user_books import UserBookError, UserBookNotFoundError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(
+                service.add_line(
+                    int(identity["id"]),
+                    book_id,
+                    symbol=payload.symbol,
+                    target_amount=payload.target_amount,
+                    notes=payload.notes,
+                ),
+                status_code=201,
+            )
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/v1/workspace/user-books/{book_id}/lines/{symbol}")
+    def update_user_book_line(
+        book_id: str,
+        symbol: str,
+        payload: UserBookLineUpdateRequest,
+        identity: Dict[str, Any] = Depends(_workspace_identity),
+    ) -> JSONResponse:
+        from src.workspace.user_books import UserBookError, UserBookNotFoundError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(
+                service.update_line(
+                    int(identity["id"]),
+                    book_id,
+                    symbol,
+                    target_amount=payload.target_amount,
+                    notes=payload.notes,
+                )
+            )
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except UserBookError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/workspace/user-books/{book_id}/lines/{symbol}")
+    def remove_user_book_line(book_id: str, symbol: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.user_books import UserBookNotFoundError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(service.remove_line(int(identity["id"]), book_id, symbol))
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/v1/workspace/user-books/{book_id}/performance")
+    def user_book_performance(book_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.user_books import UserBookNotFoundError
+
+        service = _user_book_service()
+        try:
+            return JSONResponse(service.performance(int(identity["id"]), book_id))
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     # ------------------------------------------------------------------
     # React admin console contracts. These reuse the existing read-side
