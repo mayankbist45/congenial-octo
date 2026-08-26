@@ -117,6 +117,10 @@ class RazorpaySubscriptionPaymentRequest(BaseModel):
     razorpay_signature: str
 
 
+class BillingCheckoutRequest(BaseModel):
+    intent: Optional[str] = None
+
+
 def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = None) -> FastAPI:
     config = config or get_config()
     default_service = DashboardService(config)
@@ -178,9 +182,32 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
 
     _MARKET_NAV_ORDER = ("india_equity", "us_equity", "crypto_spot_us")
 
+    def _paper_fund_templates() -> List[Dict[str, Any]]:
+        """Swing personas eligible as watchlist paper-fund strategy templates."""
+        templates: List[Dict[str, Any]] = []
+        for pid in enabled_personas():
+            if pid.startswith("userbook_"):
+                continue
+            try:
+                pcfg = get_persona_config(pid, base=config)
+            except ValueError:
+                continue
+            if bool(pcfg.get("intraday.enabled", False)):
+                continue
+            templates.append(
+                {
+                    "id": pid,
+                    "description": persona_description(pid),
+                    "market_id": pcfg.market_id,
+                }
+            )
+        templates.sort(key=lambda row: row["id"])
+        return templates
+
     def _persona_nav_groups() -> List[Dict[str, Any]]:
         """Persona picker groups: India → US → Crypto, Swing then Intraday."""
         from src.market.registry import get_market, list_markets
+        from src.workspace.user_book_personas import UserBookPersonaRepository, active_userbook_persona_ids
 
         buckets: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
         for pid in enabled_personas():
@@ -212,6 +239,39 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             }
             bucket = buckets.setdefault(market_id, {"swing": [], "intraday": []})
             bucket[kind].append(item)
+
+        persona_repo = UserBookPersonaRepository(config)
+        for pid in active_userbook_persona_ids(config):
+            try:
+                pcfg = get_persona_config(pid, base=config)
+            except ValueError:
+                continue
+            row = persona_repo.get_by_persona_id(pid)
+            frozen = (row or {}).get("frozen_allocation") or {}
+            book_name = str(frozen.get("book_name") or pid)
+            market_id = str(frozen.get("market_id") or pcfg.market_id)
+            try:
+                market = get_market(market_id)
+                market_label_text = market.label
+                badge_class = market.display.badge_class
+            except ValueError:
+                market_label_text = market_id
+                badge_class = "region-in"
+            item = {
+                "id": pid,
+                "description": persona_description(pid),
+                "short_name": book_name,
+                "intraday": False,
+                "kind": "swing",
+                "kind_label": "Watchlist",
+                "market_id": market_id,
+                "market_label": market_label_text,
+                "badge_class": badge_class,
+                "region": pcfg.market_region,
+                "user_book": True,
+            }
+            bucket = buckets.setdefault(market_id, {"swing": [], "intraday": []})
+            bucket["swing"].append(item)
 
         for bucket in buckets.values():
             bucket["swing"].sort(key=lambda r: r["id"])
@@ -699,6 +759,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
                 "workspace_users": users,
                 "selected_user_id": selected_user_id,
                 "selected_book_id": book_id,
+                "paper_fund_templates": _paper_fund_templates(),
             },
             show_persona_selector=False,
             header_fund_name="Trade Bot Dashboard",
@@ -1064,15 +1125,44 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             )
         return snapshot
 
-    def _workspace_persona(persona_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def _workspace_persona(persona_id: str, user_id: Optional[int] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         snapshot = _workspace_snapshot()
         persona = next(
             (row for row in snapshot.get("personas", []) if row.get("id") == persona_id),
             None,
         )
+        if persona is None and user_id is not None and persona_id.startswith("userbook_"):
+            from src.workspace.user_book_personas import UserBookPersonaRepository
+            from src.workspace.userbook_persona_payload import build_userbook_persona_payload
+
+            row = UserBookPersonaRepository(config).get_by_persona_id(persona_id)
+            if row and int(row.get("user_id") or 0) == int(user_id) and row.get("status") == "active":
+                persona = build_userbook_persona_payload(persona_id, config)
         if persona is None:
             raise HTTPException(status_code=404, detail="Persona is unavailable in the latest delayed/EOD snapshot.")
         return snapshot, persona
+
+    def _persona_summary(persona: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": persona["id"],
+            "metadata": persona.get("metadata", {}),
+            "overview": persona.get("overview", {}),
+            "source_freshness": persona.get("source_freshness", {}),
+            "warnings": persona.get("warnings", []),
+        }
+
+    def _workspace_persona_summaries(user_id: int) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        from src.workspace.userbook_persona_payload import list_user_persona_payloads
+
+        snapshot = _workspace_snapshot()
+        summaries = [_persona_summary(persona) for persona in snapshot.get("personas", [])]
+        seen = {row["id"] for row in summaries}
+        for persona in list_user_persona_payloads(user_id, config):
+            if persona["id"] in seen:
+                continue
+            summaries.append(_persona_summary(persona))
+            seen.add(persona["id"])
+        return snapshot, summaries
 
     def _workspace_response(snapshot: Dict[str, Any], **payload: Any) -> JSONResponse:
         return JSONResponse({
@@ -1149,8 +1239,11 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return JSONResponse({"observation": observation}, status_code=201)
 
     @app.post("/api/v1/workspace/billing/checkout")
-    def workspace_billing_checkout(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
-        return JSONResponse(billing.checkout(identity))
+    def workspace_billing_checkout(
+        payload: BillingCheckoutRequest = BillingCheckoutRequest(),
+        identity: Dict[str, Any] = Depends(workspace_auth.identity),
+    ) -> JSONResponse:
+        return JSONResponse(billing.checkout(identity, intent=payload.intent))
 
     @app.post("/api/v1/workspace/billing/verify-payment")
     def workspace_billing_verify_payment(payload: RazorpaySubscriptionPaymentRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
@@ -1167,21 +1260,12 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
 
     @app.get("/api/v1/workspace/personas")
     def workspace_personas(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot = _workspace_snapshot()
-        summaries = []
-        for persona in snapshot.get("personas", []):
-            summaries.append({
-                "id": persona["id"],
-                "metadata": persona.get("metadata", {}),
-                "overview": persona.get("overview", {}),
-                "source_freshness": persona.get("source_freshness", {}),
-                "warnings": persona.get("warnings", []),
-            })
+        snapshot, summaries = _workspace_persona_summaries(int(identity["id"]))
         return _workspace_response(snapshot, personas=summaries)
 
     @app.get("/api/v1/workspace/personas/{persona_id}")
     def workspace_persona(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot, persona = _workspace_persona(persona_id)
+        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
         # Holdings and portfolio context stay frozen at the EOD publication
         # boundary, while journalled run history is safe to expose immediately.
         view = dict(persona)
@@ -1190,27 +1274,27 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
 
     @app.get("/api/v1/workspace/personas/{persona_id}/holdings")
     def workspace_persona_holdings(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot, persona = _workspace_persona(persona_id)
+        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
         return _workspace_response(snapshot, persona_id=persona_id, holdings=persona.get("holdings", []), sector_weights=persona.get("sector_weights", []), warnings=persona.get("warnings", []), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/performance")
     def workspace_persona_performance(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot, persona = _workspace_persona(persona_id)
+        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
         return _workspace_response(snapshot, persona_id=persona_id, performance=persona.get("performance", {}), series=persona.get("performance_series", {}), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/risk")
     def workspace_persona_risk(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot, persona = _workspace_persona(persona_id)
+        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
         return _workspace_response(snapshot, persona_id=persona_id, risk=persona.get("risk", {}), warnings=persona.get("warnings", []), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/news")
     def workspace_persona_news(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot, persona = _workspace_persona(persona_id)
+        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
         return _workspace_response(snapshot, persona_id=persona_id, news=persona.get("news", {"has_data": False}), intraday=persona.get("intraday"), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/runs")
     def workspace_persona_runs(persona_id: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot, persona = _workspace_persona(persona_id)
+        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
         return _workspace_response(snapshot, persona_id=persona_id, runs=_get_service(persona_id).runs(), source_freshness=persona.get("source_freshness", {}))
 
     @app.get("/api/v1/workspace/personas/{persona_id}/runs/{run_id}")
@@ -1220,7 +1304,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         identity: Dict[str, Any] = Depends(_workspace_identity),
     ) -> JSONResponse:
         """Return one auditable run, scoped to the persona in the URL."""
-        snapshot, persona = _workspace_persona(persona_id)
+        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
         run = _get_service(persona_id).run_detail(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run is unavailable for this persona.")
@@ -1284,7 +1368,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
 
     @app.get("/api/v1/workspace/personas/{persona_id}/stocks/{symbol}")
     def workspace_persona_stock(persona_id: str, symbol: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot, persona = _workspace_persona(persona_id)
+        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
         holding = next((item for item in persona.get("holdings", []) if item.get("symbol") == symbol.upper()), None)
         if holding is None:
             raise HTTPException(status_code=404, detail="Stock is not in this persona's latest delayed/EOD snapshot.")

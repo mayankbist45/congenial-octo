@@ -461,7 +461,7 @@ class UserBookService:
             book_id=book_id,
             persona=persona,
             persona_id=persona["persona_id"],
-            persona_dashboard_path=f"/?persona={persona['persona_id']}",
+            persona_dashboard_path=f"/persona/{persona['persona_id']}",
             status="active",
         )
 
@@ -477,7 +477,7 @@ class UserBookService:
             book_id=book_id,
             persona=persona,
             persona_id=persona["persona_id"],
-            persona_dashboard_path=f"/?persona={persona['persona_id']}",
+            persona_dashboard_path=f"/persona/{persona['persona_id']}",
         )
 
     def list_lines(self, user_id: int, book_id: str) -> Dict[str, Any]:

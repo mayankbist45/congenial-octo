@@ -68,6 +68,14 @@ class UserBookPersonaRepository:
             return None
         return self._hydrate(dict(row))
 
+    def list_active_for_user(self, user_id: int) -> List[Dict[str, Any]]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM user_book_personas WHERE user_id = ? AND status = 'active' ORDER BY created_at ASC",
+                (user_id,),
+            ).fetchall()
+        return [self._hydrate(dict(row)) for row in rows]
+
     def list_active_persona_ids(self) -> List[str]:
         with self._connection() as conn:
             rows = conn.execute(
