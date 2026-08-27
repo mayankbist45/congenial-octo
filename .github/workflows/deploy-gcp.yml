@@ -67,7 +67,7 @@ jobs:
             else
               changed_files="$(git diff --name-only "${before_sha}" "${GITHUB_SHA}")"
               printf 'Changed files since %s:\n%s\n' "${before_sha}" "${changed_files:-<none>}"
-              if printf '%s\n' "${changed_files}" | grep -Eq '^(requirements\.txt|scripts/bootstrap_vm\.sh|scripts/generate_schedule\.py|config/markets/)'; then
+              if printf '%s\n' "${changed_files}" | grep -Eq '^(requirements\.txt|Dockerfile\.agent-worker|deploy/|scripts/bootstrap_vm\.sh|scripts/deploy_gcp\.sh|scripts/generate_schedule\.py|config/markets/)'; then
                 should_bootstrap="true"
               fi
             fi

@@ -58,12 +58,12 @@ apt-get update -qq
 apt-get install -y -qq \
     python3 python3-venv python3-dev build-essential \
     postgresql postgresql-client libpq-dev \
-    git cron logrotate ca-certificates >/dev/null ||
+    git cron logrotate ca-certificates docker.io docker-compose-v2 >/dev/null ||
     {
         echo "error: package installation failed" >&2
         exit 1
     }
-systemctl enable --now postgresql cron >/dev/null 2>&1
+systemctl enable --now postgresql cron docker >/dev/null 2>&1
 echo "  packages installed, PostgreSQL $(psql --version | awk '{print $3}') running"
 
 # gsutil/gcloud is only needed to copy backups off the box. Absence is not fatal.
@@ -127,6 +127,37 @@ as_app "$PROJECT_DIR/.venv/bin/pip" install --quiet -r "$PROJECT_DIR/requirement
         exit 1
     }
 echo "  virtualenv ready ($("$PROJECT_DIR/.venv/bin/python" --version))"
+
+# --- Temporal ---------------------------------------------------------------
+# ponytail: one VM stack is sufficient for the pilot; split Temporal onto its
+# own managed database/cluster before multi-tenant production workloads.
+install -d -o "$APP_USER" -g "$SHARED_GROUP" -m 750 /etc/nivelo
+TEMPORAL_ENV=/etc/nivelo/temporal.env
+if [ ! -f "$TEMPORAL_ENV" ]; then
+    printf 'TEMPORAL_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >"$TEMPORAL_ENV"
+    chown "$APP_USER":"$SHARED_GROUP" "$TEMPORAL_ENV"
+    chmod 640 "$TEMPORAL_ENV"
+fi
+
+AGENT_ENV=/etc/nivelo/agent-worker.env
+if [ ! -f "$AGENT_ENV" ]; then
+    DB_URL="$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
+    cat >"$AGENT_ENV" <<EOF
+DATABASE_URL=${DB_URL/127.0.0.1/host.docker.internal}
+TEMPORAL_ADDRESS=temporal:7233
+TEMPORAL_NAMESPACE=default
+WORKSPACE_AGENT_MODEL=
+OPENAI_API_KEY=
+EOF
+    chown "$APP_USER":"$SHARED_GROUP" "$AGENT_ENV"
+    chmod 640 "$AGENT_ENV"
+fi
+
+install -D -m 0644 "$PROJECT_DIR/deploy/nivelo-temporal.service" /etc/systemd/system/nivelo-temporal.service
+systemctl daemon-reload
+systemctl enable --now nivelo-temporal >/dev/null 2>&1 &&
+    echo "  Temporal server up; dashboard remains private at 127.0.0.1:8233" ||
+    echo "  note: Temporal failed; check journalctl -u nivelo-temporal"
 
 chmod +x "$PROJECT_DIR"/scripts/*.sh
 

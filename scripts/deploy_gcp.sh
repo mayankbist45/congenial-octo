@@ -12,6 +12,7 @@
 #   ./scripts/deploy_gcp.sh logs        follow data/scheduled.log on the VM
 #   ./scripts/deploy_gcp.sh cloudlogs   read what the Ops Agent shipped to Cloud Logging
 #   ./scripts/deploy_gcp.sh dashboard   start the dashboard and print its public URL
+#   ./scripts/deploy_gcp.sh temporal    start Temporal and print the SSH tunnel command
 #   ./scripts/deploy_gcp.sh ssh         shell on the VM
 #   ./scripts/deploy_gcp.sh snapshots   nightly disk snapshots, 7 kept
 #   ./scripts/deploy_gcp.sh stop|start  pause billing for compute, keep the disk
@@ -205,7 +206,11 @@ push() {
     fi
 
     echo "Restarting dashboard service"
-    ssh_vm "sudo systemctl restart mutualfund-dashboard 2>/dev/null || true"
+    ssh_vm "sudo systemctl restart mutualfund-dashboard 2>/dev/null || true
+            sudo systemctl restart nivelo-temporal 2>/dev/null || true
+            if sudo docker compose --env-file /etc/nivelo/temporal.env -f '$REMOTE_DIR/deploy/temporal-compose.yml' --profile agent ps --status running --format '{{.Name}}' agent-worker 2>/dev/null | grep -q .; then
+                sudo docker compose --env-file /etc/nivelo/temporal.env -f '$REMOTE_DIR/deploy/temporal-compose.yml' --profile agent up -d --build agent-worker
+            fi"
 }
 
 bootstrap() {
@@ -270,6 +275,15 @@ dashboard() {
     ip="$(public_ip)"
     [ -n "$ip" ] || die "could not determine external IP"
     echo "Dashboard URL: http://$ip:8000"
+}
+
+temporal() {
+    instance_exists || die "$INSTANCE does not exist yet"
+    ssh_vm "sudo systemctl start nivelo-temporal &&
+            (exec 3<>/dev/tcp/127.0.0.1/8233) 2>/dev/null" ||
+        die "Temporal UI is not available; check journalctl -u nivelo-temporal"
+    echo "Temporal UI: http://127.0.0.1:8233"
+    echo "Run separately: gcloud compute ssh $INSTANCE --zone $ZONE -- -L 8233:127.0.0.1:8233"
 }
 
 case "${1:-help}" in
@@ -353,6 +367,11 @@ backup)
 dashboard)
     require_gcloud
     dashboard
+    ;;
+
+temporal)
+    require_gcloud
+    temporal
     ;;
 
 ssh)
