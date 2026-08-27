@@ -332,6 +332,7 @@ web:
     - "http://localhost:5173"
     - "http://127.0.0.1:5173"
     - "https://investment-research-web.vercel.app"
+    - "https://nivelo.in"
 
 # End-of-day persona digests → WhatsApp (Twilio). Credentials live in .env.
 notify:
