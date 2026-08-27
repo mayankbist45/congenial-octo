@@ -15,9 +15,10 @@ from datetime import datetime, timezone
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 
 import requests
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, HttpUrl
@@ -70,6 +71,28 @@ class WorkspaceActionRequest(BaseModel):
     note: Optional[str] = None
 
 
+class WorkspaceCaseRequest(BaseModel):
+    title: str
+    brief: str
+    scope: Dict[str, Any] = {}
+    deadline_at: Optional[datetime] = None
+
+
+class WorkspaceAgentRunRequest(BaseModel):
+    agent_type: str
+    brief: str
+    scope: Dict[str, Any] = {}
+
+
+class WorkspaceCaseCommentRequest(BaseModel):
+    body: str
+
+
+class WorkspaceCaseFinalizeRequest(BaseModel):
+    assessment: str
+    note: str
+
+
 class AdminProposalRequest(BaseModel):
     reason: str = ""
 
@@ -99,6 +122,8 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         workspace_auth = WorkspaceAuth(config)
 
     app = FastAPI(title=default_service.fund_name, docs_url="/api/docs")
+    from src.telemetry import instrument_fastapi
+    instrument_fastapi(app)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     allowed_origins = config.get(
         "web.allowed_origins",
@@ -111,7 +136,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         allow_origins=[str(origin) for origin in allowed_origins],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
     templates.env.globals["market_label"] = market_label
@@ -889,6 +914,11 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     def _workspace_identity(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> Dict[str, Any]:
         return billing.require_access(identity)
 
+    def _investment_lead(identity: Dict[str, Any] = Depends(_workspace_identity)) -> Dict[str, Any]:
+        if identity.get("role") not in {"pm", "cio"}:
+            raise HTTPException(status_code=403, detail="PM or CIO access is required to start or finalize research work.")
+        return identity
+
     @app.get("/api/v1/workspace/me")
     def workspace_me(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
         return JSONResponse({
@@ -959,6 +989,82 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     async def workspace_billing_webhook(request: Request) -> JSONResponse:
         billing.handle_webhook(await request.body(), request.headers.get("X-Razorpay-Signature", ""))
         return JSONResponse({"status": "ok"})
+
+    @app.get("/api/v1/workspace/agents")
+    def workspace_agent_catalog(_: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.agent_platform import catalog
+        return JSONResponse({"agents": catalog(), "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.get("/api/v1/workspace/cases")
+    def workspace_cases(_: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.agent_platform import AgentWorkRepository
+        return JSONResponse({"cases": AgentWorkRepository(config).cases(), "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.post("/api/v1/workspace/cases", status_code=201)
+    def create_workspace_case(payload: WorkspaceCaseRequest, identity: Dict[str, Any] = Depends(_investment_lead)) -> JSONResponse:
+        from src.workspace.agent_platform import AgentWorkRepository, CaseInput
+        try:
+            case = AgentWorkRepository(config).create_case(int(identity["id"]), CaseInput.model_validate(payload.model_dump()))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse({"case": case, "disclaimer": "Research workspace. Not investment advice. No live order execution."}, status_code=201)
+
+    @app.get("/api/v1/workspace/cases/{case_id}")
+    def workspace_case(case_id: str, _: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.agent_platform import AgentWorkRepository
+        try:
+            case = AgentWorkRepository(config).case(case_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"case": case, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.post("/api/v1/workspace/cases/{case_id}/runs", status_code=202)
+    def launch_workspace_agent(
+        case_id: str,
+        payload: WorkspaceAgentRunRequest,
+        background_tasks: BackgroundTasks,
+        identity: Dict[str, Any] = Depends(_investment_lead),
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        from src.workspace.agent_platform import AgentRunInput, AgentWorkRepository
+        from src.workspace.agent_runtime import AgentRuntime
+        try:
+            repo = AgentWorkRepository(config)
+            run = repo.create_run(case_id, int(identity["id"]), AgentRunInput.model_validate(payload.model_dump()), idempotency_key or str(uuid.uuid4()))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        background_tasks.add_task(AgentRuntime(config).dispatch, run["id"])
+        return JSONResponse({"run": run, "disclaimer": "Research workspace. Not investment advice. No live order execution."}, status_code=202)
+
+    @app.post("/api/v1/workspace/cases/{case_id}/runs/{run_id}/cancel")
+    def cancel_workspace_agent(case_id: str, run_id: str, background_tasks: BackgroundTasks, identity: Dict[str, Any] = Depends(_investment_lead)) -> JSONResponse:
+        from src.workspace.agent_platform import AgentWorkRepository
+        from src.workspace.agent_runtime import AgentRuntime
+        try:
+            run = AgentWorkRepository(config).cancel_run(case_id, run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if run.get("temporal_workflow_id"):
+            background_tasks.add_task(AgentRuntime(config).cancel, run["temporal_workflow_id"])
+        return JSONResponse({"run": run, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.post("/api/v1/workspace/cases/{case_id}/comments", status_code=201)
+    def add_workspace_case_comment(case_id: str, payload: WorkspaceCaseCommentRequest, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.agent_platform import AgentWorkRepository, CommentInput
+        try:
+            comment = AgentWorkRepository(config).add_comment(case_id, int(identity["id"]), CommentInput.model_validate(payload.model_dump()))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse({"comment": comment, "disclaimer": "Research workspace. Not investment advice. No live order execution."}, status_code=201)
+
+    @app.post("/api/v1/workspace/cases/{case_id}/finalize")
+    def finalize_workspace_case(case_id: str, payload: WorkspaceCaseFinalizeRequest, identity: Dict[str, Any] = Depends(_investment_lead)) -> JSONResponse:
+        from src.workspace.agent_platform import AgentWorkRepository, FinalizeInput
+        try:
+            case = AgentWorkRepository(config).finalize_case(case_id, int(identity["id"]), FinalizeInput.model_validate(payload.model_dump()))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse({"case": case, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     @app.get("/api/v1/workspace/personas")
     def workspace_personas(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
