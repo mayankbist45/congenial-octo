@@ -90,7 +90,7 @@ if [ $STATUS -eq 0 ]; then
     echo "--- finished cleanly at $(date '+%H:%M:%S') ---" >>"$LOG"
     emit_event "success" "exit_code=0"
     if [ "$COMMAND" = "close" ]; then
-        "$PYTHON" run_daily.py publish_dashboard >>"$LOG" 2>&1
+        "$PYTHON" run_daily.py publish_dashboard --refresh-portfolio >>"$LOG" 2>&1
         SNAPSHOT_STATUS=$?
         if [ $SNAPSHOT_STATUS -eq 0 ]; then
             emit_event "success" "job=publish_dashboard" "exit_code=0"

@@ -17,10 +17,12 @@ class DashboardSnapshotService:
     def __init__(self, config: Optional[Config] = None):
         self._config = config or get_config()
 
-    def publish(self, snapshot_date: Optional[date] = None, ipos: Optional[Dict[str, Any]] = None, refresh_ipos: bool = False) -> Dict[str, Any]:
+    def publish(self, snapshot_date: Optional[date] = None, ipos: Optional[Dict[str, Any]] = None, refresh_ipos: bool = False, refresh_portfolio: bool = False) -> Dict[str, Any]:
         day = (snapshot_date or date.today()).isoformat()
         existing = self.for_date(day)
         if existing is not None:
+            if refresh_portfolio:
+                return self.refresh_portfolio(snapshot_date, ipos=ipos)
             if refresh_ipos and ipos is not None:
                 refreshed = dict(existing)
                 refreshed["ipos"] = ipos
@@ -58,6 +60,28 @@ class DashboardSnapshotService:
                 "INSERT INTO dashboard_snapshots (snapshot_date, as_of, payload, created_at) VALUES (?, ?, ?, ?)",
                 (day, payload["as_of"], json.dumps(payload), payload["as_of"]),
             )
+            conn.commit()
+        finally:
+            conn.close()
+        return payload
+
+    def refresh_portfolio(self, snapshot_date: Optional[date] = None, ipos: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Publish current paper holdings without dropping today's IPO research."""
+        day = (snapshot_date or date.today()).isoformat()
+        existing = self.for_date(day)
+        payload = self._build_payload(day, ipos=ipos if ipos is not None else (existing or {}).get("ipos"))
+        conn = connect(self._config)
+        try:
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO dashboard_snapshots (snapshot_date, as_of, payload, created_at) VALUES (?, ?, ?, ?)",
+                    (day, payload["as_of"], json.dumps(payload), payload["as_of"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE dashboard_snapshots SET as_of = ?, payload = ? WHERE snapshot_date = ?",
+                    (payload["as_of"], json.dumps(payload), day),
+                )
             conn.commit()
         finally:
             conn.close()

@@ -105,6 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="replace only today's published IPO research data",
     )
     parser.add_argument(
+        "--refresh-portfolio",
+        action="store_true",
+        help="replace today's published paper holdings with the current journal state",
+    )
+    parser.add_argument(
         "--max-candidates",
         type=int,
         metavar="N",
@@ -592,6 +597,7 @@ def main(argv: Optional[list] = None) -> int:
             _parse_date(args.as_of) or date.today(),
             ipos=ipo_analysis,
             refresh_ipos=args.refresh_ipo_research,
+            refresh_portfolio=args.refresh_portfolio,
         )
         print(f"Published delayed/EOD dashboard snapshot for {snapshot['snapshot_date']} at {snapshot['as_of']}")
         return 0

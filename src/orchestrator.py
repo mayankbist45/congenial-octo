@@ -1212,8 +1212,11 @@ class FundManager:
                     as_of=self._prices.latest_data_date() or date.today(),
                     technicals=technicals,
                 )
+                from src.workspace.dashboard_snapshot import DashboardSnapshotService
+
+                DashboardSnapshotService(self._config).refresh_portfolio()
             except Exception as exc:
-                logger.error("Post-execution book refresh failed: %s", exc, exc_info=True)
+                logger.error("Post-execution workspace refresh failed: %s", exc, exc_info=True)
 
         return summary
 

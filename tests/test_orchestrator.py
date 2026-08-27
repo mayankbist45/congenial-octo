@@ -723,10 +723,15 @@ def test_auto_approval_is_refused_outside_paper_trading(temp_config) -> None:
     assert len(repo.pending_proposals()) == 1
 
 
-def test_auto_approved_proposals_reach_the_broker(temp_config) -> None:
+def test_auto_approved_proposals_reach_the_broker(temp_config, monkeypatch) -> None:
     manager, repo = auto_manager(temp_config)
     queue_proposal(repo)
     manager.auto_approve()
+    refreshed = []
+    monkeypatch.setattr(
+        "src.workspace.dashboard_snapshot.DashboardSnapshotService.refresh_portfolio",
+        lambda *_: refreshed.append(True),
+    )
 
     summary = manager.execute_approved(
         technicals={"WIPRO": make_technical("WIPRO", last_price=100.0)}
@@ -734,6 +739,7 @@ def test_auto_approved_proposals_reach_the_broker(temp_config) -> None:
 
     assert summary.placed
     assert manager.broker.orders[0].symbol == "WIPRO"
+    assert refreshed == [True]
 
 
 def test_auto_mode_reads_the_config_switch(temp_config) -> None:

@@ -216,6 +216,16 @@ def test_workspace_ipo_refresh_preserves_the_daily_snapshot(temp_config):
     assert refreshed["ipos"]["issues"][0]["id"] == "new"
 
 
+def test_workspace_portfolio_refresh_preserves_the_daily_ipo_research(temp_config):
+    publisher = DashboardSnapshotService(temp_config)
+    day = date.today()
+    publisher.publish(day, ipos={"issues": [{"id": "acme"}]})
+
+    refreshed = publisher.refresh_portfolio(day)
+
+    assert refreshed["ipos"]["issues"][0]["id"] == "acme"
+
+
 def test_workspace_persona_contracts_are_member_read_only(temp_config):
     client, _ = client_with_member(temp_config)
     published = DashboardSnapshotService(temp_config).publish(date(2026, 8, 21))
