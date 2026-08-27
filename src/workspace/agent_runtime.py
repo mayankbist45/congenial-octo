@@ -12,7 +12,8 @@ from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from src.config import Config, get_config
-from src.workspace.agent_platform import AgentWorkRepository, EvidenceArtifact, SourceRecord
+from src.workspace.agent_platform import AgentRunInput, AgentWorkRepository, agent_contract, build_pydantic_agent, validate_evidence
+from src.workspace.agent_sources import AgentSourceCollector
 
 TASK_QUEUE = "nivelo-agent-work"
 
@@ -53,12 +54,13 @@ class AgentRuntime:
         await client.get_workflow_handle(temporal_workflow_id).cancel()
 
 
-def _artifact_prompt(run: Dict[str, Any]) -> str:
+def _artifact_prompt(run: Dict[str, Any], sources: list[Dict[str, Any]]) -> str:
     return (
         "You are a research-only public-markets work agent. Return only the requested structured output. "
         "Do not provide trade instructions. If verified source data is unavailable, set coverage_status to unavailable, "
         "confidence to 0, assessment to investigate, and clearly explain the limitation.\n\n"
-        f"Agent: {run['agent_type']}\nBrief: {run['input']['brief']}\nScope: {run['input']['scope']}"
+        f"Agent: {run['agent_type']}\nBrief: {run['input']['brief']}\nScope: {run['input']['scope']}\n"
+        f"Approved source coverage: {sources}"
     )
 
 
@@ -70,14 +72,19 @@ def execute_agent_run(run_id: str) -> None:
         return
     repo.set_run_status(run_id, "running")
     try:
-        from pydantic_ai import Agent
-
         model = os.getenv("WORKSPACE_AGENT_MODEL", "").strip()
         if not model:
             raise RuntimeError("WORKSPACE_AGENT_MODEL is not configured.")
-        result = Agent(model, output_type=EvidenceArtifact).run_sync(_artifact_prompt(run))
+        input_payload = AgentRunInput.model_validate(run["input"])
+        contract = agent_contract(input_payload.agent_type)
+        case = repo.case(run["case_id"])
+        completed_artifacts = sum(len(item.get("artifacts", [])) for item in case["runs"] if item["status"] == "completed")
+        sources = AgentSourceCollector().collect(contract, input_payload.scope, completed_artifacts)
+        result = build_pydantic_agent(contract, model).run_sync(
+            _artifact_prompt(run, [source.model_dump(mode="json") for source in sources])
+        )
         artifact = result.output
-        sources = [SourceRecord(label="Agent coverage declaration", coverage_status=artifact.coverage_status)]
+        validate_evidence(contract, artifact, sources)
         repo.save_artifact(run_id, artifact, sources)
         repo.set_run_status(run_id, "completed")
     except Exception as exc:

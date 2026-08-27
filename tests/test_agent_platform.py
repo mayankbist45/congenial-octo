@@ -37,6 +37,7 @@ def test_pm_case_run_comment_and_finalize_are_auditable(temp_config):
         headers={"Idempotency-Key": "nvidia-earnings-1"},
     )
     assert run.status_code == 202
+    assert run.json()["run"]["agent_version"] == "2"
     duplicate = client.post(
         f"/api/v1/workspace/cases/{case_id}/runs",
         json={"agent_type": "company_deep_dive", "brief": "Review the earnings setup and key risks.", "scope": {"symbols": ["NVDA"]}},

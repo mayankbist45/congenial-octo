@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.config import Config, get_config
 from src.journal.db import connect
@@ -18,6 +18,8 @@ from src.journal.db import connect
 Assessment = Literal["strengthen", "monitor", "investigate", "no_action", "escalate"]
 CoverageStatus = Literal["available", "partial", "stale", "unavailable"]
 AgentType = Literal["company_deep_dive", "event_impact", "comparative_screen", "portfolio_risk_review", "ic_memo"]
+SourceCategory = Literal["market_data", "fundamentals", "news", "filings", "portfolio_snapshot", "case_artifacts"]
+ToolName = Literal["fetch_eodhd_market_data", "fetch_eodhd_fundamentals", "fetch_eodhd_news", "fetch_primary_filings", "read_portfolio_snapshot", "read_case_artifacts"]
 
 
 def _now() -> str:
@@ -68,6 +70,7 @@ class FinalizeInput(BaseModel):
 
 class SourceRecord(BaseModel):
     label: str
+    category: SourceCategory = "case_artifacts"
     source_url: Optional[str] = None
     observed_at: Optional[str] = None
     coverage_status: CoverageStatus
@@ -83,31 +86,89 @@ class EvidenceArtifact(BaseModel):
     assessment: Assessment
     confidence: float = Field(ge=0, le=1)
     next_step: str
+    source_labels: List[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def unavailable_artifacts_are_explicit(self) -> "EvidenceArtifact":
+        if self.coverage_status == "unavailable" and (self.confidence != 0 or self.assessment != "investigate"):
+            raise ValueError("Unavailable evidence must have zero confidence and an investigate assessment.")
+        if self.coverage_status in {"partial", "stale"} and self.confidence > 0.6:
+            raise ValueError("Partial or stale evidence cannot have confidence above 0.6.")
+        return self
 
 
-AGENT_CATALOG: Dict[str, Dict[str, Any]] = {
-    "company_deep_dive": {"label": "Company Deep Dive", "description": "Build a source-backed company view across fundamentals, valuation, catalysts, and risks.", "requires_symbols": True, "timeout_seconds": 900, "token_budget": 18_000},
-    "event_impact": {"label": "Event Impact", "description": "Assess how a company, sector, or market event changes the specified scope.", "requires_symbols": False, "timeout_seconds": 600, "token_budget": 12_000},
-    "comparative_screen": {"label": "Comparative Screen", "description": "Compare a focused set of securities on normalized evidence and disclosed coverage.", "requires_symbols": True, "minimum_symbols": 2, "timeout_seconds": 900, "token_budget": 16_000},
-    "portfolio_risk_review": {"label": "Portfolio Risk Review", "description": "Review portfolio context without changing holdings, exposures, or risk limits.", "requires_portfolio": True, "timeout_seconds": 600, "token_budget": 10_000},
-    "ic_memo": {"label": "IC Memo", "description": "Synthesize completed case evidence into a reviewable investment-committee memo.", "requires_completed_case": True, "timeout_seconds": 600, "token_budget": 10_000},
+class AgentContract(BaseModel):
+    id: AgentType
+    version: str
+    label: str
+    description: str
+    allowed_tools: Tuple[ToolName, ...]
+    required_sources: Tuple[SourceCategory, ...]
+    timeout_seconds: int = Field(gt=0, le=900)
+    retry_limit: int = Field(ge=0, le=3)
+    token_budget: int = Field(gt=0, le=20_000)
+    requires_symbols: bool = False
+    minimum_symbols: int = 0
+    requires_portfolio: bool = False
+    requires_completed_case: bool = False
+
+
+AGENT_CATALOG: Dict[str, AgentContract] = {
+    "company_deep_dive": AgentContract(id="company_deep_dive", version="2", label="Company Deep Dive", description="Build a source-backed company view across fundamentals, valuation, catalysts, and risks.", allowed_tools=("fetch_eodhd_fundamentals", "fetch_primary_filings"), required_sources=("fundamentals", "filings"), requires_symbols=True, timeout_seconds=900, retry_limit=1, token_budget=18_000),
+    "event_impact": AgentContract(id="event_impact", version="2", label="Event Impact", description="Assess how a company, sector, or market event changes the specified scope.", allowed_tools=("fetch_eodhd_news", "fetch_primary_filings"), required_sources=("news", "filings"), timeout_seconds=600, retry_limit=1, token_budget=12_000),
+    "comparative_screen": AgentContract(id="comparative_screen", version="2", label="Comparative Screen", description="Compare a focused set of securities on normalized evidence and disclosed coverage.", allowed_tools=("fetch_eodhd_market_data", "fetch_eodhd_fundamentals"), required_sources=("market_data", "fundamentals"), requires_symbols=True, minimum_symbols=2, timeout_seconds=900, retry_limit=1, token_budget=16_000),
+    "portfolio_risk_review": AgentContract(id="portfolio_risk_review", version="2", label="Portfolio Risk Review", description="Review portfolio context without changing holdings, exposures, or risk limits.", allowed_tools=("read_portfolio_snapshot", "fetch_eodhd_market_data"), required_sources=("portfolio_snapshot", "market_data"), requires_portfolio=True, timeout_seconds=600, retry_limit=1, token_budget=10_000),
+    "ic_memo": AgentContract(id="ic_memo", version="2", label="IC Memo", description="Synthesize completed case evidence into a reviewable investment-committee memo.", allowed_tools=("read_case_artifacts",), required_sources=("case_artifacts",), requires_completed_case=True, timeout_seconds=600, retry_limit=0, token_budget=10_000),
 }
 
 
 def catalog() -> List[Dict[str, Any]]:
-    return [{"id": key, **value} for key, value in AGENT_CATALOG.items()]
+    return [contract.model_dump(mode="json") for contract in AGENT_CATALOG.values()]
+
+
+def agent_contract(agent_type: AgentType) -> AgentContract:
+    return AGENT_CATALOG[agent_type]
 
 
 def validate_run_input(payload: AgentRunInput, completed_runs: int = 0) -> None:
-    spec = AGENT_CATALOG[payload.agent_type]
-    if spec.get("requires_symbols") and not payload.scope.symbols:
+    spec = agent_contract(payload.agent_type)
+    if spec.requires_symbols and not payload.scope.symbols:
         raise ValueError("This agent requires at least one symbol.")
-    if len(payload.scope.symbols) < spec.get("minimum_symbols", 0):
+    if len(payload.scope.symbols) < spec.minimum_symbols:
         raise ValueError("This agent requires at least two symbols for comparison.")
-    if spec.get("requires_portfolio") and not payload.scope.portfolio_persona_id:
+    if spec.requires_portfolio and not payload.scope.portfolio_persona_id:
         raise ValueError("Portfolio Risk Review requires a portfolio persona.")
-    if spec.get("requires_completed_case") and not completed_runs:
+    if spec.requires_completed_case and not completed_runs:
         raise ValueError("IC Memo requires at least one completed agent run in the case.")
+
+
+def validate_evidence(contract: AgentContract, artifact: EvidenceArtifact, sources: List[SourceRecord]) -> None:
+    labels = {source.label for source in sources}
+    if set(artifact.source_labels) - labels:
+        raise ValueError("Evidence references an unknown source.")
+    available = {source.category for source in sources if source.coverage_status == "available"}
+    missing = set(contract.required_sources) - available
+    if artifact.coverage_status == "available" and missing:
+        raise ValueError("Available evidence is missing required sources.")
+    if artifact.coverage_status != "unavailable" and not artifact.source_labels:
+        raise ValueError("Evidence with coverage must cite at least one source.")
+
+
+def build_pydantic_agent(contract: AgentContract, model: Any, output_type: Any = EvidenceArtifact) -> Any:
+    """Build a worker-only PydanticAI agent with exactly the contract's tools."""
+    from pydantic_ai import Agent
+
+    agent = Agent(model, output_type=output_type, instructions=(
+        "You produce research-only, source-backed analysis. Never propose orders, sizing, "
+        "or trade execution. Use only the provided tools and disclose unavailable coverage."
+    ))
+    for tool_name in contract.allowed_tools:
+        def declared_tool(name: str = tool_name) -> str:
+            """Return the approved source boundary for this agent."""
+            return f"{name} is an approved source boundary."
+        declared_tool.__name__ = tool_name
+        agent.tool_plain(declared_tool)
+    return agent
 
 
 class AgentWorkRepository:
@@ -158,8 +219,8 @@ class AgentWorkRepository:
             if existing:
                 return self._run_view(dict(existing))
             conn.execute(
-                "INSERT INTO agent_runs (id, case_id, agent_type, agent_version, input_payload, idempotency_key, requested_by_user_id, created_at, updated_at) VALUES (?, ?, ?, '1', ?, ?, ?, ?, ?)",
-                (run_id, case_id, payload.agent_type, payload.model_dump_json(), idempotency_key, user_id, now, now),
+                "INSERT INTO agent_runs (id, case_id, agent_type, agent_version, input_payload, idempotency_key, requested_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (run_id, case_id, payload.agent_type, agent_contract(payload.agent_type).version, payload.model_dump_json(), idempotency_key, user_id, now, now),
             )
             conn.execute("UPDATE research_cases SET updated_at = ? WHERE id = ?", (now, case_id))
             conn.commit()
@@ -218,7 +279,7 @@ class AgentWorkRepository:
             for source in sources:
                 conn.execute(
                     "INSERT INTO agent_sources (id, agent_run_id, label, source_url, observed_at, coverage_status, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (str(uuid.uuid4()), run_id, source.label, source.source_url, source.observed_at, source.coverage_status, json.dumps(source.details), now),
+                    (str(uuid.uuid4()), run_id, source.label, source.source_url, source.observed_at, source.coverage_status, json.dumps({**source.details, "category": source.category}), now),
                 )
             conn.commit()
 
