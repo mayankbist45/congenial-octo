@@ -1,7 +1,7 @@
 """User-curated paper watchlists (UI: My Watchlist; API: user_books).
 
-Track-only Phase 1: users allocate capital to symbols and see delayed EOD marks.
-No broker execution and no paper persona provisioning.
+Users track static portfolios from creation date. Optional activation spawns an
+independent userbook_* paper persona on the full market universe.
 """
 
 from __future__ import annotations
@@ -58,11 +58,27 @@ def market_config(base: Config, market_id: str) -> Config:
 
 
 def universe_for_market(market_id: str) -> Universe:
-    """Load the investable universe CSV for a marketplace."""
+    """Load the fund-default universe CSV for a marketplace."""
     market = get_market(market_id)
     universe_file = str(market.universe.get("file") or "data/nifty500.csv")
     path = PROJECT_ROOT / universe_file if not universe_file.startswith("/") else universe_file
     return _load_universe_cached(str(path))
+
+
+def watchlist_universe_for_market(market_id: str) -> Universe:
+    """Load the wide symbol list used for watchlist search and validation."""
+    market = get_market(market_id)
+    universe_file = str(
+        market.universe.get("watchlist_file")
+        or market.universe.get("persona_file")
+        or market.universe.get("file")
+        or "data/nse_equity_all.csv"
+    )
+    path = PROJECT_ROOT / universe_file if not universe_file.startswith("/") else universe_file
+    try:
+        return _load_universe_cached(str(path))
+    except FileNotFoundError:
+        return universe_for_market(market_id)
 
 
 class UserBookRepository:
@@ -327,7 +343,7 @@ class UserBookRepository:
     def list_tracking_books(self) -> List[Tuple[str, int]]:
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT id, user_id FROM user_books WHERE status IN ('tracking', 'active_paper') ORDER BY updated_at ASC"
+                "SELECT id, user_id FROM user_books WHERE status = 'tracking' ORDER BY updated_at ASC"
             ).fetchall()
         return [(str(row["id"]), int(row["user_id"])) for row in rows]
 
@@ -456,13 +472,13 @@ class UserBookService:
             lines,
             template_persona_id=template_persona_id,
         )
-        self.repo.update_book(book_id, user_id, status="active_paper")
         return self.envelope(
             book_id=book_id,
             persona=persona,
             persona_id=persona["persona_id"],
             persona_dashboard_path=f"/persona/{persona['persona_id']}",
             status="active",
+            applies_on="next_long_cycle",
         )
 
     def linked_persona(self, user_id: int, book_id: str) -> Dict[str, Any]:
@@ -506,7 +522,7 @@ class UserBookService:
             raise UserBookError("target_amount must be positive.")
         if self.repo.count_lines(book_id, user_id) >= MAX_LINES_PER_BOOK:
             raise UserBookError(f"Maximum of {MAX_LINES_PER_BOOK} holdings per watchlist reached.")
-        universe = universe_for_market(book["market_id"])
+        universe = watchlist_universe_for_market(book["market_id"])
         if not universe.contains(symbol):
             raise UserBookError(f"{symbol} is not in the {book['market_id']} universe.")
         try:
@@ -517,7 +533,7 @@ class UserBookService:
 
         entry_price = self._price_service(book["market_id"]).get_last_price(symbol)
         if entry_price is None or entry_price <= 0:
-            raise UserBookError(f"No delayed EOD price available for {symbol}.")
+            raise UserBookError(f"No price available for {symbol}.")
 
         lines = self.repo.list_lines(book_id, user_id)
         invested_after = sum(float(line["target_amount"] or 0) for line in lines) + float(target_amount)
@@ -637,7 +653,7 @@ class UserBookService:
         needle: str,
         limit: Optional[int],
     ) -> List[Dict[str, str]]:
-        universe = universe_for_market(market_id)
+        universe = watchlist_universe_for_market(market_id)
         matches: List[Dict[str, str]] = []
         for entry in universe:
             if needle and needle not in entry.symbol and needle not in entry.company_name.upper():
@@ -692,8 +708,10 @@ class UserBookService:
         return {
             "total_value": capital,
             "total_return_pct": 0.0,
+            "return_since_created_pct": 0.0,
             "invested_amount": 0.0,
             "unallocated_cash": capital,
+            "created_at": book.get("created_at"),
         }
 
     def _summarize_book(self, book: Dict[str, Any], lines: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -707,8 +725,10 @@ class UserBookService:
         return {
             "total_value": round(total_value, 2),
             "total_return_pct": round(total_return_pct, 4),
+            "return_since_created_pct": round(total_return_pct, 4),
             "invested_amount": round(invested, 2),
             "unallocated_cash": round(unallocated, 2),
+            "created_at": book.get("created_at"),
         }
 
     def _mark_lines(self, book: Dict[str, Any], lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -716,7 +736,7 @@ class UserBookService:
             return []
         symbols = [line["symbol"] for line in lines]
         prices = self._price_service(book["market_id"]).get_last_prices(symbols)
-        universe = universe_for_market(book["market_id"])
+        universe = watchlist_universe_for_market(book["market_id"])
         invested = sum(float(line["target_amount"] or 0) for line in lines)
         marked: List[Dict[str, Any]] = []
         for line in lines:

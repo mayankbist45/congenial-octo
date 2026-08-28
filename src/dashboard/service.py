@@ -120,6 +120,12 @@ class DashboardService:
         self._performance = PerformanceCalculator(self._config)
         self._learning = LearningService(self._config)
         self._ops_now = datetime.now
+        self._memo: Dict[str, Any] = {}
+
+    def _cached(self, key: str, factory):
+        if key not in self._memo:
+            self._memo[key] = factory()
+        return self._memo[key]
 
     @property
     def repository(self) -> JournalRepository:
@@ -337,6 +343,40 @@ class DashboardService:
             "latest_analysis_date": latest_analysis_date,
         }
 
+    def card_metrics(self) -> Dict[str, Any]:
+        """Lightweight portfolio headline metrics for list cards."""
+        run = self._cached("latest_run", self._repo.latest_run)
+        history = self._cached("nav_history", self._repo.nav_history)
+        latest = history[-1] if history else None
+        rows = self._repo.latest_position_snapshot()
+        position_count = len(rows)
+        if not position_count:
+            position_count = len(self.holdings())
+        capital = float(self._config.secrets.initial_capital)
+        total_value = float(latest["total_value"]) if latest else capital
+        cash = float(latest["cash"]) if latest else capital
+        if rows and latest and float(latest.get("invested_value") or 0.0) <= 0:
+            holdings = self.holdings()
+            if holdings:
+                reconciled = self._reconstructed_book_totals(holdings)
+                total_value = reconciled["total_value"]
+                cash = reconciled["cash"]
+        cash_pct = (cash / total_value * 100.0) if total_value > 0 else 0.0
+        total_return_pct = (
+            (total_value / capital - 1.0) * 100.0
+            if capital > 0 and total_value > 0
+            else 0.0 if capital > 0 else None
+        )
+        return {
+            "has_data": bool(run) or position_count > 0,
+            "total_value": total_value,
+            "total_return_pct": total_return_pct,
+            "position_count": position_count,
+            "cash_pct": cash_pct,
+            "latest_nav_date": str(latest["run_date"]) if latest else None,
+            "latest_analysis_date": str(run["run_date"]) if run else None,
+        }
+
     def _run_view(self, run: Dict[str, Any]) -> Dict[str, Any]:
         stage_status = _loads(run.get("stage_status"), {})
         command = run.get("command") or "analyse"
@@ -402,6 +442,9 @@ class DashboardService:
     # Holdings
     # ------------------------------------------------------------------
     def holdings(self) -> List[Dict[str, Any]]:
+        return self._cached("holdings", self._load_holdings)
+
+    def _load_holdings(self) -> List[Dict[str, Any]]:
         rows = self._repo.latest_position_snapshot()
         if rows:
             return [
@@ -462,6 +505,9 @@ class DashboardService:
         return views
 
     def sector_weights(self) -> List[Dict[str, Any]]:
+        return self._cached("sector_weights", self._load_sector_weights)
+
+    def _load_sector_weights(self) -> List[Dict[str, Any]]:
         buckets: Dict[str, float] = {}
         for holding in self.holdings():
             weight = holding["weight_pct"] or 0.0
@@ -589,8 +635,11 @@ class DashboardService:
     # Performance and risk
     # ------------------------------------------------------------------
     def performance(self) -> Dict[str, Any]:
+        return self._cached("performance", self._load_performance)
+
+    def _load_performance(self) -> Dict[str, Any]:
         report = self._performance.report()
-        history = self._repo.nav_history()
+        history = self._cached("nav_history", self._repo.nav_history)
         latest = history[-1] if history else None
 
         # If the latest recorded NAV is stale versus the latest holdings mark,
@@ -666,6 +715,9 @@ class DashboardService:
         return [round(v / values[0] * 100.0, 3) for v in values]
 
     def risk_profile(self) -> Optional[Dict[str, Any]]:
+        return self._cached("risk_profile", self._load_risk_profile)
+
+    def _load_risk_profile(self) -> Optional[Dict[str, Any]]:
         row = self._repo.latest_risk_profile()
         if not row:
             return None

@@ -111,6 +111,12 @@ class UserBookActivateRequest(BaseModel):
     template_persona_id: str = "balanced"
 
 
+class UserPersonaUpdateRequest(BaseModel):
+    template_persona_id: Optional[str] = None
+    starting_capital: Optional[float] = None
+    holdings: Optional[List[Dict[str, Any]]] = None
+
+
 class RazorpaySubscriptionPaymentRequest(BaseModel):
     razorpay_payment_id: str
     razorpay_subscription_id: str
@@ -1114,19 +1120,27 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         from src.workspace.service import WorkspaceService
         return WorkspaceService(config)
 
-    def _workspace_snapshot() -> Dict[str, Any]:
+    def _workspace_snapshot(required: bool = True) -> Dict[str, Any]:
         from src.workspace.dashboard_snapshot import DashboardSnapshotService
 
         snapshot = DashboardSnapshotService(config).latest()
         if snapshot is None:
-            raise HTTPException(
-                status_code=404,
-                detail="No delayed/EOD dashboard snapshot has been published yet.",
-            )
+            if required:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No dashboard snapshot has been published yet.",
+                )
+            return {
+                "as_of": None,
+                "snapshot_date": None,
+                "data_status": "delayed_eod",
+                "disclaimer": "Research workspace. Not investment advice. No live order execution.",
+                "personas": [],
+            }
         return snapshot
 
     def _workspace_persona(persona_id: str, user_id: Optional[int] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        snapshot = _workspace_snapshot()
+        snapshot = _workspace_snapshot(required=not persona_id.startswith("userbook_"))
         persona = next(
             (row for row in snapshot.get("personas", []) if row.get("id") == persona_id),
             None,
@@ -1137,9 +1151,12 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
 
             row = UserBookPersonaRepository(config).get_by_persona_id(persona_id)
             if row and int(row.get("user_id") or 0) == int(user_id) and row.get("status") == "active":
-                persona = build_userbook_persona_payload(persona_id, config)
+                try:
+                    persona = build_userbook_persona_payload(persona_id, config)
+                except ValueError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
         if persona is None:
-            raise HTTPException(status_code=404, detail="Persona is unavailable in the latest delayed/EOD snapshot.")
+            raise HTTPException(status_code=404, detail="Persona is unavailable in the latest published snapshot.")
         return snapshot, persona
 
     def _persona_summary(persona: Dict[str, Any]) -> Dict[str, Any]:
@@ -1154,7 +1171,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     def _workspace_persona_summaries(user_id: int) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
         from src.workspace.userbook_persona_payload import list_user_persona_payloads
 
-        snapshot = _workspace_snapshot()
+        snapshot = _workspace_snapshot(required=False)
         summaries = [_persona_summary(persona) for persona in snapshot.get("personas", [])]
         seen = {row["id"] for row in summaries}
         for persona in list_user_persona_payloads(user_id, config):
@@ -1219,7 +1236,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         snapshot = _workspace_snapshot()
         issue = next((item for item in snapshot.get("ipos", {}).get("issues", []) if item.get("id") == ipo_id), None)
         if issue is None:
-            raise HTTPException(status_code=404, detail="IPO research is unavailable in the latest delayed/EOD snapshot.")
+            raise HTTPException(status_code=404, detail="IPO research is unavailable in the latest published snapshot.")
         return _workspace_response(snapshot, ipo=issue)
 
     @app.post("/api/v1/admin/ipos/{ipo_id}/gmp-observations", status_code=201)
@@ -1231,7 +1248,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             raise HTTPException(status_code=422, detail="GMP value must be a finite number.")
         snapshot = _workspace_snapshot()
         if not any(item.get("id") == ipo_id for item in snapshot.get("ipos", {}).get("issues", [])):
-            raise HTTPException(status_code=404, detail="IPO is unavailable in the latest delayed/EOD snapshot.")
+            raise HTTPException(status_code=404, detail="IPO is unavailable in the latest published snapshot.")
         observation = _workspace_service().repo.add_gmp_observation(
             ipo_id, source_name, payload.gmp_value, str(payload.source_url),
             payload.observed_at.astimezone(timezone.utc).isoformat(), int(identity["id"]),
@@ -1357,7 +1374,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         snapshot = _workspace_snapshot()
         holding = next((item for item in (snapshot or {}).get("holdings", []) if item.get("symbol") == symbol.upper()), None)
         if holding is None:
-            raise HTTPException(status_code=404, detail="Stock is not in the latest delayed/EOD dashboard snapshot.")
+            raise HTTPException(status_code=404, detail="Stock is not in the latest published dashboard snapshot.")
         return JSONResponse({
             "stock": holding,
             "as_of": snapshot["as_of"],
@@ -1368,10 +1385,33 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
 
     @app.get("/api/v1/workspace/personas/{persona_id}/stocks/{symbol}")
     def workspace_persona_stock(persona_id: str, symbol: str, identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
-        snapshot, persona = _workspace_persona(persona_id, int(identity["id"]))
+        user_id = int(identity["id"])
+        if persona_id.startswith("userbook_"):
+            from src.workspace.holding_intelligence import HoldingIntelligenceService
+            from src.workspace.user_book_personas import UserBookPersonaNotFoundError
+
+            try:
+                intelligence = HoldingIntelligenceService(config).for_user_persona_holding(
+                    persona_id,
+                    symbol.upper(),
+                    user_id=user_id,
+                )
+            except UserBookPersonaNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            snapshot = _workspace_snapshot(required=False)
+            return _workspace_response(
+                snapshot,
+                persona_id=persona_id,
+                intelligence=intelligence,
+                evidence=intelligence.get("evidence") or [],
+            )
+
+        snapshot, persona = _workspace_persona(persona_id, user_id)
         holding = next((item for item in persona.get("holdings", []) if item.get("symbol") == symbol.upper()), None)
         if holding is None:
-            raise HTTPException(status_code=404, detail="Stock is not in this persona's latest delayed/EOD snapshot.")
+            raise HTTPException(status_code=404, detail="Stock is not in this persona's latest published snapshot.")
         return _workspace_response(snapshot, persona_id=persona_id, stock=holding, evidence=[{
             "type": "fund_journal",
             "label": "Fund holding thesis",
@@ -1637,6 +1677,125 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             return JSONResponse(service.linked_persona(int(identity["id"]), book_id))
         except UserBookNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/v1/workspace/user-books/{book_id}/lines/{symbol}/research")
+    def user_book_line_research(
+        book_id: str,
+        symbol: str,
+        identity: Dict[str, Any] = Depends(_workspace_identity),
+    ) -> JSONResponse:
+        from src.workspace.holding_intelligence import HoldingIntelligenceService
+        from src.workspace.user_books import UserBookNotFoundError
+
+        try:
+            research = HoldingIntelligenceService(config).for_watchlist_line(
+                int(identity["id"]),
+                book_id,
+                symbol.upper(),
+            )
+        except UserBookNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({**research, "disclaimer": "Paper tracker. Not investment advice. No live order execution."})
+
+    @app.get("/api/v1/workspace/user-personas")
+    def list_user_personas(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
+        from src.workspace.userbook_persona_payload import list_user_persona_summaries
+
+        service = UserBookPersonaService(config)
+        personas = list_user_persona_summaries(int(identity["id"]), config)
+        return JSONResponse({"personas": personas, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
+
+    @app.get("/api/v1/workspace/user-personas/{persona_id}")
+    def get_user_persona(
+        persona_id: str,
+        lite: bool = False,
+        identity: Dict[str, Any] = Depends(_workspace_identity),
+    ) -> JSONResponse:
+        from src.workspace.user_book_personas import UserBookPersonaNotFoundError, UserBookPersonaService
+        from src.workspace.userbook_persona_payload import build_userbook_persona_payload
+
+        if not persona_id.startswith("userbook_"):
+            raise HTTPException(status_code=404, detail="User persona not found.")
+        try:
+            UserBookPersonaService(config).get_persona(int(identity["id"]), persona_id)
+            return JSONResponse(build_userbook_persona_payload(persona_id, config, lite=lite))
+        except UserBookPersonaNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/v1/workspace/user-personas/{persona_id}/quarterly-cards")
+    def get_user_persona_quarterly_cards(
+        persona_id: str,
+        identity: Dict[str, Any] = Depends(_workspace_identity),
+    ) -> JSONResponse:
+        from src.workspace.user_book_personas import UserBookPersonaNotFoundError, UserBookPersonaService, userbook_persona_config
+        from src.dashboard.service import DashboardService
+
+        if not persona_id.startswith("userbook_"):
+            raise HTTPException(status_code=404, detail="User persona not found.")
+        try:
+            UserBookPersonaService(config).get_persona(int(identity["id"]), persona_id)
+            pcfg = userbook_persona_config(persona_id, base=config)
+            cards = DashboardService(config=pcfg).quarterly_report_cards()
+            return JSONResponse({"quarterly_cards": cards})
+        except UserBookPersonaNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/api/v1/workspace/user-personas/{persona_id}")
+    def update_user_persona(
+        persona_id: str,
+        payload: UserPersonaUpdateRequest,
+        identity: Dict[str, Any] = Depends(_workspace_identity),
+    ) -> JSONResponse:
+        from src.workspace.user_book_personas import UserBookPersonaError, UserBookPersonaNotFoundError, UserBookPersonaService
+
+        if not persona_id.startswith("userbook_"):
+            raise HTTPException(status_code=404, detail="User persona not found.")
+        service = UserBookPersonaService(config)
+        try:
+            result = service.update_persona(
+                int(identity["id"]),
+                persona_id,
+                template_persona_id=payload.template_persona_id,
+                starting_capital=payload.starting_capital,
+                holdings=payload.holdings,
+            )
+            return JSONResponse(result)
+        except UserBookPersonaNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except UserBookPersonaError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/workspace/user-personas/{persona_id}/holdings/{symbol}/intelligence")
+    def user_persona_holding_intelligence(
+        persona_id: str,
+        symbol: str,
+        identity: Dict[str, Any] = Depends(_workspace_identity),
+    ) -> JSONResponse:
+        from src.workspace.holding_intelligence import HoldingIntelligenceService
+        from src.workspace.user_book_personas import UserBookPersonaNotFoundError
+
+        if not persona_id.startswith("userbook_"):
+            raise HTTPException(status_code=404, detail="User persona not found.")
+        try:
+            intelligence = HoldingIntelligenceService(config).for_user_persona_holding(
+                persona_id,
+                symbol.upper(),
+                user_id=int(identity["id"]),
+            )
+        except UserBookPersonaNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                **intelligence,
+                "disclaimer": "Research workspace. Not investment advice. No live order execution.",
+            }
+        )
 
     @app.post("/my-watchlist/api/books/{book_id}/activate")
     def my_watchlist_api_activate(

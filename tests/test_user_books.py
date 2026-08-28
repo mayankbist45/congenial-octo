@@ -224,7 +224,7 @@ def test_my_watchlist_dev_page_and_api(temp_config, monkeypatch):
 def test_activate_user_book_persona_and_config(temp_config, monkeypatch):
     from src.config import get_persona_config
     from src.universe import load_universe
-    from src.workspace.user_book_personas import active_userbook_persona_ids
+    from src.workspace.user_book_personas import active_userbook_persona_ids, persona_universe_path
 
     monkeypatch.setattr("src.workspace.user_books.PriceService", lambda config=None: FakePriceService())
     service = UserBookService(temp_config, prices=FakePriceService())
@@ -238,9 +238,10 @@ def test_activate_user_book_persona_and_config(temp_config, monkeypatch):
     persona_id = activated["persona_id"]
     assert persona_id.startswith("userbook_")
     assert activated["status"] == "active"
+    assert activated["applies_on"] == "next_long_cycle"
 
     book = service.repo.get_book(book_id, 1)
-    assert book["status"] == "active_paper"
+    assert book["status"] == "tracking"
 
     persona = service.linked_persona(1, book_id)
     assert persona["persona"]["persona_id"] == persona_id
@@ -248,12 +249,53 @@ def test_activate_user_book_persona_and_config(temp_config, monkeypatch):
     config = get_persona_config(persona_id, base=temp_config)
     assert config.get("execution.auto_approve") is True
     assert config.secrets.dry_run is True
+    assert config.get("universe.mode") != "fixed"
     universe = load_universe(config)
-    assert set(universe.symbols) == {"RELIANCE", "TCS"}
+    assert len(universe.symbols) > 2
+    assert "RELIANCE" in universe.symbols
+    assert config.get("universe.file") == persona_universe_path("india_equity")
     assert persona_id in active_userbook_persona_ids(temp_config)
 
     service.archive_book(1, book_id)
     assert persona_id not in active_userbook_persona_ids(temp_config)
+
+
+def test_multiple_personas_from_same_watchlist(temp_config, monkeypatch):
+    monkeypatch.setattr("src.workspace.user_books.PriceService", lambda config=None: FakePriceService())
+    service = UserBookService(temp_config, prices=FakePriceService())
+    WorkspaceRepository(temp_config).user_for_email("member@example.com")
+
+    book_id = service.create_book(1, name="Multi seed", market_id="india_equity", starting_capital=500_000)["book"]["id"]
+    service.add_line(1, book_id, symbol="RELIANCE", target_amount=200_000)
+
+    first = service.activate_paper_fund(1, book_id, template_persona_id="balanced")
+    second = service.activate_paper_fund(1, book_id, template_persona_id="steady_compounder")
+    assert first["persona_id"] != second["persona_id"]
+    assert service.linked_persona(1, book_id)["persona_id"] == second["persona_id"]
+
+
+def test_user_persona_pending_overrides(temp_config, monkeypatch):
+    from src.config import get_persona_config
+    from src.workspace.user_book_personas import UserBookPersonaService
+
+    monkeypatch.setattr("src.workspace.user_books.PriceService", lambda config=None: FakePriceService())
+    service = UserBookService(temp_config, prices=FakePriceService())
+    WorkspaceRepository(temp_config).user_for_email("member@example.com")
+    book_id = service.create_book(1, name="Override", market_id="india_equity", starting_capital=500_000)["book"]["id"]
+    service.add_line(1, book_id, symbol="RELIANCE", target_amount=200_000)
+    persona_id = service.activate_paper_fund(1, book_id)["persona_id"]
+
+    updated = UserBookPersonaService(temp_config).update_persona(
+        1,
+        persona_id,
+        template_persona_id="steady_compounder",
+        starting_capital=600_000,
+    )
+    assert updated["applies_on"] == "next_long_cycle"
+    assert updated["pending_overrides"]["template_persona_id"] == "steady_compounder"
+
+    config = get_persona_config(persona_id, base=temp_config)
+    assert config.secrets.initial_capital == 600_000
 
 
 def test_activate_requires_holdings(temp_config, monkeypatch):

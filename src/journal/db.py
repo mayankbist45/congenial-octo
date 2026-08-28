@@ -497,12 +497,12 @@ CREATE TABLE IF NOT EXISTS user_book_snapshots (
 
 CREATE TABLE IF NOT EXISTS user_book_personas (
     id TEXT PRIMARY KEY,
-    book_id TEXT NOT NULL UNIQUE REFERENCES user_books(id),
     user_id INTEGER NOT NULL REFERENCES workspace_users(id),
     persona_id TEXT NOT NULL UNIQUE,
     template_persona_id TEXT NOT NULL DEFAULT 'balanced',
     status TEXT NOT NULL DEFAULT 'requested',
     frozen_allocation TEXT NOT NULL,
+    pending_overrides TEXT NOT NULL DEFAULT '{{}}',
     provisioned_at TEXT,
     created_at TEXT NOT NULL
 );
@@ -539,8 +539,21 @@ CREATE INDEX IF NOT EXISTS idx_ipo_gmp_observations_issue_source_time ON ipo_gmp
 CREATE INDEX IF NOT EXISTS idx_user_books_user ON user_books(user_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_user_book_lines_book ON user_book_lines(book_id, removed_at);
 CREATE INDEX IF NOT EXISTS idx_user_book_snapshots_book ON user_book_snapshots(book_id, snapshot_date);
-CREATE INDEX IF NOT EXISTS idx_user_book_personas_book ON user_book_personas(book_id);
+CREATE INDEX IF NOT EXISTS idx_user_book_personas_user ON user_book_personas(user_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_user_book_personas_persona ON user_book_personas(persona_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_book_personas_status ON user_book_personas(status, created_at);
+
+-- Composite indexes aligned to hot read paths (watchlist, persona payloads, journal lookups).
+CREATE INDEX IF NOT EXISTS idx_proposals_persona_status ON proposals(persona_id, status);
+CREATE INDEX IF NOT EXISTS idx_proposals_persona_symbol_id ON proposals(persona_id, symbol, id DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_persona_id ON runs(persona_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_persona_id ON trades(persona_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_persona_symbol_executed ON trades(persona_id, symbol, executed_at);
+CREATE INDEX IF NOT EXISTS idx_quarterly_reports_symbol_period ON quarterly_reports(symbol, period_end DESC, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_persona_symbol ON quarterly_report_analyses(persona_id, symbol, run_date DESC);
+CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_persona_run ON quarterly_report_analyses(persona_id, run_date);
+CREATE INDEX IF NOT EXISTS idx_user_book_lines_lookup ON user_book_lines(book_id, user_id, symbol, removed_at);
+CREATE INDEX IF NOT EXISTS idx_user_books_status_updated ON user_books(status, updated_at);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -747,6 +760,8 @@ def _apply_schema(conn: Connection) -> None:
     _migrate_runs_observability(conn)
     _migrate_workspace_user_identity(conn)
     _migrate_workspace_billing(conn)
+    _migrate_user_book_personas(conn)
+    _migrate_user_book_personas_drop_book_id(conn)
 
     statements = [s.strip() for s in schema_for(conn.dialect).split(";") if s.strip()]
     for statement in statements:
@@ -924,6 +939,63 @@ def _migrate_workspace_billing(conn: Connection) -> None:
     ):
         if not _has_column(conn, "workspace_users", name):
             conn.execute(f"ALTER TABLE workspace_users ADD COLUMN {name} TEXT")
+    conn.commit()
+
+
+def _migrate_user_book_personas(conn: Connection) -> None:
+    """Add deferred override payload to legacy persona rows."""
+    if _has_column(conn, "user_book_personas", "pending_overrides"):
+        return
+    logger.info("Migrating user_book_personas: add pending_overrides")
+    conn.execute(
+        "ALTER TABLE user_book_personas ADD COLUMN pending_overrides TEXT NOT NULL DEFAULT '{}'"
+    )
+    conn.commit()
+
+
+def _migrate_user_book_personas_drop_book_id(conn: Connection) -> None:
+    """Personas belong to users only; watchlist provenance lives in frozen_allocation JSON."""
+    if not _table_exists(conn, "user_book_personas"):
+        return
+    if not _has_column(conn, "user_book_personas", "book_id"):
+        return
+    import json
+
+    logger.info("Migrating user_book_personas: drop book_id column")
+    old_rows = [dict(row) for row in conn.execute("SELECT * FROM user_book_personas").fetchall()]
+    conn.execute("ALTER TABLE user_book_personas RENAME TO _user_book_personas_old")
+    conn.commit()
+    for stmt in schema_for(conn.dialect).split(";"):
+        cleaned = stmt.strip()
+        if cleaned.startswith("CREATE TABLE IF NOT EXISTS user_book_personas"):
+            conn.execute(cleaned)
+            break
+    for row in old_rows:
+        meta = json.loads(row.get("frozen_allocation") or "{}")
+        book_id = row.get("book_id")
+        if book_id and not meta.get("source_book_id"):
+            meta["source_book_id"] = book_id
+        pending = row.get("pending_overrides") or "{}"
+        conn.execute(
+            """
+            INSERT INTO user_book_personas (
+                id, user_id, persona_id, template_persona_id, status,
+                frozen_allocation, pending_overrides, provisioned_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["id"],
+                row["user_id"],
+                row["persona_id"],
+                row["template_persona_id"],
+                row["status"],
+                json.dumps(meta),
+                pending,
+                row.get("provisioned_at"),
+                row["created_at"],
+            ),
+        )
+    conn.execute("DROP TABLE _user_book_personas_old")
     conn.commit()
 
 
