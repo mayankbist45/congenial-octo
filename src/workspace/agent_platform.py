@@ -6,9 +6,10 @@ This module deliberately knows nothing about brokers, proposals, or trades.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -20,6 +21,8 @@ CoverageStatus = Literal["available", "partial", "stale", "unavailable"]
 AgentType = Literal["company_deep_dive", "event_impact", "comparative_screen", "portfolio_risk_review", "ic_memo"]
 SourceCategory = Literal["market_data", "fundamentals", "news", "filings", "portfolio_snapshot", "case_artifacts"]
 ToolName = Literal["fetch_eodhd_market_data", "fetch_eodhd_fundamentals", "fetch_eodhd_news", "fetch_primary_filings", "read_portfolio_snapshot", "read_case_artifacts"]
+_COVERAGE_ORDER = {"available": 0, "stale": 1, "partial": 2, "unavailable": 3}
+_SECRET = re.compile(r"(?i)(bearer\s+|sk-[a-z0-9_-]{12,}|api[_-]?key\s*[=:]\s*)[^\s,;]+")
 
 
 def _now() -> str:
@@ -31,6 +34,34 @@ def _loads(value: Any, default: Any) -> Any:
         return json.loads(value) if value else default
     except (TypeError, ValueError):
         return default
+
+
+def source_conflicts(sources: Iterable["SourceRecord"]) -> Dict[str, List[str]]:
+    grouped: Dict[str, set[str]] = {}
+    for source in sources:
+        grouped.setdefault(source.category, set()).add(source.coverage_status)
+    return {category: sorted(statuses) for category, statuses in grouped.items() if len(statuses) > 1}
+
+
+def coverage_status(sources: List["SourceRecord"], required_sources: Iterable[str] = ()) -> CoverageStatus:
+    """Return the least optimistic truthful status for a source set."""
+    statuses = {source.coverage_status for source in sources}
+    categories = {source.category for source in sources}
+    if set(required_sources) - categories or source_conflicts(sources):
+        return "partial"
+    if not statuses or statuses == {"unavailable"}:
+        return "unavailable"
+    if "unavailable" in statuses or "partial" in statuses:
+        return "partial"
+    return "stale" if "stale" in statuses else "available"
+
+
+def _redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: "[redacted]" if key.lower() in {"api_key", "authorization", "password", "secret", "credential"} else _redact(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return _SECRET.sub(r"\1[redacted]", value) if isinstance(value, str) else value
 
 
 class WorkScope(BaseModel):
@@ -87,6 +118,7 @@ class EvidenceArtifact(BaseModel):
     confidence: float = Field(ge=0, le=1)
     next_step: str
     source_labels: List[str] = Field(default_factory=list, max_length=50)
+    source_artifact_run_ids: List[str] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def unavailable_artifacts_are_explicit(self) -> "EvidenceArtifact":
@@ -150,8 +182,19 @@ def validate_evidence(contract: AgentContract, artifact: EvidenceArtifact, sourc
     missing = set(contract.required_sources) - available
     if artifact.coverage_status == "available" and missing:
         raise ValueError("Available evidence is missing required sources.")
+    expected_coverage = coverage_status(sources, contract.required_sources)
+    if _COVERAGE_ORDER[artifact.coverage_status] < _COVERAGE_ORDER[expected_coverage]:
+        raise ValueError("Evidence coverage is more optimistic than its sources.")
     if artifact.coverage_status != "unavailable" and not artifact.source_labels:
         raise ValueError("Evidence with coverage must cite at least one source.")
+    allowed_artifact_runs = {run_id for source in sources for run_id in source.details.get("artifact_run_ids", [])}
+    if contract.id == "ic_memo":
+        if not artifact.source_artifact_run_ids:
+            raise ValueError("IC Memo evidence must reference completed case artifacts.")
+        if set(artifact.source_artifact_run_ids) - allowed_artifact_runs:
+            raise ValueError("IC Memo references an unknown completed case artifact.")
+    elif artifact.source_artifact_run_ids:
+        raise ValueError("Only IC Memo evidence may reference case artifacts.")
 
 
 def build_pydantic_agent(contract: AgentContract, model: Any, output_type: Any = EvidenceArtifact) -> Any:
@@ -188,7 +231,7 @@ class AgentWorkRepository:
     def cases(self, limit: int = 50) -> List[Dict[str, Any]]:
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT c.*, u.display_name AS owner_name FROM research_cases c JOIN workspace_users u ON u.id = c.owner_user_id ORDER BY c.updated_at DESC LIMIT ?",
+                "SELECT c.*, u.display_name AS owner_name, EXISTS(SELECT 1 FROM agent_runs r WHERE r.case_id = c.id AND r.status IN ('queued', 'running')) AS has_active_runs FROM research_cases c JOIN workspace_users u ON u.id = c.owner_user_id ORDER BY c.updated_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [self._case_summary(dict(row)) for row in rows]
@@ -204,7 +247,7 @@ class AgentWorkRepository:
             for run in runs:
                 run["events"] = [self._event_view(dict(item)) for item in conn.execute("SELECT * FROM agent_run_events WHERE agent_run_id = ? ORDER BY id", (run["id"],)).fetchall()]
                 run["artifacts"] = [_loads(item["payload"], {}) for item in conn.execute("SELECT payload FROM agent_artifacts WHERE agent_run_id = ? ORDER BY created_at", (run["id"],)).fetchall()]
-                run["sources"] = [self._source_view(dict(item)) for item in conn.execute("SELECT * FROM agent_sources WHERE agent_run_id = ? ORDER BY created_at", (run["id"],)).fetchall()]
+                run["sources"] = [self._source_view(dict(item)) for item in conn.execute("SELECT * FROM agent_sources WHERE agent_run_id = ? ORDER BY created_at, label", (run["id"],)).fetchall()]
             comments = [self._comment_view(dict(item)) for item in conn.execute(
                 "SELECT c.*, u.display_name AS author_name FROM case_comments c JOIN workspace_users u ON u.id = c.author_user_id WHERE c.case_id = ? ORDER BY c.created_at", (case_id,)
             ).fetchall()]
@@ -212,7 +255,8 @@ class AgentWorkRepository:
 
     def create_run(self, case_id: str, user_id: int, payload: AgentRunInput, idempotency_key: str) -> Dict[str, Any]:
         case = self.case(case_id)
-        validate_run_input(payload, sum(run["status"] == "completed" for run in case["runs"]))
+        completed_artifacts = sum(len(run["artifacts"]) for run in case["runs"] if run["status"] == "completed")
+        validate_run_input(payload, completed_artifacts)
         run_id, now = str(uuid.uuid4()), _now()
         with self._connection() as conn:
             existing = conn.execute("SELECT * FROM agent_runs WHERE case_id = ? AND idempotency_key = ?", (case_id, idempotency_key)).fetchone()
@@ -236,9 +280,13 @@ class AgentWorkRepository:
 
     def record_event(self, run_id: str, stage_name: str, status: str, details: Optional[Dict[str, Any]] = None, error: Optional[str] = None) -> None:
         with self._connection() as conn:
+            trace = conn.execute("SELECT trace_id FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+            payload = _redact(details or {})
+            if trace and trace["trace_id"]:
+                payload.setdefault("trace_id", trace["trace_id"])
             conn.execute(
                 "INSERT INTO agent_run_events (agent_run_id, stage_name, status, details, error, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, stage_name, status, json.dumps(details or {}), error, _now()),
+                (run_id, stage_name, status, json.dumps(payload), _redact(error), _now()),
             )
             conn.commit()
 
@@ -251,37 +299,87 @@ class AgentWorkRepository:
             row = conn.execute("SELECT case_id, status FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
             if not row:
                 raise KeyError("Agent run not found.")
+            if row["status"] in {"completed", "failed", "cancelled"} and row["status"] != status:
+                return
             started = now if status == "running" and row["status"] == "queued" else None
             finished = now if status in {"completed", "failed", "cancelled"} else None
+            clean_error = _redact(error)
             conn.execute(
                 "UPDATE agent_runs SET status = ?, error = COALESCE(?, error), temporal_workflow_id = COALESCE(?, temporal_workflow_id), trace_id = COALESCE(?, trace_id), started_at = COALESCE(?, started_at), finished_at = COALESCE(?, finished_at), updated_at = ? WHERE id = ?",
-                (status, error, temporal_workflow_id, trace_id, started, finished, now, run_id),
+                (status, clean_error, temporal_workflow_id, trace_id, started, finished, now, run_id),
             )
             conn.execute("UPDATE research_cases SET updated_at = ? WHERE id = ?", (now, row["case_id"]))
             conn.commit()
-        self.record_event(run_id, status, status, error=error)
+        self.record_event(run_id, status, status, error=clean_error)
+
+    def register_dispatch(self, run_id: str) -> Dict[str, Any]:
+        """Persist the stable Temporal and trace identifiers before dispatching."""
+        workflow_id = f"agent-run-{run_id}"
+        with self._connection() as conn:
+            row = conn.execute("SELECT temporal_workflow_id, trace_id FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+            if not row:
+                raise KeyError("Agent run not found.")
+            trace_id = row["trace_id"] or self._current_trace_id()
+            if row["temporal_workflow_id"] and row["temporal_workflow_id"] != workflow_id:
+                raise ValueError("Agent run has a conflicting workflow ID.")
+            conn.execute(
+                "UPDATE agent_runs SET temporal_workflow_id = ?, trace_id = ?, updated_at = ? WHERE id = ?",
+                (workflow_id, trace_id, _now(), run_id),
+            )
+            conn.commit()
+        return {"workflow_id": workflow_id, "trace_id": trace_id}
 
     def cancel_run(self, case_id: str, run_id: str) -> Dict[str, Any]:
         run = self.run(run_id)
         if run["case_id"] != case_id:
             raise KeyError("Agent run not found in this case.")
         if run["status"] in {"queued", "running"}:
-            self.set_run_status(run_id, "cancelled")
+            now = _now()
+            with self._connection() as conn:
+                conn.execute(
+                    "UPDATE agent_runs SET cancellation_requested_at = COALESCE(cancellation_requested_at, ?), updated_at = ? WHERE id = ?",
+                    (now, now, run_id),
+                )
+                conn.commit()
+            self.record_event(run_id, "cancellation", "requested")
         return self.run(run_id)
 
-    def save_artifact(self, run_id: str, artifact: EvidenceArtifact, sources: List[SourceRecord]) -> None:
+    def save_artifact(self, run_id: str, artifact: EvidenceArtifact, sources: List[SourceRecord], usage_tokens: int = 0, usage_cost_usd: Optional[float] = None) -> bool:
+        """Replace evidence atomically; cancelled runs never receive an artifact."""
         artifact_id, now = str(uuid.uuid4()), _now()
         with self._connection() as conn:
+            run = conn.execute("SELECT case_id, status, cancellation_requested_at FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+            if not run:
+                raise KeyError("Agent run not found.")
+            if run["status"] in {"cancelled", "completed", "failed"} or run["cancellation_requested_at"]:
+                return False
+            clean_artifact = EvidenceArtifact.model_validate(_redact(artifact.model_dump(mode="json")))
+            clean_sources = [SourceRecord.model_validate(_redact(source.model_dump(mode="json"))) for source in sources]
             conn.execute(
                 "INSERT INTO agent_artifacts (id, agent_run_id, artifact_type, payload, created_at) VALUES (?, ?, 'evidence_brief', ?, ?) ON CONFLICT(agent_run_id, artifact_type) DO UPDATE SET payload = excluded.payload, created_at = excluded.created_at",
-                (artifact_id, run_id, artifact.model_dump_json(), now),
+                (artifact_id, run_id, clean_artifact.model_dump_json(), now),
             )
-            for source in sources:
+            conn.execute("DELETE FROM agent_sources WHERE agent_run_id = ?", (run_id,))
+            for source in clean_sources:
                 conn.execute(
                     "INSERT INTO agent_sources (id, agent_run_id, label, source_url, observed_at, coverage_status, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (str(uuid.uuid4()), run_id, source.label, source.source_url, source.observed_at, source.coverage_status, json.dumps({**source.details, "category": source.category}), now),
                 )
+            conn.execute(
+                "UPDATE agent_runs SET usage_tokens = ?, usage_cost_usd = ?, usage_cost_status = ?, updated_at = ? WHERE id = ?",
+                (usage_tokens, usage_cost_usd or 0, "known" if usage_cost_usd is not None else "unknown", now, run_id),
+            )
             conn.commit()
+        self.record_event(run_id, "coverage", coverage_status(sources), {"sources": [{"label": source.label, "status": source.coverage_status} for source in sources], "conflicts": source_conflicts(sources)})
+        self.record_event(run_id, "usage", "completed" if usage_cost_usd is not None else "unknown", {"tokens": usage_tokens, "cost_usd": usage_cost_usd, "cost_status": "known" if usage_cost_usd is not None else "unknown"})
+        return True
+
+    def is_cancellation_requested(self, run_id: str) -> bool:
+        with self._connection() as conn:
+            row = conn.execute("SELECT cancellation_requested_at FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if not row:
+            raise KeyError("Agent run not found.")
+        return bool(row["cancellation_requested_at"])
 
     def add_comment(self, case_id: str, user_id: int, payload: CommentInput) -> Dict[str, Any]:
         comment_id, now = str(uuid.uuid4()), _now()
@@ -339,3 +437,14 @@ class AgentWorkRepository:
 
     def _connection(self):
         return self._ConnectionContext(self._config)
+
+    @staticmethod
+    def _current_trace_id() -> str:
+        try:
+            from opentelemetry import trace
+            trace_id = trace.get_current_span().get_span_context().trace_id
+            if trace_id:
+                return f"{trace_id:032x}"
+        except ImportError:
+            pass
+        return uuid.uuid4().hex

@@ -459,6 +459,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     error TEXT,
     usage_tokens INTEGER NOT NULL DEFAULT 0,
     usage_cost_usd {REAL} NOT NULL DEFAULT 0,
+    usage_cost_status TEXT NOT NULL DEFAULT 'unknown',
     created_at TEXT NOT NULL,
     started_at TEXT,
     finished_at TEXT,
@@ -777,6 +778,7 @@ def _apply_schema(conn: Connection) -> None:
     _migrate_runs_observability(conn)
     _migrate_workspace_user_identity(conn)
     _migrate_workspace_billing(conn)
+    _migrate_agent_usage_cost_status(conn)
 
     statements = [s.strip() for s in schema_for(conn.dialect).split(";") if s.strip()]
     for statement in statements:
@@ -954,6 +956,13 @@ def _migrate_workspace_billing(conn: Connection) -> None:
     ):
         if not _has_column(conn, "workspace_users", name):
             conn.execute(f"ALTER TABLE workspace_users ADD COLUMN {name} TEXT")
+    conn.commit()
+
+
+def _migrate_agent_usage_cost_status(conn: Connection) -> None:
+    if _has_column(conn, "agent_runs", "usage_cost_status"):
+        return
+    conn.execute("ALTER TABLE agent_runs ADD COLUMN usage_cost_status TEXT NOT NULL DEFAULT 'unknown'")
     conn.commit()
 
 

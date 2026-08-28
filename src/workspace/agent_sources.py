@@ -72,13 +72,15 @@ class AgentSourceCollector:
 
         observed_at = self._observed_at(payload)
         status = "stale" if observed_at and self._is_stale(observed_at) else "available"
+        if len(scope.symbols) > 1 and status == "available":
+            status = "partial"
         return SourceRecord(
             label="EODHD",
             category=category,
             source_url="https://eodhd.com/financial-apis/",
             observed_at=observed_at or _now(),
             coverage_status=status,
-            details={"symbol": symbol, "provider": "eodhd", "record_type": category},
+            details={"symbol": symbol, "provider": "eodhd", "record_type": category, **({"reason": "Only the first requested symbol was retrieved."} if status == "partial" else {})},
         )
 
     def _filings(self, scope: WorkScope) -> SourceRecord:

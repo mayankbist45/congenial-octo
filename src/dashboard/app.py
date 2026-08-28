@@ -1044,8 +1044,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             run = AgentWorkRepository(config).cancel_run(case_id, run_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if run.get("temporal_workflow_id"):
-            background_tasks.add_task(AgentRuntime(config).cancel, run["temporal_workflow_id"])
+        background_tasks.add_task(AgentRuntime(config).cancel, run_id, run.get("temporal_workflow_id") or "")
         return JSONResponse({"run": run, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 
     @app.post("/api/v1/workspace/cases/{case_id}/comments", status_code=201)

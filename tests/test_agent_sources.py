@@ -50,6 +50,14 @@ def test_eodhd_marks_old_vendor_data_stale(monkeypatch):
     assert "api_token" not in eodhd.source_url
 
 
+def test_multi_symbol_eodhd_coverage_is_partial_until_every_symbol_is_collected(monkeypatch):
+    monkeypatch.setenv("EODHD_API_TOKEN", "test-token")
+    session = FakeSession([FakeResponse({"timestamp": datetime.now(timezone.utc).isoformat()}), FakeResponse({"timestamp": datetime.now(timezone.utc).isoformat()})])
+    records = AgentSourceCollector(session).collect(agent_contract("comparative_screen"), {"symbols": ["NVDA", "AMD"]})
+    assert records[0].coverage_status == "partial"
+    assert records[0].details["reason"] == "Only the first requested symbol was retrieved."
+
+
 def test_eodhd_malformed_or_rate_limited_responses_are_unavailable(monkeypatch):
     monkeypatch.setenv("EODHD_API_TOKEN", "test-token")
     malformed = AgentSourceCollector(FakeSession([FakeResponse(ValueError("bad json"))]))
