@@ -58,7 +58,7 @@ apt-get update -qq
 apt-get install -y -qq \
     python3 python3-venv python3-dev build-essential \
     postgresql postgresql-client libpq-dev \
-    git cron logrotate ca-certificates docker.io docker-compose-v2 >/dev/null ||
+    git cron logrotate ca-certificates docker.io docker-compose >/dev/null ||
     {
         echo "error: package installation failed" >&2
         exit 1

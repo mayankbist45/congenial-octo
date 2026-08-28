@@ -8,8 +8,8 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/fund
-ExecStart=/usr/bin/docker compose --env-file /etc/nivelo/temporal.env -f deploy/temporal-compose.yml up -d --build --remove-orphans
-ExecStop=/usr/bin/docker compose --env-file /etc/nivelo/temporal.env -f deploy/temporal-compose.yml stop
+ExecStart=/opt/fund/scripts/temporal_compose.sh --env-file /etc/nivelo/temporal.env -f deploy/temporal-compose.yml up -d --build --remove-orphans
+ExecStop=/opt/fund/scripts/temporal_compose.sh --env-file /etc/nivelo/temporal.env -f deploy/temporal-compose.yml stop
 TimeoutStartSec=10min
 TimeoutStopSec=90
 

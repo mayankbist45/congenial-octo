@@ -208,8 +208,8 @@ push() {
     echo "Restarting dashboard service"
     ssh_vm "sudo systemctl restart mutualfund-dashboard 2>/dev/null || true
             sudo systemctl restart nivelo-temporal 2>/dev/null || true
-            if sudo docker compose --env-file /etc/nivelo/temporal.env -f '$REMOTE_DIR/deploy/temporal-compose.yml' --profile agent ps --status running --format '{{.Name}}' agent-worker 2>/dev/null | grep -q .; then
-                sudo docker compose --env-file /etc/nivelo/temporal.env -f '$REMOTE_DIR/deploy/temporal-compose.yml' --profile agent up -d --build agent-worker
+            if sudo '$REMOTE_DIR/scripts/temporal_compose.sh' --env-file /etc/nivelo/temporal.env -f '$REMOTE_DIR/deploy/temporal-compose.yml' --profile agent ps --status running --format '{{.Name}}' agent-worker 2>/dev/null | grep -q .; then
+                sudo '$REMOTE_DIR/scripts/temporal_compose.sh' --env-file /etc/nivelo/temporal.env -f '$REMOTE_DIR/deploy/temporal-compose.yml' --profile agent up -d --build agent-worker
             fi"
 }
 
