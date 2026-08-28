@@ -14,10 +14,11 @@ google-auth==2.37.0
 uvicorn==0.34.0
 jinja2==3.1.5
 python-multipart==0.0.20
-pydantic==2.10.5
+# pydantic-ai requires Pydantic 2.12+; keep the host and worker environments resolvable.
+pydantic==2.12.5
 # PostgreSQL driver. The binary extra ships wheels, so no local libpq build.
 psycopg[binary]==3.2.13
-openai==1.59.7
+openai==3.5.0
 smartapi-python==1.5.5
 logzero==1.7.0
 websocket-client==1.8.0
@@ -26,7 +27,8 @@ pytest==8.3.4
 matplotlib==3.9.4
 scikit-learn==1.5.2
 # Agent worker dependencies. Production agent images target Python 3.11+.
-pydantic-ai==2.35.1
+# The slim package exposes the same pydantic_ai runtime without unrelated provider extras.
+pydantic-ai-slim[openai]==2.35.1
 temporalio==1.32.0
 opentelemetry-api==1.44.0
 opentelemetry-sdk==1.44.0
