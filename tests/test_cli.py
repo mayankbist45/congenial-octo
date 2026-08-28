@@ -107,9 +107,9 @@ def test_long_cycle_is_a_supported_command() -> None:
     assert build_parser().parse_args(["long_cycle"]).command == "long_cycle"
 
 
-def test_scheduled_long_cycle_selects_all_paper_long_horizon_personas() -> None:
+def test_scheduled_long_cycle_selects_all_paper_long_horizon_personas(temp_config) -> None:
     args = build_parser().parse_args(["long_cycle"])
-    personas, problems = _scheduled_long_personas(args, get_config())
+    personas, problems = _scheduled_long_personas(args, temp_config)
 
     assert problems == []
     assert personas == [

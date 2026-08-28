@@ -202,6 +202,6 @@ class DashboardSnapshotService:
         if (date.today() - published_day).days > 3:
             copy["data_status"] = "stale_eod"
             copy["warnings"] = list(copy.get("warnings") or []) + [
-                "Showing the last successful delayed/EOD publication; a newer snapshot is unavailable."
+                "Showing the last successful publication; a newer snapshot is unavailable."
             ]
         return copy

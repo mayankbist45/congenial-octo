@@ -125,8 +125,22 @@ def _load_universe_cached(path_str: str) -> Universe:
 
 def load_universe(config: Optional[Config] = None) -> Universe:
     config = config or get_config()
-    path = config.path("universe.file", "data/nifty500.csv")
-    return _load_universe_cached(str(path))
+    universe_cfg = config.universe or {}
+    symbols = universe_cfg.get("symbols")
+    mode = str(universe_cfg.get("mode") or "").lower()
+    full = _load_universe_cached(str(config.path("universe.file", "data/nifty500.csv")))
+    if mode == "fixed" or symbols:
+        wanted = {str(symbol).upper() for symbol in (symbols or [])}
+        if not wanted:
+            return Universe([])
+        by_symbol = {entry.symbol: entry for entry in full.entries}
+        entries = [by_symbol[symbol] for symbol in sorted(wanted) if symbol in by_symbol]
+        missing = wanted - {entry.symbol for entry in entries}
+        if missing:
+            logger.warning("Fixed universe missing symbols: %s", ", ".join(sorted(missing)))
+        logger.info("Loaded fixed universe: %d symbols", len(entries))
+        return Universe(entries)
+    return full
 
 
 def refresh_universe_file(config: Optional[Config] = None) -> int:
