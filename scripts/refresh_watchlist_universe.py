@@ -13,19 +13,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.broker.instruments import InstrumentMaster
 from src.config import PROJECT_ROOT, get_config
 from src.logging_setup import setup_logging
-from src.universe import _load_universe_cached
+from src.universe import _load_universe_cached, _read_csv, is_investable_equity_symbol
+
+_INDEX_METADATA_FILES = (
+    PROJECT_ROOT / "data" / "nifty500.csv",
+    PROJECT_ROOT / "data" / "nifty50.csv",
+    PROJECT_ROOT / "data" / "nifty_smallcap250.csv",
+)
+
+
+def _load_index_metadata() -> dict[str, tuple[str, str]]:
+    """Merge company name + sector from published index constituent lists."""
+    overlay: dict[str, tuple[str, str]] = {}
+    for path in _INDEX_METADATA_FILES:
+        if not path.exists():
+            continue
+        for entry in _read_csv(path):
+            if entry.sector and entry.sector != "Unknown":
+                overlay[entry.symbol] = (entry.company_name, entry.sector)
+            else:
+                overlay.setdefault(entry.symbol, (entry.company_name, entry.sector))
+    return overlay
 
 
 def _write_from_instruments(path: Path) -> int:
     master = InstrumentMaster(get_config())
     master.load()
+    metadata = _load_index_metadata()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["Symbol", "Company Name", "Industry"])
         count = 0
         for base in sorted(master._by_symbol.keys()):
-            writer.writerow([base, f"{base}-EQ", "Unknown"])
+            if not is_investable_equity_symbol(base):
+                continue
+            company, sector = metadata.get(base, (base, ""))
+            writer.writerow([base, company, sector])
             count += 1
     _load_universe_cached.cache_clear()
     return count

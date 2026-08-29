@@ -197,7 +197,16 @@ def test_my_watchlist_dev_page_and_api(temp_config, monkeypatch):
 
     universe = client.get("/my-watchlist/api/universe?user_id=1&market_id=india_equity")
     assert universe.status_code == 200
-    assert universe.json()["count"] > 100
+    body = universe.json()
+    assert body["count"] > 100
+    assert body["count"] <= 501
+    assert all("NSETEST" not in item["symbol"] for item in body["symbols"])
+    assert body["symbols"][0]["company_name"] != f"{body['symbols'][0]['symbol']}-EQ"
+
+    search = client.get("/my-watchlist/api/universe?user_id=1&market_id=india_equity&q=TEMPSENS")
+    assert search.status_code == 200
+    hits = [item["symbol"] for item in search.json()["symbols"]]
+    assert "TEMPSENS" in hits
 
     created = client.post(
         "/my-watchlist/api/books?user_id=1",
