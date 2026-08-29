@@ -1701,7 +1701,6 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     def list_user_personas(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
         from src.workspace.userbook_persona_payload import list_user_persona_summaries
 
-        service = UserBookPersonaService(config)
         personas = list_user_persona_summaries(int(identity["id"]), config)
         return JSONResponse({"personas": personas, "disclaimer": "Research workspace. Not investment advice. No live order execution."})
 

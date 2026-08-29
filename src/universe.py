@@ -22,6 +22,14 @@ NSE_NIFTY500_URL = (
 )
 
 
+def is_investable_equity_symbol(symbol: str) -> bool:
+    """Return False for exchange test tickers and other non-investable placeholders."""
+    sym = symbol.upper()
+    if "NSETEST" in sym or sym.endswith("TEST"):
+        return False
+    return True
+
+
 def _read_csv(path: Path) -> List[UniverseEntry]:
     entries: List[UniverseEntry] = []
     with open(path, "r", encoding="utf-8-sig") as handle:

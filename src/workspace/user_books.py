@@ -17,7 +17,7 @@ from src.journal.db import connect
 from src.logging_setup import get_logger
 from src.market.registry import get_market
 from src.market_data.prices import PriceService
-from src.universe import Universe, _load_universe_cached
+from src.universe import Universe, _load_universe_cached, is_investable_equity_symbol
 
 logger = get_logger(__name__)
 
@@ -79,6 +79,28 @@ def watchlist_universe_for_market(market_id: str) -> Universe:
         return _load_universe_cached(str(path))
     except FileNotFoundError:
         return universe_for_market(market_id)
+
+
+def _is_investable_watchlist_symbol(symbol: str) -> bool:
+    return is_investable_equity_symbol(symbol)
+
+
+def _format_universe_symbol(market_id: str, entry, reference: Optional[Universe] = None) -> Dict[str, str]:
+    """Present watchlist symbols with index metadata when the wide CSV lacks it."""
+    company = (entry.company_name or entry.symbol).strip()
+    sector = (entry.sector or "").strip()
+    if market_id == "india_equity":
+        ref = (reference or universe_for_market(market_id)).get(entry.symbol)
+        if ref:
+            if not sector or sector == "Unknown":
+                sector = ref.sector
+            if not company or company.endswith("-EQ") or company.upper() == entry.symbol:
+                company = ref.company_name
+    if company.endswith("-EQ"):
+        company = entry.symbol
+    if sector == "Unknown":
+        sector = ""
+    return {"symbol": entry.symbol, "company_name": company or entry.symbol, "sector": sector}
 
 
 class UserBookRepository:
@@ -653,21 +675,43 @@ class UserBookService:
         needle: str,
         limit: Optional[int],
     ) -> List[Dict[str, str]]:
-        universe = watchlist_universe_for_market(market_id)
+        reference = universe_for_market(market_id) if market_id == "india_equity" else None
         matches: List[Dict[str, str]] = []
+
+        if market_id == "india_equity" and not needle and reference is not None:
+            browse = [
+                reference.get(symbol)
+                for symbol in reference.symbols
+                if _is_investable_watchlist_symbol(symbol)
+            ]
+            browse = [entry for entry in browse if entry is not None]
+            browse.sort(key=lambda entry: entry.company_name.upper())
+            for entry in browse:
+                matches.append(_format_universe_symbol(market_id, entry, reference))
+                if limit is not None and len(matches) >= limit:
+                    break
+            return matches
+
+        universe = watchlist_universe_for_market(market_id)
+        candidates = []
         for entry in universe:
-            if needle and needle not in entry.symbol and needle not in entry.company_name.upper():
+            if not _is_investable_watchlist_symbol(entry.symbol):
                 continue
-            matches.append(
-                {
-                    "symbol": entry.symbol,
-                    "company_name": entry.company_name,
-                    "sector": entry.sector,
-                }
+            formatted = _format_universe_symbol(market_id, entry, reference)
+            haystack = f"{formatted['symbol']} {formatted['company_name']} {formatted['sector']}".upper()
+            if needle and needle not in haystack:
+                continue
+            candidates.append(formatted)
+        candidates.sort(
+            key=lambda item: (
+                0 if item["company_name"].upper() != item["symbol"] else 1,
+                item["company_name"].upper(),
+                item["symbol"],
             )
-            if limit is not None and len(matches) >= limit:
-                break
-        return matches
+        )
+        if limit is None:
+            return candidates
+        return candidates[:limit]
 
     def record_snapshot(self, book_id: str, user_id: int, snapshot_date: Optional[str] = None) -> None:
         detail = self.get_book(user_id, book_id)
