@@ -1,4 +1,5 @@
 .env
+*.local
 .venv/
 .tools/
 __pycache__/

@@ -118,15 +118,30 @@ def _generate_output(run_id: str, source_payloads: list[Dict[str, Any]]) -> Dict
     run = repo.run(run_id)
     if repo.is_cancellation_requested(run_id):
         return {"cancelled": True}
-    model = os.getenv("WORKSPACE_AGENT_MODEL", "").strip()
-    if not model:
+    model_name = os.getenv("WORKSPACE_AGENT_MODEL", "").strip()
+    if not model_name:
         raise RuntimeError("Agent model is not configured.")
+    # The default OpenAI provider routes to the Responses API, which DeepSeek
+    # does not support and whose tool_choice its thinking mode rejects. Use the
+    # chat-completions model and disable DeepSeek thinking so tool calls work.
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+    api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
+    model = OpenAIChatModel(
+        model_name.removeprefix("openai:"),
+        provider=OpenAIProvider(base_url=base_url, api_key=api_key),
+    )
+    model_settings: Dict[str, Any] = {"max_tokens": 2000}
+    if base_url and "deepseek" in base_url.lower():
+        model_settings["extra_body"] = {"thinking": {"type": "disabled"}}
     payload = AgentRunInput.model_validate(run["input"])
     contract = agent_contract(payload.agent_type)
     prompt_sources = source_payloads
     if payload.agent_type == "ic_memo":
         prompt_sources = [{**source, "completed_artifacts": _completed_case_artifacts(repo, run)} for source in source_payloads]
-    result = build_pydantic_agent(contract, model).run_sync(_artifact_prompt(run, prompt_sources))
+    result = build_pydantic_agent(contract, model).run_sync(_artifact_prompt(run, prompt_sources), model_settings=model_settings)
     artifact = EvidenceArtifact.model_validate(result.output)
     tokens, cost = _usage_tokens(result), _usage_cost(result)
     if tokens > contract.token_budget:
