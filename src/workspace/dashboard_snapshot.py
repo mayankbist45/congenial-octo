@@ -36,11 +36,12 @@ class DashboardSnapshotService:
                 finally:
                     conn.close()
                 return refreshed
-            if "personas" in existing and (ipos is None or "ipos" in existing):
+            if existing.get("personas") and (ipos is None or "ipos" in existing):
                 return existing
-            # A pre-persona snapshot is a legacy read model, not a different
-            # market observation. Upgrade its shape once while preserving its
-            # original publication timestamp and date.
+            # A snapshot with no personas is either a legacy read model or one
+            # overwritten by a persona/userbook refresh. Rebuild it from the
+            # full configured persona set while preserving its original
+            # publication timestamp and date.
             upgraded = self._build_payload(day, as_of=existing["as_of"], ipos=ipos)
             conn = connect(self._config)
             try:
