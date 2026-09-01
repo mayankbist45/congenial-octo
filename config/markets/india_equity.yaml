@@ -25,6 +25,8 @@ fund:
   base_currency: INR
 universe:
   file: "data/nifty500.csv"
+  watchlist_file: "data/nse_equity_all.csv"
+  persona_file: "data/nse_equity_all.csv"
 execution:
   product_type: CASH
   exchange: NSE

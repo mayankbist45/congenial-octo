@@ -77,9 +77,14 @@ class WorkspaceBilling:
             raise HTTPException(status_code=403, detail={"code": "subscription_required", "entitlement": entitlement})
         return user
 
-    def checkout(self, user: Dict[str, Any]) -> Dict[str, Any]:
+    def checkout(self, user: Dict[str, Any], intent: Optional[str] = None) -> Dict[str, Any]:
         self._require_configured()
         if user.get("billing_subscription_status") == "active" and self.entitlement(user)["can_access"]:
+            if intent == "watchlist_upgrade":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Your subscription is already active. A higher watchlist tier is not available yet.",
+                )
             raise HTTPException(status_code=409, detail="Your subscription is already active.")
         subscription_id = user.get("billing_subscription_id") if user.get("billing_subscription_status") in {"created", "authenticated", "pending"} else None
         if not subscription_id:

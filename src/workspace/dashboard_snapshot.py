@@ -36,11 +36,12 @@ class DashboardSnapshotService:
                 finally:
                     conn.close()
                 return refreshed
-            if "personas" in existing and (ipos is None or "ipos" in existing):
+            if existing.get("personas") and (ipos is None or "ipos" in existing):
                 return existing
-            # A pre-persona snapshot is a legacy read model, not a different
-            # market observation. Upgrade its shape once while preserving its
-            # original publication timestamp and date.
+            # A snapshot with no personas is either a legacy read model or one
+            # overwritten by a persona/userbook refresh. Rebuild it from the
+            # full configured persona set while preserving its original
+            # publication timestamp and date.
             upgraded = self._build_payload(day, as_of=existing["as_of"], ipos=ipos)
             conn = connect(self._config)
             try:
@@ -90,7 +91,7 @@ class DashboardSnapshotService:
     def _build_payload(self, day: str, as_of: Optional[str] = None, ipos: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         dashboard = DashboardService(self._config)
         overview = dashboard.overview()
-        personas = self._persona_payloads(dashboard)
+        personas = self._persona_payloads()
         return {
             "as_of": as_of or datetime.now(timezone.utc).isoformat(),
             "snapshot_date": day,
@@ -112,21 +113,30 @@ class DashboardSnapshotService:
             "disclaimer": DISCLAIMER,
         }
 
-    def _persona_payloads(self, dashboard: DashboardService) -> list[Dict[str, Any]]:
-        """Capture every enabled paper persona at one EOD publication boundary."""
+    def _persona_payloads(self) -> list[Dict[str, Any]]:
+        """Capture every enabled paper persona at one EOD publication boundary.
+
+        The snapshot is a global read model, so the persona set always comes
+        from the full settings config, never from a persona/userbook-scoped
+        runtime config. A DB-provisioned userbook persona config strips the
+        ``personas`` key, so refreshing from it must not empty the published
+        persona list.
+        """
+        base = self._config
+        configured = base.raw.get("personas", {})
+        if not isinstance(configured, dict) or not configured:
+            base = get_config()
+            configured = base.raw.get("personas", {})
         metadata = {
             row["persona_id"]: row
-            for row in dashboard.all_personas_overview()
+            for row in DashboardService(base).all_personas_overview()
         }
         personas: list[Dict[str, Any]] = []
-        configured = self._config.raw.get("personas", {})
-        if not isinstance(configured, dict):
-            configured = {}
 
         for persona_id, definition in configured.items():
             if not isinstance(definition, dict) or not definition.get("enabled", True):
                 continue
-            service = DashboardService(get_persona_config(persona_id, base=self._config))
+            service = DashboardService(get_persona_config(persona_id, base=base))
             intraday = service.intraday_summary()
             is_intraday = service.is_intraday
             overview = (
@@ -202,6 +212,6 @@ class DashboardSnapshotService:
         if (date.today() - published_day).days > 3:
             copy["data_status"] = "stale_eod"
             copy["warnings"] = list(copy.get("warnings") or []) + [
-                "Showing the last successful delayed/EOD publication; a newer snapshot is unavailable."
+                "Showing the last successful publication; a newer snapshot is unavailable."
             ]
         return copy

@@ -212,17 +212,20 @@ def _clear_pending(manager, args) -> None:
     manager.wait_for_approval(timeout_minutes=args.wait)
 
 
-def _resolve_personas(args) -> List[str]:
+def _resolve_personas(args, base_config=None) -> List[str]:
     """Which personas to run: the one from --persona, or all enabled ones."""
+    base = base_config or get_config()
     if args.persona:
         personas = [args.persona]
     else:
         personas = enabled_personas()
+        from src.workspace.user_book_personas import active_userbook_persona_ids
+
+        personas = list(dict.fromkeys(personas + active_userbook_persona_ids(base)))
     if getattr(args, "market", None):
         market_id = args.market.strip()
         from src.config import get_persona_config
 
-        base = get_config()
         filtered = []
         for pid in personas:
             try:
@@ -237,7 +240,7 @@ def _resolve_personas(args) -> List[str]:
 
 def _scheduled_long_personas(args, base_config) -> tuple[List[str], List[str]]:
     """Return unattended-safe long-horizon personas and configuration failures."""
-    personas = _resolve_personas(args)
+    personas = _resolve_personas(args, base_config)
     eligible: List[str] = []
     problems: List[str] = []
     for persona_id in personas:
@@ -591,6 +594,7 @@ def main(argv: Optional[list] = None) -> int:
     if args.command == "publish_dashboard":
         from src.ipo.service import IpoResearchService
         from src.workspace.dashboard_snapshot import DashboardSnapshotService
+        from src.workspace.user_books import UserBookService
 
         ipo_analysis = IpoResearchService(config).daily_analysis()
         snapshot = DashboardSnapshotService(config).publish(
@@ -599,7 +603,9 @@ def main(argv: Optional[list] = None) -> int:
             refresh_ipos=args.refresh_ipo_research,
             refresh_portfolio=args.refresh_portfolio,
         )
+        user_books_recorded = UserBookService(config).record_all_snapshots(snapshot["snapshot_date"])
         print(f"Published delayed/EOD dashboard snapshot for {snapshot['snapshot_date']} at {snapshot['as_of']}")
+        print(f"Recorded {user_books_recorded} user watchlist snapshot(s)")
         return 0
 
     if args.command == "long_cycle":
@@ -628,7 +634,7 @@ def main(argv: Optional[list] = None) -> int:
                 break
         return worst_exit
 
-    personas = _resolve_personas(args)
+    personas = _resolve_personas(args, config)
     worst_exit = 0
     for persona_id in personas:
         exit_code = _run_persona(persona_id, args, config)

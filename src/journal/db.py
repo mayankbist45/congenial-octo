@@ -534,6 +534,58 @@ CREATE TABLE IF NOT EXISTS scheduler_controls (
     updated_by TEXT NOT NULL
 );
 
+-- User-curated paper watchlists (UI label My Watchlist, code namespace user_books)
+CREATE TABLE IF NOT EXISTS user_books (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    name TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'tracking',
+    starting_capital {REAL} NOT NULL,
+    allocation_mode TEXT NOT NULL DEFAULT 'amount',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_book_lines (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL REFERENCES user_books(id),
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    symbol TEXT NOT NULL,
+    target_amount {REAL},
+    weight_pct {REAL},
+    entry_price {REAL} NOT NULL,
+    entry_date TEXT NOT NULL,
+    notes TEXT,
+    added_at TEXT NOT NULL,
+    removed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS user_book_snapshots (
+    book_id TEXT NOT NULL REFERENCES user_books(id),
+    snapshot_date TEXT NOT NULL,
+    total_value {REAL} NOT NULL,
+    total_return_pct {REAL} NOT NULL,
+    invested_amount {REAL} NOT NULL,
+    unallocated_cash {REAL} NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (book_id, snapshot_date)
+);
+
+CREATE TABLE IF NOT EXISTS user_book_personas (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    persona_id TEXT NOT NULL UNIQUE,
+    template_persona_id TEXT NOT NULL DEFAULT 'balanced',
+    status TEXT NOT NULL DEFAULT 'requested',
+    frozen_allocation TEXT NOT NULL,
+    pending_overrides TEXT NOT NULL DEFAULT '{{}}',
+    provisioned_at TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_proposals_run ON proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_persona ON proposals(persona_id);
@@ -569,6 +621,24 @@ CREATE INDEX IF NOT EXISTS idx_agent_sources_run ON agent_sources(agent_run_id);
 CREATE INDEX IF NOT EXISTS idx_case_comments_case ON case_comments(case_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_as_of ON dashboard_snapshots(as_of);
 CREATE INDEX IF NOT EXISTS idx_ipo_gmp_observations_issue_source_time ON ipo_gmp_observations(ipo_id, source_name, observed_at);
+CREATE INDEX IF NOT EXISTS idx_user_books_user ON user_books(user_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_user_book_lines_book ON user_book_lines(book_id, removed_at);
+CREATE INDEX IF NOT EXISTS idx_user_book_snapshots_book ON user_book_snapshots(book_id, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_user_book_personas_user ON user_book_personas(user_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_user_book_personas_persona ON user_book_personas(persona_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_book_personas_status ON user_book_personas(status, created_at);
+
+-- Composite indexes aligned to hot read paths (watchlist, persona payloads, journal lookups).
+CREATE INDEX IF NOT EXISTS idx_proposals_persona_status ON proposals(persona_id, status);
+CREATE INDEX IF NOT EXISTS idx_proposals_persona_symbol_id ON proposals(persona_id, symbol, id DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_persona_id ON runs(persona_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_persona_id ON trades(persona_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_persona_symbol_executed ON trades(persona_id, symbol, executed_at);
+CREATE INDEX IF NOT EXISTS idx_quarterly_reports_symbol_period ON quarterly_reports(symbol, period_end DESC, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_persona_symbol ON quarterly_report_analyses(persona_id, symbol, run_date DESC);
+CREATE INDEX IF NOT EXISTS idx_quarterly_report_analyses_persona_run ON quarterly_report_analyses(persona_id, run_date);
+CREATE INDEX IF NOT EXISTS idx_user_book_lines_lookup ON user_book_lines(book_id, user_id, symbol, removed_at);
+CREATE INDEX IF NOT EXISTS idx_user_books_status_updated ON user_books(status, updated_at);
 """
 
 # Tables in dependency order, which the migration and test teardown both need.
@@ -605,6 +675,10 @@ TABLES = (
     "case_comments",
     "dashboard_snapshots",
     "ipo_gmp_observations",
+    "user_book_snapshots",
+    "user_book_personas",
+    "user_book_lines",
+    "user_books",
     "scheduler_controls",
 )
 
@@ -779,6 +853,8 @@ def _apply_schema(conn: Connection) -> None:
     _migrate_workspace_user_identity(conn)
     _migrate_workspace_billing(conn)
     _migrate_agent_usage_cost_status(conn)
+    _migrate_user_book_personas(conn)
+    _migrate_user_book_personas_drop_book_id(conn)
 
     statements = [s.strip() for s in schema_for(conn.dialect).split(";") if s.strip()]
     for statement in statements:
@@ -963,6 +1039,62 @@ def _migrate_agent_usage_cost_status(conn: Connection) -> None:
     if _has_column(conn, "agent_runs", "usage_cost_status"):
         return
     conn.execute("ALTER TABLE agent_runs ADD COLUMN usage_cost_status TEXT NOT NULL DEFAULT 'unknown'")
+
+
+def _migrate_user_book_personas(conn: Connection) -> None:
+    """Add deferred override payload to legacy persona rows."""
+    if _has_column(conn, "user_book_personas", "pending_overrides"):
+        return
+    logger.info("Migrating user_book_personas: add pending_overrides")
+    conn.execute(
+        "ALTER TABLE user_book_personas ADD COLUMN pending_overrides TEXT NOT NULL DEFAULT '{}'"
+    )
+    conn.commit()
+
+
+def _migrate_user_book_personas_drop_book_id(conn: Connection) -> None:
+    """Personas belong to users only; watchlist provenance lives in frozen_allocation JSON."""
+    if not _table_exists(conn, "user_book_personas"):
+        return
+    if not _has_column(conn, "user_book_personas", "book_id"):
+        return
+    import json
+
+    logger.info("Migrating user_book_personas: drop book_id column")
+    old_rows = [dict(row) for row in conn.execute("SELECT * FROM user_book_personas").fetchall()]
+    conn.execute("ALTER TABLE user_book_personas RENAME TO _user_book_personas_old")
+    conn.commit()
+    for stmt in schema_for(conn.dialect).split(";"):
+        cleaned = stmt.strip()
+        if cleaned.startswith("CREATE TABLE IF NOT EXISTS user_book_personas"):
+            conn.execute(cleaned)
+            break
+    for row in old_rows:
+        meta = json.loads(row.get("frozen_allocation") or "{}")
+        book_id = row.get("book_id")
+        if book_id and not meta.get("source_book_id"):
+            meta["source_book_id"] = book_id
+        pending = row.get("pending_overrides") or "{}"
+        conn.execute(
+            """
+            INSERT INTO user_book_personas (
+                id, user_id, persona_id, template_persona_id, status,
+                frozen_allocation, pending_overrides, provisioned_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["id"],
+                row["user_id"],
+                row["persona_id"],
+                row["template_persona_id"],
+                row["status"],
+                json.dumps(meta),
+                pending,
+                row.get("provisioned_at"),
+                row["created_at"],
+            ),
+        )
+    conn.execute("DROP TABLE _user_book_personas_old")
     conn.commit()
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from datetime import datetime, timezone
+from dataclasses import replace
 import hashlib
 import hmac
 import json
@@ -224,6 +225,28 @@ def test_workspace_portfolio_refresh_preserves_the_daily_ipo_research(temp_confi
     refreshed = publisher.refresh_portfolio(day)
 
     assert refreshed["ipos"]["issues"][0]["id"] == "acme"
+
+
+def test_portfolio_refresh_from_userbook_config_keeps_all_personas(temp_config):
+    """A DB-provisioned userbook persona config strips the ``personas`` key
+    (see ``userbook_persona_config``). Refreshing the global snapshot from it
+    must not overwrite the published persona list with an empty one."""
+    publisher = DashboardSnapshotService(temp_config)
+    day = date.today()
+    published = publisher.publish(day)
+    assert published["personas"], "baseline snapshot must include configured personas"
+
+    userbook_config = replace(
+        temp_config,
+        raw={key: value for key, value in temp_config.raw.items() if key != "personas"},
+        persona_id="userbook_abc",
+    )
+    refreshed = DashboardSnapshotService(userbook_config).refresh_portfolio(day)
+
+    assert refreshed["personas"], "a userbook refresh must keep every configured persona"
+    assert [row["id"] for row in refreshed["personas"]] == [
+        row["id"] for row in published["personas"]
+    ]
 
 
 def test_workspace_persona_contracts_are_member_read_only(temp_config):
