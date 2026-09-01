@@ -1,5 +1,6 @@
 .env
 *.local
+*compose.local.yml
 .venv/
 .tools/
 __pycache__/
