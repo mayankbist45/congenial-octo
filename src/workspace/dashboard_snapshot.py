@@ -127,11 +127,14 @@ class DashboardSnapshotService:
         if not isinstance(configured, dict) or not configured:
             # A DB-provisioned userbook persona config strips ``personas``.
             # Fall back to the full settings persona set while keeping this
-            # config's connection, so a refresh never empties the published
-            # list nor points at a different database.
+            # config's database connection, so a refresh never empties the
+            # published list nor points at a different database.
             from dataclasses import replace
 
-            base = replace(get_config(), secrets=self._config.secrets, root=self._config.root)
+            settings = get_config()
+            raw = dict(settings.raw)
+            raw["database"] = dict(self._config.raw.get("database") or {})
+            base = replace(settings, raw=raw, secrets=self._config.secrets, root=self._config.root)
             configured = base.raw.get("personas", {})
         metadata = {
             row["persona_id"]: row
