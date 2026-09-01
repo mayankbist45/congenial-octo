@@ -1227,8 +1227,9 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return billing.require_access(identity)
 
     def _investment_lead(identity: Dict[str, Any] = Depends(_workspace_identity)) -> Dict[str, Any]:
-        if identity.get("role") not in {"pm", "cio"}:
-            raise HTTPException(status_code=403, detail="PM or CIO access is required to start or finalize research work.")
+        # The research workspace is open by policy: any verified member may
+        # start, cancel, and finalize research work. Reintroduce a pm/cio
+        # role check here if a review step is ever required.
         return identity
 
     @app.get("/api/v1/workspace/me")

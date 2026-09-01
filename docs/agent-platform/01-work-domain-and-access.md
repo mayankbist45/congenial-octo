@@ -6,10 +6,10 @@ Persist collaborative research cases independently from fund strategy runs and e
 
 ## Interfaces
 
-- `POST /api/v1/workspace/cases` creates a case for `pm` and `cio` roles.
+- `POST /api/v1/workspace/cases` creates a case for any verified workspace member.
 - `GET /api/v1/workspace/cases` and `GET /api/v1/workspace/cases/{id}` are workspace-readable.
 - `POST /api/v1/workspace/cases/{id}/comments` is member-readable/writable.
-- `POST /api/v1/workspace/cases/{id}/finalize` is PM/CIO-only.
+- `POST /api/v1/workspace/cases/{id}/runs`, `.../runs/{run_id}/cancel`, and `.../finalize` are open to any verified workspace member.
 
 ## Persistence
 
@@ -17,7 +17,7 @@ Persist collaborative research cases independently from fund strategy runs and e
 
 ## Acceptance
 
-PM/CIO can create and finalize. Members can read/comment but cannot launch or finalize. Admin remains operational-only. Every rejected request returns 403 and no portfolio state changes.
+Any verified member can create, launch, comment, cancel, and finalize research work. Admin remains operational-only. Every rejected request returns 403 and no portfolio state changes.
 
 ## Deferred
 

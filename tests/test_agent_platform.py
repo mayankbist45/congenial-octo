@@ -54,12 +54,13 @@ def test_pm_case_run_comment_and_finalize_are_auditable(temp_config):
     assert case["runs"][0]["events"]
 
 
-def test_member_can_read_and_comment_but_cannot_start_or_finalize_work(temp_config):
+def test_any_workspace_member_can_start_and_finalize_work(temp_config):
     pm, _ = client_for(temp_config, "pm")
     case_id = pm.post("/api/v1/workspace/cases", json={"title": "Risk review", "brief": "Review the current portfolio risk context.", "scope": {}}).json()["case"]["id"]
     member, _ = client_for(temp_config, "member")
 
     assert member.get(f"/api/v1/workspace/cases/{case_id}").status_code == 200
     assert member.post(f"/api/v1/workspace/cases/{case_id}/comments", json={"body": "Please include concentration context."}).status_code == 201
-    assert member.post(f"/api/v1/workspace/cases/{case_id}/runs", json={"agent_type": "event_impact", "brief": "Assess the event impact.", "scope": {}}).status_code == 403
-    assert member.post(f"/api/v1/workspace/cases/{case_id}/finalize", json={"assessment": "monitor", "note": "Not authorized."}).status_code == 403
+    run = member.post(f"/api/v1/workspace/cases/{case_id}/runs", json={"agent_type": "event_impact", "brief": "Assess the event impact.", "scope": {}})
+    assert run.status_code == 202
+    assert member.post(f"/api/v1/workspace/cases/{case_id}/finalize", json={"assessment": "monitor", "note": "Team decision."}).status_code == 200

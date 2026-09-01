@@ -82,6 +82,15 @@ The frontend `/work` workspace is deployed to Vercel production (nivelo.in);
 the merged `feature/agents-pms` carries the work routes, TanStack Query polling,
 and member/PM/CIO gating.
 
+## Access Model
+
+Launch, cancel, and finalize are open to every verified workspace member (the
+`_investment_lead` gate was relaxed from `pm`/`cio` to any workspace identity on
+2026-09-02). No portfolio state is reachable from agent work: cases, runs, and
+artifacts are forward-only journal tables with no foreign keys to proposals,
+trades, or broker records. Reintroduce a role check in `_investment_lead` if a
+PM/CIO review step is ever required.
+
 ## DeepSeek Integration Notes
 
 - pydantic-ai 2.35.1's default OpenAI provider uses the Responses API, which
