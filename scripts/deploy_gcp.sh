@@ -177,10 +177,13 @@ push() {
         gc_quiet compute scp "$PROJECT_DIR/.env" "$INSTANCE:/tmp/fund.env" --zone "$ZONE" ||
             die "scp of .env failed"
         # DATABASE_URL is dropped from the laptop copy (Homebrew DSN). Preserve
-        # the VM's existing DATABASE_URL so deploy does not break the journal DB.
+        # the VM's existing DATABASE_URL and TEMPORAL_ADDRESS (Temporal points at
+        # the local loopback on the VM, not at the laptop's compose network).
         ssh_vm "OLD_DB=\$(grep '^DATABASE_URL=' '$REMOTE_DIR/.env' 2>/dev/null || true) &&
-                grep -v '^DATABASE_URL=' /tmp/fund.env > '$REMOTE_DIR/.env' &&
+                OLD_TEMPORAL=\$(grep '^TEMPORAL_ADDRESS=' '$REMOTE_DIR/.env' 2>/dev/null || true) &&
+                grep -vE '^(DATABASE_URL|TEMPORAL_ADDRESS)=' /tmp/fund.env > '$REMOTE_DIR/.env' &&
                 if [ -n \"\$OLD_DB\" ]; then echo \"\$OLD_DB\" >> '$REMOTE_DIR/.env'; fi &&
+                if [ -n \"\$OLD_TEMPORAL\" ]; then echo \"\$OLD_TEMPORAL\" >> '$REMOTE_DIR/.env'; fi &&
                 rm -f /tmp/fund.env &&
                 sudo chgrp fund '$REMOTE_DIR/.env' &&
                 chmod 640 '$REMOTE_DIR/.env'" ||
