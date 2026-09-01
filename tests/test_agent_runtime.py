@@ -68,14 +68,23 @@ def test_temporal_workflow_persists_one_audit_trail(temp_config, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
     get_config.cache_clear()
     repo, _, run = _run(temp_config)
-    monkeypatch.setattr(agent_runtime, "_generate_output", lambda *_: {
-        "artifact": {"coverage_status": "unavailable", "memo": "No connected sources.", "assessment": "investigate", "confidence": 0, "next_step": "Connect approved sources."},
-        "usage_tokens": 7,
-    })
+
+    def fake_generate_output(run_id: str, source_payloads: list):
+        repo.record_event(run_id, "generate_output", "completed", {"tokens": 7})
+        return {
+            "artifact": {"coverage_status": "unavailable", "memo": "No connected sources.", "assessment": "investigate", "confidence": 0, "next_step": "Connect approved sources."},
+            "usage_tokens": 7,
+        }
+
+    monkeypatch.setattr(agent_runtime, "_generate_output", fake_generate_output)
 
     async def execute() -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from temporalio.worker import UnsandboxedWorkflowRunner
+
+        workflow_runner = UnsandboxedWorkflowRunner()
         async with await WorkflowEnvironment.start_time_skipping() as environment:
-            async with Worker(environment.client, task_queue=agent_runtime.TASK_QUEUE, workflows=[agent_runtime.AgentRunWorkflow], activities=[agent_runtime.prepare_agent_run_activity, agent_runtime.collect_agent_sources_activity, agent_runtime.persist_agent_result_activity, agent_runtime.finalize_agent_run_activity, agent_runtime.fail_agent_run_activity]), Worker(environment.client, task_queue=agent_runtime.MODEL_TASK_QUEUE, activities=[agent_runtime.generate_agent_output_activity]):
+            async with Worker(environment.client, task_queue=agent_runtime.TASK_QUEUE, workflows=[agent_runtime.AgentRunWorkflow], activities=[agent_runtime.prepare_agent_run_activity, agent_runtime.collect_agent_sources_activity, agent_runtime.persist_agent_result_activity, agent_runtime.finalize_agent_run_activity, agent_runtime.fail_agent_run_activity], activity_executor=ThreadPoolExecutor(max_workers=2), workflow_runner=workflow_runner), Worker(environment.client, task_queue=agent_runtime.MODEL_TASK_QUEUE, activities=[agent_runtime.generate_agent_output_activity], activity_executor=ThreadPoolExecutor(max_workers=2), workflow_runner=workflow_runner):
                 await environment.client.execute_workflow(agent_runtime.AgentRunWorkflow.run, run["id"], id=f"test-{run['id']}", task_queue=agent_runtime.TASK_QUEUE)
 
     asyncio.run(execute())
