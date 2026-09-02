@@ -62,15 +62,15 @@ class WorkspaceRepository:
             ).fetchone()
             now = _now()
             existing = conn.execute("SELECT * FROM workspace_users WHERE email = ?", (email,)).fetchone()
-            # Every verified account is a read-only member. An active admin invite
-            # remains the controlled path to operational access.
-            role = "admin" if invite and invite["status"] == "active" and invite["role"] == "admin" else (existing["role"] if existing else "member")
+            # Invites grant the explicit investment-work role. Existing roles are
+            # never silently downgraded by a subsequent Google sign-in.
+            role = invite["role"] if invite and invite["status"] == "active" else (existing["role"] if existing else "member")
             conn.execute(
                 "INSERT INTO workspace_users (email, role, display_name, avatar_url, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(email) DO UPDATE SET last_seen_at = excluded.last_seen_at, "
                 "display_name = COALESCE(excluded.display_name, workspace_users.display_name), "
                 "avatar_url = COALESCE(excluded.avatar_url, workspace_users.avatar_url), "
-                "role = CASE WHEN excluded.role = 'admin' THEN 'admin' ELSE workspace_users.role END",
+                "role = CASE WHEN excluded.role IN ('admin', 'pm', 'cio') THEN excluded.role ELSE workspace_users.role END",
                 (email, role, display_name or None, avatar_url or None, now, now),
             )
             conn.commit()
@@ -78,8 +78,8 @@ class WorkspaceRepository:
             return dict(row)
 
     def create_invite(self, email: str, role: str = "member", created_by: str = "system") -> None:
-        if role not in {"admin", "member"}:
-            raise ValueError("Workspace role must be admin or member.")
+        if role not in {"admin", "pm", "cio", "member"}:
+            raise ValueError("Workspace role must be admin, cio, pm, or member.")
         with self._connection() as conn:
             conn.execute(
                 "INSERT INTO workspace_invites (email, role, status, created_at, created_by) VALUES (?, ?, 'active', ?, ?) "

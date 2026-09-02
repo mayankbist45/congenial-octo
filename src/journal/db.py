@@ -426,6 +426,85 @@ CREATE TABLE IF NOT EXISTS workspace_events (
     created_at TEXT NOT NULL
 );
 
+-- Agent work is intentionally separate from strategy runs and all execution
+-- tables. These records can never become broker proposals or trades.
+CREATE TABLE IF NOT EXISTS research_cases (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    brief TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    owner_user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    deadline_at TEXT,
+    final_assessment TEXT,
+    final_note TEXT,
+    finalized_by_user_id INTEGER REFERENCES workspace_users(id),
+    finalized_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES research_cases(id),
+    agent_type TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    input_payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    idempotency_key TEXT NOT NULL,
+    temporal_workflow_id TEXT,
+    trace_id TEXT,
+    requested_by_user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    cancellation_requested_at TEXT,
+    error TEXT,
+    usage_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_cost_usd {REAL} NOT NULL DEFAULT 0,
+    usage_cost_status TEXT NOT NULL DEFAULT 'unknown',
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE (case_id, idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS agent_run_events (
+    id {ID_PK},
+    agent_run_id TEXT NOT NULL REFERENCES agent_runs(id),
+    stage_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    details TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_artifacts (
+    id TEXT PRIMARY KEY,
+    agent_run_id TEXT NOT NULL REFERENCES agent_runs(id),
+    artifact_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (agent_run_id, artifact_type)
+);
+
+CREATE TABLE IF NOT EXISTS agent_sources (
+    id TEXT PRIMARY KEY,
+    agent_run_id TEXT NOT NULL REFERENCES agent_runs(id),
+    label TEXT NOT NULL,
+    source_url TEXT,
+    observed_at TEXT,
+    coverage_status TEXT NOT NULL,
+    details TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS case_comments (
+    id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES research_cases(id),
+    author_user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 -- A published snapshot is the read-only EOD boundary for the React workspace.
 -- It is intentionally separate from workspace portfolios and fund execution.
 CREATE TABLE IF NOT EXISTS dashboard_snapshots (
@@ -534,6 +613,12 @@ CREATE INDEX IF NOT EXISTS idx_meta_decisions_labeled ON meta_decisions(labeled_
 CREATE INDEX IF NOT EXISTS idx_workspace_jobs_user ON workspace_jobs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_workspace_portfolios_user ON workspace_portfolios(user_id, version);
 CREATE INDEX IF NOT EXISTS idx_workspace_events_user ON workspace_events(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_research_cases_updated ON research_cases(updated_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_case ON agent_runs(case_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_run_events_run ON agent_run_events(agent_run_id, id);
+CREATE INDEX IF NOT EXISTS idx_agent_artifacts_run ON agent_artifacts(agent_run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_sources_run ON agent_sources(agent_run_id);
+CREATE INDEX IF NOT EXISTS idx_case_comments_case ON case_comments(case_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_as_of ON dashboard_snapshots(as_of);
 CREATE INDEX IF NOT EXISTS idx_ipo_gmp_observations_issue_source_time ON ipo_gmp_observations(ipo_id, source_name, observed_at);
 CREATE INDEX IF NOT EXISTS idx_user_books_user ON user_books(user_id, status, updated_at);
@@ -582,6 +667,12 @@ TABLES = (
     "workspace_jobs",
     "workspace_portfolios",
     "workspace_events",
+    "research_cases",
+    "agent_runs",
+    "agent_run_events",
+    "agent_artifacts",
+    "agent_sources",
+    "case_comments",
     "dashboard_snapshots",
     "ipo_gmp_observations",
     "user_book_snapshots",
@@ -607,6 +698,7 @@ SEQUENCE_TABLES = (
     "meta_decisions",
     "workspace_invites",
     "workspace_users",
+    "agent_run_events",
 )
 
 DbTarget = Union[None, str, Path, Config]
@@ -760,6 +852,7 @@ def _apply_schema(conn: Connection) -> None:
     _migrate_runs_observability(conn)
     _migrate_workspace_user_identity(conn)
     _migrate_workspace_billing(conn)
+    _migrate_agent_usage_cost_status(conn)
     _migrate_user_book_personas(conn)
     _migrate_user_book_personas_drop_book_id(conn)
 
@@ -940,6 +1033,12 @@ def _migrate_workspace_billing(conn: Connection) -> None:
         if not _has_column(conn, "workspace_users", name):
             conn.execute(f"ALTER TABLE workspace_users ADD COLUMN {name} TEXT")
     conn.commit()
+
+
+def _migrate_agent_usage_cost_status(conn: Connection) -> None:
+    if _has_column(conn, "agent_runs", "usage_cost_status"):
+        return
+    conn.execute("ALTER TABLE agent_runs ADD COLUMN usage_cost_status TEXT NOT NULL DEFAULT 'unknown'")
 
 
 def _migrate_user_book_personas(conn: Connection) -> None:

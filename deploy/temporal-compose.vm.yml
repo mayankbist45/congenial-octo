@@ -1,0 +1,6 @@
+services:
+  agent-worker:
+    network_mode: host
+    extra_hosts: []
+    environment:
+      TEMPORAL_ADDRESS: 127.0.0.1:7233

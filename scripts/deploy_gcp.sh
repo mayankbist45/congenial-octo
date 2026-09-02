@@ -12,6 +12,7 @@
 #   ./scripts/deploy_gcp.sh logs        follow data/scheduled.log on the VM
 #   ./scripts/deploy_gcp.sh cloudlogs   read what the Ops Agent shipped to Cloud Logging
 #   ./scripts/deploy_gcp.sh dashboard   start the dashboard and print its public URL
+#   ./scripts/deploy_gcp.sh temporal    start Temporal and print the SSH tunnel command
 #   ./scripts/deploy_gcp.sh ssh         shell on the VM
 #   ./scripts/deploy_gcp.sh snapshots   nightly disk snapshots, 7 kept
 #   ./scripts/deploy_gcp.sh stop|start  pause billing for compute, keep the disk
@@ -176,10 +177,13 @@ push() {
         gc_quiet compute scp "$PROJECT_DIR/.env" "$INSTANCE:/tmp/fund.env" --zone "$ZONE" ||
             die "scp of .env failed"
         # DATABASE_URL is dropped from the laptop copy (Homebrew DSN). Preserve
-        # the VM's existing DATABASE_URL so deploy does not break the journal DB.
+        # the VM's existing DATABASE_URL and TEMPORAL_ADDRESS (Temporal points at
+        # the local loopback on the VM, not at the laptop's compose network).
         ssh_vm "OLD_DB=\$(grep '^DATABASE_URL=' '$REMOTE_DIR/.env' 2>/dev/null || true) &&
-                grep -v '^DATABASE_URL=' /tmp/fund.env > '$REMOTE_DIR/.env' &&
+                OLD_TEMPORAL=\$(grep '^TEMPORAL_ADDRESS=' '$REMOTE_DIR/.env' 2>/dev/null || true) &&
+                grep -vE '^(DATABASE_URL|TEMPORAL_ADDRESS)=' /tmp/fund.env > '$REMOTE_DIR/.env' &&
                 if [ -n \"\$OLD_DB\" ]; then echo \"\$OLD_DB\" >> '$REMOTE_DIR/.env'; fi &&
+                if [ -n \"\$OLD_TEMPORAL\" ]; then echo \"\$OLD_TEMPORAL\" >> '$REMOTE_DIR/.env'; fi &&
                 rm -f /tmp/fund.env &&
                 sudo chgrp fund '$REMOTE_DIR/.env' &&
                 chmod 640 '$REMOTE_DIR/.env'" ||
@@ -205,7 +209,11 @@ push() {
     fi
 
     echo "Restarting dashboard service"
-    ssh_vm "sudo systemctl restart mutualfund-dashboard 2>/dev/null || true"
+    ssh_vm "sudo systemctl restart mutualfund-dashboard 2>/dev/null || true
+            sudo systemctl restart nivelo-temporal 2>/dev/null || true
+            if sudo '$REMOTE_DIR/scripts/temporal_compose.sh' --env-file /etc/nivelo/temporal.env -f '$REMOTE_DIR/deploy/temporal-compose.yml' --profile agent ps --status running --format '{{.Name}}' agent-worker 2>/dev/null | grep -q .; then
+                sudo '$REMOTE_DIR/scripts/temporal_compose.sh' --env-file /etc/nivelo/temporal.env -f '$REMOTE_DIR/deploy/temporal-compose.yml' --profile agent up -d --build agent-worker
+            fi"
 }
 
 bootstrap() {
@@ -270,6 +278,15 @@ dashboard() {
     ip="$(public_ip)"
     [ -n "$ip" ] || die "could not determine external IP"
     echo "Dashboard URL: http://$ip:8000"
+}
+
+temporal() {
+    instance_exists || die "$INSTANCE does not exist yet"
+    ssh_vm "sudo systemctl start nivelo-temporal &&
+            (exec 3<>/dev/tcp/127.0.0.1/8233) 2>/dev/null" ||
+        die "Temporal UI is not available; check journalctl -u nivelo-temporal"
+    echo "Temporal UI: http://127.0.0.1:8233"
+    echo "Run separately: gcloud compute ssh $INSTANCE --zone $ZONE -- -L 8233:127.0.0.1:8233"
 }
 
 case "${1:-help}" in
@@ -353,6 +370,11 @@ backup)
 dashboard)
     require_gcloud
     dashboard
+    ;;
+
+temporal)
+    require_gcloud
+    temporal
     ;;
 
 ssh)

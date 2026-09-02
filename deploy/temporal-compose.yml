@@ -1,0 +1,53 @@
+services:
+  temporal-postgresql:
+    image: postgres:17.5
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:?set in /etc/nivelo/temporal.env}
+    volumes:
+      - temporal-postgresql:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    depends_on:
+      - temporal-postgresql
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: temporal-postgresql
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_POSTGRES_PASSWORD:?set in /etc/nivelo/temporal.env}
+      DEFAULT_NAMESPACE: default
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "127.0.0.1:7233:7233"
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:2.53.0
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "127.0.0.1:8233:8080"
+    restart: unless-stopped
+
+  agent-worker:
+    profiles: [agent]
+    build:
+      context: ..
+      dockerfile: Dockerfile.agent-worker
+    env_file:
+      - ${AGENT_WORKER_ENV_FILE:-/etc/nivelo/agent-worker.env}
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      - temporal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  temporal-postgresql:
