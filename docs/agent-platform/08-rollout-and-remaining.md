@@ -71,16 +71,19 @@ sudo ./scripts/temporal_compose.sh --env-file /etc/nivelo/temporal.env \
 
 ## Production Pilot Result
 
-`company_deep_dive` on RELIANCE (India): case created → run dispatched →
-`temporal_workflow_id` + `trace_id` recorded → worker executed all stages →
-artifact persisted with `coverage_status: unavailable`, `confidence: 0`,
-`assessment: investigate` (both EODHD and NSE sources are not configured —
-the expected degraded path). Broker state unchanged: trades 223, proposals 230,
-positions 315 before and after.
+On 2026-09-04 agents moved to **real live tool calls**: each run gathers its
+own sources (bounded gather → synthesize loop) and the artifact's coverage is
+normalized to the sources actually reached. A `company_deep_dive` on NVDA (US)
+now returns `coverage_status: partial` with a real `SEC EDGAR` filing source
+(`available`) and EODHD `unavailable` (token not yet configured). All five
+agents complete end-to-end; `portfolio_risk_review` reads the frozen persona
+snapshot, and `ic_memo` synthesizes the case's completed artifacts citing their
+run ids. Broker state is unchanged across every run.
 
-The frontend `/work` workspace is deployed to Vercel production (nivelo.in);
-the merged `feature/agents-pms` carries the work routes, TanStack Query polling,
-and member/PM/CIO gating.
+The frontend `/work` workspace is deployed to Vercel production (nivelo.in):
+per-agent launch forms (source boundaries, 2+ symbols for comparisons, persona
+id for portfolio risk), and an "Add research" panel on a case so IC Memo (and
+any agent) can run after a run completes.
 
 ## Access Model
 
@@ -94,10 +97,11 @@ PM/CIO review step is ever required.
 ## DeepSeek Integration Notes
 
 - pydantic-ai 2.35.1's default OpenAI provider uses the Responses API, which
-  DeepSeek does not accept, and its function `tool_choice` is rejected by
-  DeepSeek thinking mode. `agent_runtime._generate_output` therefore builds an
-  `OpenAIChatModel` (chat completions) and sends `thinking: {"type": "disabled"}`
-  for DeepSeek base URLs.
+  DeepSeek does not accept, and its open agentic tool loop never terminates
+  against DeepSeek. `agent_runtime._generate_output` therefore drives the tool
+  loop explicitly over the chat-completions API with
+  `thinking: {"type": "disabled"}`, bounded tool rounds, and a completion-token
+  budget.
 - The Temporal worker requires Python 3.10+ (temporalio 1.32) and an
   `activity_executor` for its sync activities; the workflow is registered with
   `UnsandboxedWorkflowRunner` because `agent_runtime.py` imports `src.config`,
@@ -105,14 +109,14 @@ PM/CIO review step is ever required.
 
 ## Remaining / Deferred
 
-- **Merge to `main`**: neither consolidated branch is merged to `main`, so the
-  `deploy-gcp.yml` auto-deploy and Vercel production builds do not yet pick the
-  agent work up automatically. After review, merge `feature/agents` → `main`
-  (backend) and `feature/agents-pms` → `main` (frontend).
-- **Source enablement**: EODHD (`EODHD_API_TOKEN`), SEC (`SEC_USER_AGENT`), and
-  NSE/BSE disclosures remain off by policy, so agents currently return
-  `unavailable` coverage. Turn on per Phase 4 coverage rules when a
-  customer-backed need exists.
+- **Merge to `main`**: the frontend agent work is on `main` (PR #4); the
+  backend `feature/agents` is still an open PR (#32). Merge it so the
+  `deploy-gcp.yml` auto-deploy stays in sync.
+- **EODHD token**: set `EODHD_API_TOKEN` in `/opt/fund/.env` and
+  `/etc/nivelo/agent-worker.env` to unlock market data/fundamentals/news
+  (comparative screen, event impact, and full deep-dive fundamentals currently
+  degrade to partial/unavailable because only SEC filings are wired). NSE/BSE
+  disclosures remain off by policy.
 - **OpenTelemetry**: `src/telemetry.py` instruments FastAPI only; an OTLP
   exporter and worker span export are not yet wired or verified.
 - **Frontend acceptance**: keyboard paths, mobile layout, and reduced-motion
