@@ -130,14 +130,56 @@ def _message_with_tool_calls(message: Any) -> Dict[str, Any]:
 
 
 def _json_artifact(raw: str) -> EvidenceArtifact:
+    import json as _json
+
     text = raw.strip()
     if text.startswith("```"):
         text = text.strip("`")
         if text.startswith("json"):
             text = text[4:]
-    import json as _json
+    parsed = _json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Artifact JSON must be an object.")
+    try:
+        return EvidenceArtifact.model_validate(parsed)
+    except Exception:
+        return _coerce_artifact(parsed)
 
-    return EvidenceArtifact.model_validate(_json.loads(text))
+
+def _coerce_artifact(raw: Dict[str, Any]) -> EvidenceArtifact:
+    """Repair a model's drifted JSON into a valid EvidenceArtifact.
+
+    Models occasionally rename fields or omit optionals (e.g. using run_ids
+    instead of source_artifact_run_ids). We fill defaults and apply the same
+    coverage/confidence caps the schema enforces; _honest_artifact then
+    normalizes coverage to the recorded sources.
+    """
+    valid_coverage = {"available", "partial", "stale", "unavailable"}
+    valid_assessment = {"strengthen", "monitor", "investigate", "no_action", "escalate"}
+    coverage = raw.get("coverage_status") if raw.get("coverage_status") in valid_coverage else "unavailable"
+    assessment = raw.get("assessment") if raw.get("assessment") in valid_assessment else "investigate"
+    try:
+        confidence = float(raw.get("confidence", 0) or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if coverage == "unavailable":
+        confidence, assessment = 0.0, "investigate"
+    elif coverage in {"partial", "stale"}:
+        confidence = min(confidence, 0.6)
+    caveat = raw.get("caveat")
+    caveats = list(raw.get("caveats") or ([caveat] if caveat else []))
+    return EvidenceArtifact(
+        structured_data=raw.get("structured_data") or {},
+        key_signals=list(raw.get("key_signals") or raw.get("signals") or []),
+        coverage_status=coverage,
+        caveats=caveats,
+        memo=str(raw.get("memo") or raw.get("summary") or ""),
+        assessment=assessment,
+        confidence=min(max(confidence, 0.0), 1.0),
+        next_step=str(raw.get("next_step") or raw.get("recommendation") or "Review the evidence and decide next steps."),
+        source_labels=list(raw.get("source_labels") or []),
+        source_artifact_run_ids=list(raw.get("source_artifact_run_ids") or raw.get("run_ids") or raw.get("artifact_run_ids") or []),
+    )
 
 
 def _generate_output(run_id: str) -> Dict[str, Any]:
@@ -162,9 +204,11 @@ def _generate_output(run_id: str) -> Dict[str, Any]:
         {"role": "user", "content": f"Resolve the research task by calling the tools you need, then return the EvidenceArtifact JSON.\nTask: {run['input']['brief']}"},
     ]
     tokens = 0
+    completion_tokens = 0
     for _round in range(MAX_GATHER_ROUNDS):
         response = client.chat.completions.create(model=model_name, messages=messages, tools=schemas, tool_choice="auto", **kwargs)
         tokens += int((response.usage.total_tokens if response.usage else 0) or 0)
+        completion_tokens += int((response.usage.completion_tokens if response.usage else 0) or 0)
         message = response.choices[0].message
         messages.append(_message_with_tool_calls(message))
         if not message.tool_calls:
@@ -179,21 +223,29 @@ def _generate_output(run_id: str) -> Dict[str, Any]:
 
     messages.append({"role": "user", "content": "Return the final EvidenceArtifact as JSON now."})
     artifact: Optional[EvidenceArtifact] = None
+    last_raw = ""
     for _attempt in range(2):
         response = client.chat.completions.create(model=model_name, messages=messages, response_format={"type": "json_object"}, **kwargs)
         tokens += int((response.usage.total_tokens if response.usage else 0) or 0)
-        if tokens > contract.token_budget:
+        completion_tokens += int((response.usage.completion_tokens if response.usage else 0) or 0)
+        # The budget guards generation output, not the re-sent tool history.
+        if completion_tokens > contract.token_budget:
             raise ValueError("Agent token budget exceeded.")
+        last_raw = response.choices[0].message.content or ""
         try:
-            artifact = _json_artifact(response.choices[0].message.content or "")
+            artifact = _json_artifact(last_raw)
             break
         except Exception:
             messages.append({"role": "user", "content": "That was not a valid EvidenceArtifact JSON. Return a corrected JSON object now."})
     if artifact is None:
-        raise ValueError("Agent did not return a valid EvidenceArtifact.")
+        raise ValueError(f"Agent did not return a valid EvidenceArtifact: {last_raw[:200]}")
 
     sources = collector.sources
     artifact = _honest_artifact(contract, artifact, sources)
+    if contract.id == "ic_memo":
+        allowed = sorted({rid for source in sources for rid in source.details.get("artifact_run_ids", [])})
+        if allowed:
+            artifact = artifact.model_copy(update={"source_artifact_run_ids": allowed})
     coverage = "unavailable" if not sources else coverage_status(sources, contract.required_sources)
     repo.record_event(run_id, "collect_sources", "completed", {"coverage": coverage, "conflicts": source_conflicts(sources), "source_count": len(sources)})
     repo.record_event(run_id, "generate_output", "completed", {"tokens": tokens, "cost_usd": None, "tool_calls": len(sources)})
@@ -220,29 +272,37 @@ def _prepare_run(run_id: str) -> Dict[str, Any]:
 
 
 def _honest_artifact(contract: Any, artifact: EvidenceArtifact, sources: list[SourceRecord]) -> EvidenceArtifact:
-    """Force the artifact's coverage to the truthful source-based status.
+    """Normalize the artifact to the truthful source-based state.
 
     This is the required-sources backstop: coverage reflects which of the
     contract's required source categories actually returned usable evidence,
-    so a lazy or over-cautious model cannot understate real evidence nor
-    overstate unavailable ones.
+    and source_labels only ever cites providers the run actually consulted, so
+    a lazy or over-cautious model can neither hide real evidence nor cite
+    sources it never reached.
     """
     expected = coverage_status(sources, contract.required_sources) if sources else "unavailable"
-    if artifact.coverage_status == expected:
-        return artifact
+    labels = [source.label for source in sources]
+    available_labels = list(dict.fromkeys(source.label for source in sources if source.coverage_status == "available"))
     fields = artifact.model_dump()
-    available = sum(1 for source in sources if source.coverage_status == "available")
-    if expected == "unavailable":
-        fields.update(coverage_status="unavailable", confidence=0.0, assessment="investigate")
-    else:
-        fields["coverage_status"] = expected
-        fields["confidence"] = min(float(fields.get("confidence") or 0.0), 0.6)
-    caveats = list(fields.get("caveats") or [])
-    caveats.append(
-        f"Coverage corrected to {expected} to match the sources: {available} of {len(contract.required_sources)} "
-        f"required source categories returned available evidence (model reported {artifact.coverage_status})."
-    )
-    fields["caveats"] = caveats
+    changed = artifact.coverage_status != expected
+    if changed:
+        available = sum(1 for source in sources if source.coverage_status == "available")
+        if expected == "unavailable":
+            fields.update(coverage_status="unavailable", confidence=0.0, assessment="investigate")
+        else:
+            fields["coverage_status"] = expected
+            fields["confidence"] = min(float(fields.get("confidence") or 0.0), 0.6)
+        caveats = list(fields.get("caveats") or [])
+        caveats.append(
+            f"Coverage corrected to {expected} to match the sources: {available} of {len(contract.required_sources)} "
+            f"required source categories returned available evidence (model reported {artifact.coverage_status})."
+        )
+        fields["caveats"] = caveats
+    cited = [label for label in (fields.get("source_labels") or []) if label in labels]
+    fallback = available_labels or (labels if expected != "unavailable" else [])
+    if not cited:
+        cited = fallback if expected != "unavailable" else []
+    fields["source_labels"] = cited
     return EvidenceArtifact.model_validate(fields)
 
 
@@ -314,7 +374,7 @@ try:  # API imports remain valid in the Python 3.9 web process.
                 stage = "generate_output"
                 output = await workflow.execute_activity(generate_agent_output_activity, run_id, task_queue=MODEL_TASK_QUEUE, start_to_close_timeout=timedelta(seconds=prepared["timeout_seconds"]), retry_policy=RetryPolicy(maximum_attempts=1))
                 stage = "persist"
-                persisted = await workflow.execute_activity(persist_agent_result_activity, args=[run_id, output], start_to_close_timeout=timedelta(minutes=1))
+                persisted = await workflow.execute_activity(persist_agent_result_activity, args=[run_id, output], start_to_close_timeout=timedelta(minutes=1), retry_policy=RetryPolicy(maximum_attempts=1))
                 await workflow.execute_activity(finalize_agent_run_activity, args=[run_id, persisted], start_to_close_timeout=timedelta(minutes=1))
             except asyncio.CancelledError:
                 raise

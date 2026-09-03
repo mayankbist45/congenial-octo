@@ -317,15 +317,16 @@ class AgentSourceCollector:
         ]
         if not artifacts:
             return self._unavailable_result("Completed case artifacts", "case_artifacts", "No completed case artifacts are available.")
+        run_ids = sorted({item["run_id"] for item in artifacts})
         source = SourceRecord(
             label="Completed case artifacts",
             category="case_artifacts",
             observed_at=_now(),
             coverage_status="available",
-            details={"artifact_count": len(artifacts)},
+            details={"artifact_count": len(artifacts), "artifact_run_ids": run_ids},
         )
         self.record(source)
-        return self._payload(source, {"artifacts": artifacts})
+        return self._payload(source, {"artifacts": artifacts, "run_ids": run_ids})
 
     # ------------------------------------------------------------------
     # Helpers
