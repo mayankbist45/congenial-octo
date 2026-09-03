@@ -8,11 +8,36 @@ from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from src.config import Config, get_config
-from src.workspace.agent_platform import AgentRunInput, AgentWorkRepository, EvidenceArtifact, SourceRecord, agent_contract, build_pydantic_agent, coverage_status, source_conflicts, validate_evidence
-from src.workspace.agent_sources import AgentSourceCollector
+from src.workspace.agent_platform import (
+    AGENT_GUIDANCE,
+    AgentRunInput,
+    AgentWorkRepository,
+    EvidenceArtifact,
+    SourceRecord,
+    agent_contract,
+    coverage_status,
+    source_conflicts,
+    validate_evidence,
+)
+from src.workspace.agent_sources import AgentSourceCollector, invoke_tool, tool_schema
 
 TASK_QUEUE = "nivelo-agent-work"
 MODEL_TASK_QUEUE = "nivelo-agent-model"
+MAX_GATHER_ROUNDS = 3
+
+_ARTIFACT_INSTRUCTIONS = (
+    "Return ONLY a valid JSON object for the research EvidenceArtifact with exactly these fields: "
+    "structured_data (object of decision-relevant data), key_signals (array of strings), "
+    "coverage_status (one of \"available\", \"partial\", \"stale\", \"unavailable\"), caveats (array of strings), "
+    "memo (the source-backed analysis), assessment (one of \"strengthen\", \"monitor\", \"investigate\", \"no_action\", \"escalate\"), "
+    "confidence (number 0..1), next_step (string), source_labels (array of the exact provider labels you relied on, e.g. \"EODHD\" or \"SEC EDGAR\"), "
+    "and source_artifact_run_ids (array of run ids; IC Memo only, otherwise an empty array). "
+    "Set coverage_status from the tool results you received: available only when EVERY required source category "
+    "returned usable data; partial when at least one did but not all; unavailable only when NONE did. "
+    "Never mark the whole artifact unavailable when a tool returned usable data - analyse that evidence and use partial. "
+    "coverage unavailable requires confidence 0 and assessment \"investigate\"; coverage partial or stale caps confidence at 0.6. "
+    "Never recommend orders, sizing, or execution."
+)
 
 
 class AgentRuntime:
@@ -54,32 +79,130 @@ class AgentRuntime:
         AgentWorkRepository(self._config).set_run_status(run_id, "cancelled")
 
 
-def _artifact_prompt(run: Dict[str, Any], sources: list[Dict[str, Any]]) -> str:
+def _live_prompt(run: Dict[str, Any], contract: Any) -> str:
     return (
-        "You are a research-only public-markets work agent. Return only the requested structured output. "
-        "Do not provide trade instructions. Do not introduce facts beyond the supplied source material. If verified source data is unavailable, set coverage_status to unavailable, "
-        "confidence to 0, assessment to investigate, and clearly explain the limitation.\n\n"
-        f"Agent: {run['agent_type']}\nBrief: {run['input']['brief']}\nScope: {run['input']['scope']}\n"
-        f"Approved source coverage: {sources}"
+        "You are a research-only public-markets work agent. You NEVER propose orders, sizing, or execution. "
+        "Gather evidence by calling the tools available to you before writing your analysis; never invent facts. "
+        "A tool result with coverage_status \"unavailable\" is NOT usable evidence. Set your final coverage_status "
+        "from the tool results you actually received: available only when EVERY required source category returned "
+        "usable data, partial when at least one did but not all, unavailable only when NONE did. "
+        "Cite the exact provider label of every tool result you relied on in source_labels.\n\n"
+        f"{AGENT_GUIDANCE.get(contract.id, '')}\n\n"
+        f"Agent: {run['agent_type']}\n"
+        f"Brief: {run['input']['brief']}\n"
+        f"Scope: {run['input']['scope']}\n\n"
+        f"{_ARTIFACT_INSTRUCTIONS}"
     )
 
 
-def _completed_case_artifacts(repo: AgentWorkRepository, run: Dict[str, Any]) -> list[Dict[str, Any]]:
-    case = repo.case(run["case_id"])
-    return [{"run_id": item["id"], "artifact": artifact} for item in case["runs"] if item["id"] != run["id"] and item["status"] == "completed" for artifact in item["artifacts"]]
+def _model_client() -> tuple[Any, str]:
+    from openai import OpenAI
+
+    model_name = os.getenv("WORKSPACE_AGENT_MODEL", "").strip().removeprefix("openai:")
+    if not model_name:
+        raise RuntimeError("Agent model is not configured.")
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+    api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
+    client = OpenAI(base_url=base_url, api_key=api_key)
+    return client, model_name
 
 
-def _usage_tokens(result: Any) -> int:
-    usage = getattr(result, "usage", None)
-    usage = usage() if callable(usage) else usage
-    return int(getattr(usage, "total_tokens", 0) or 0)
+def _request_kwargs() -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {"max_tokens": 4000}
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+    # The default OpenAI provider routes to the Responses API, which DeepSeek
+    # does not support and whose tool_choice its thinking mode rejects. Use the
+    # chat-completions model and disable DeepSeek thinking so tool calls work.
+    if base_url and "deepseek" in base_url.lower():
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    return kwargs
 
 
-def _usage_cost(result: Any) -> Optional[float]:
-    usage = getattr(result, "usage", None)
-    usage = usage() if callable(usage) else usage
-    cost = getattr(usage, "cost", None)
-    return float(cost) if isinstance(cost, (int, float)) else None
+def _message_with_tool_calls(message: Any) -> Dict[str, Any]:
+    calls = [
+        {"id": call.id, "type": "function", "function": {"name": call.function.name, "arguments": call.function.arguments}}
+        for call in (message.tool_calls or [])
+    ]
+    entry: Dict[str, Any] = {"role": "assistant", "content": message.content}
+    if calls:  # deepseek rejects an empty tool_calls array
+        entry["tool_calls"] = calls
+    return entry
+
+
+def _json_artifact(raw: str) -> EvidenceArtifact:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+    import json as _json
+
+    return EvidenceArtifact.model_validate(_json.loads(text))
+
+
+def _generate_output(run_id: str) -> Dict[str, Any]:
+    import json as _json
+
+    repo = AgentWorkRepository()
+    run = repo.run(run_id)
+    if repo.is_cancellation_requested(run_id):
+        return {"cancelled": True}
+    client, model_name = _model_client()
+    kwargs = _request_kwargs()
+
+    payload = AgentRunInput.model_validate(run["input"])
+    contract = agent_contract(payload.agent_type)
+    collector = AgentSourceCollector(config=get_config(), scope=payload.scope, repo=repo, run=run)
+    schemas = [schema for name in contract.allowed_tools if (schema := tool_schema(name)) is not None]
+    if not schemas:
+        raise RuntimeError("Agent contract has no enabled source tools.")
+
+    messages: list[Dict[str, Any]] = [
+        {"role": "system", "content": _live_prompt(run, contract)},
+        {"role": "user", "content": f"Resolve the research task by calling the tools you need, then return the EvidenceArtifact JSON.\nTask: {run['input']['brief']}"},
+    ]
+    tokens = 0
+    for _round in range(MAX_GATHER_ROUNDS):
+        response = client.chat.completions.create(model=model_name, messages=messages, tools=schemas, tool_choice="auto", **kwargs)
+        tokens += int((response.usage.total_tokens if response.usage else 0) or 0)
+        message = response.choices[0].message
+        messages.append(_message_with_tool_calls(message))
+        if not message.tool_calls:
+            break
+        for call in message.tool_calls:
+            try:
+                arguments = _json.loads(call.function.arguments or "{}")
+            except ValueError:
+                arguments = {}
+            result = invoke_tool(collector, call.function.name, arguments)
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": _json.dumps(result)})
+
+    messages.append({"role": "user", "content": "Return the final EvidenceArtifact as JSON now."})
+    artifact: Optional[EvidenceArtifact] = None
+    for _attempt in range(2):
+        response = client.chat.completions.create(model=model_name, messages=messages, response_format={"type": "json_object"}, **kwargs)
+        tokens += int((response.usage.total_tokens if response.usage else 0) or 0)
+        if tokens > contract.token_budget:
+            raise ValueError("Agent token budget exceeded.")
+        try:
+            artifact = _json_artifact(response.choices[0].message.content or "")
+            break
+        except Exception:
+            messages.append({"role": "user", "content": "That was not a valid EvidenceArtifact JSON. Return a corrected JSON object now."})
+    if artifact is None:
+        raise ValueError("Agent did not return a valid EvidenceArtifact.")
+
+    sources = collector.sources
+    artifact = _honest_artifact(contract, artifact, sources)
+    coverage = "unavailable" if not sources else coverage_status(sources, contract.required_sources)
+    repo.record_event(run_id, "collect_sources", "completed", {"coverage": coverage, "conflicts": source_conflicts(sources), "source_count": len(sources)})
+    repo.record_event(run_id, "generate_output", "completed", {"tokens": tokens, "cost_usd": None, "tool_calls": len(sources)})
+    return {
+        "artifact": artifact.model_dump(mode="json"),
+        "usage_tokens": tokens,
+        "usage_cost_usd": None,
+        "sources": [source.model_dump(mode="json") for source in sources],
+    }
 
 
 def _prepare_run(run_id: str) -> Dict[str, Any]:
@@ -96,61 +219,34 @@ def _prepare_run(run_id: str) -> Dict[str, Any]:
     return {"terminal": False, "source_attempts": contract.retry_limit + 1, "timeout_seconds": contract.timeout_seconds}
 
 
-def _collect_sources(run_id: str) -> list[Dict[str, Any]]:
-    repo = AgentWorkRepository()
-    run = repo.run(run_id)
-    if repo.is_cancellation_requested(run_id):
-        return []
-    payload = AgentRunInput.model_validate(run["input"])
-    contract = agent_contract(payload.agent_type)
-    case = repo.case(run["case_id"])
-    artifacts = _completed_case_artifacts(repo, run)
-    completed = len(artifacts)
-    sources = AgentSourceCollector().collect(contract, payload.scope, completed)
-    if payload.agent_type == "ic_memo":
-        sources[0].details["artifact_run_ids"] = sorted({item["run_id"] for item in artifacts})
-    repo.record_event(run_id, "collect_sources", "completed", {"coverage": coverage_status(sources, contract.required_sources), "conflicts": source_conflicts(sources)})
-    return [source.model_dump(mode="json") for source in sources]
+def _honest_artifact(contract: Any, artifact: EvidenceArtifact, sources: list[SourceRecord]) -> EvidenceArtifact:
+    """Force the artifact's coverage to the truthful source-based status.
 
-
-def _generate_output(run_id: str, source_payloads: list[Dict[str, Any]]) -> Dict[str, Any]:
-    repo = AgentWorkRepository()
-    run = repo.run(run_id)
-    if repo.is_cancellation_requested(run_id):
-        return {"cancelled": True}
-    model_name = os.getenv("WORKSPACE_AGENT_MODEL", "").strip()
-    if not model_name:
-        raise RuntimeError("Agent model is not configured.")
-    # The default OpenAI provider routes to the Responses API, which DeepSeek
-    # does not support and whose tool_choice its thinking mode rejects. Use the
-    # chat-completions model and disable DeepSeek thinking so tool calls work.
-    from pydantic_ai.models.openai import OpenAIChatModel
-    from pydantic_ai.providers.openai import OpenAIProvider
-
-    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
-    api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
-    model = OpenAIChatModel(
-        model_name.removeprefix("openai:"),
-        provider=OpenAIProvider(base_url=base_url, api_key=api_key),
+    This is the required-sources backstop: coverage reflects which of the
+    contract's required source categories actually returned usable evidence,
+    so a lazy or over-cautious model cannot understate real evidence nor
+    overstate unavailable ones.
+    """
+    expected = coverage_status(sources, contract.required_sources) if sources else "unavailable"
+    if artifact.coverage_status == expected:
+        return artifact
+    fields = artifact.model_dump()
+    available = sum(1 for source in sources if source.coverage_status == "available")
+    if expected == "unavailable":
+        fields.update(coverage_status="unavailable", confidence=0.0, assessment="investigate")
+    else:
+        fields["coverage_status"] = expected
+        fields["confidence"] = min(float(fields.get("confidence") or 0.0), 0.6)
+    caveats = list(fields.get("caveats") or [])
+    caveats.append(
+        f"Coverage corrected to {expected} to match the sources: {available} of {len(contract.required_sources)} "
+        f"required source categories returned available evidence (model reported {artifact.coverage_status})."
     )
-    model_settings: Dict[str, Any] = {"max_tokens": 2000}
-    if base_url and "deepseek" in base_url.lower():
-        model_settings["extra_body"] = {"thinking": {"type": "disabled"}}
-    payload = AgentRunInput.model_validate(run["input"])
-    contract = agent_contract(payload.agent_type)
-    prompt_sources = source_payloads
-    if payload.agent_type == "ic_memo":
-        prompt_sources = [{**source, "completed_artifacts": _completed_case_artifacts(repo, run)} for source in source_payloads]
-    result = build_pydantic_agent(contract, model).run_sync(_artifact_prompt(run, prompt_sources), model_settings=model_settings)
-    artifact = EvidenceArtifact.model_validate(result.output)
-    tokens, cost = _usage_tokens(result), _usage_cost(result)
-    if tokens > contract.token_budget:
-        raise ValueError("Agent token budget exceeded.")
-    repo.record_event(run_id, "generate_output", "completed", {"tokens": tokens, "cost_usd": cost})
-    return {"artifact": artifact.model_dump(mode="json"), "usage_tokens": tokens, "usage_cost_usd": cost}
+    fields["caveats"] = caveats
+    return EvidenceArtifact.model_validate(fields)
 
 
-def _persist_result(run_id: str, source_payloads: list[Dict[str, Any]], output: Dict[str, Any]) -> bool:
+def _persist_result(run_id: str, output: Dict[str, Any]) -> bool:
     if output.get("cancelled"):
         return False
     repo = AgentWorkRepository()
@@ -159,7 +255,7 @@ def _persist_result(run_id: str, source_payloads: list[Dict[str, Any]], output: 
         return False
     payload = AgentRunInput.model_validate(run["input"])
     contract = agent_contract(payload.agent_type)
-    sources = [SourceRecord.model_validate(item) for item in source_payloads]
+    sources = [SourceRecord.model_validate(item) for item in output.get("sources", [])]
     artifact = EvidenceArtifact.model_validate(output["artifact"])
     validate_evidence(contract, artifact, sources)
     persisted = repo.save_artifact(run_id, artifact, sources, int(output.get("usage_tokens", 0)), output.get("usage_cost_usd"))
@@ -191,16 +287,12 @@ try:  # API imports remain valid in the Python 3.9 web process.
         return _prepare_run(run_id)
 
     @activity.defn
-    def collect_agent_sources_activity(run_id: str) -> list[Dict[str, Any]]:
-        return _collect_sources(run_id)
+    def generate_agent_output_activity(run_id: str) -> Dict[str, Any]:
+        return _generate_output(run_id)
 
     @activity.defn
-    def generate_agent_output_activity(run_id: str, source_payloads: list[Dict[str, Any]]) -> Dict[str, Any]:
-        return _generate_output(run_id, source_payloads)
-
-    @activity.defn
-    def persist_agent_result_activity(run_id: str, source_payloads: list[Dict[str, Any]], output: Dict[str, Any]) -> bool:
-        return _persist_result(run_id, source_payloads, output)
+    def persist_agent_result_activity(run_id: str, output: Dict[str, Any]) -> bool:
+        return _persist_result(run_id, output)
 
     @activity.defn
     def finalize_agent_run_activity(run_id: str, persisted: bool) -> None:
@@ -219,12 +311,10 @@ try:  # API imports remain valid in the Python 3.9 web process.
                 prepared = await workflow.execute_activity(prepare_agent_run_activity, run_id, start_to_close_timeout=timedelta(minutes=1))
                 if prepared["terminal"]:
                     return
-                stage = "collect_sources"
-                sources = await workflow.execute_activity(collect_agent_sources_activity, run_id, start_to_close_timeout=timedelta(seconds=prepared["timeout_seconds"]), retry_policy=RetryPolicy(maximum_attempts=prepared["source_attempts"]))
                 stage = "generate_output"
-                output = await workflow.execute_activity(generate_agent_output_activity, args=[run_id, sources], task_queue=MODEL_TASK_QUEUE, start_to_close_timeout=timedelta(seconds=prepared["timeout_seconds"]), retry_policy=RetryPolicy(maximum_attempts=1))
+                output = await workflow.execute_activity(generate_agent_output_activity, run_id, task_queue=MODEL_TASK_QUEUE, start_to_close_timeout=timedelta(seconds=prepared["timeout_seconds"]), retry_policy=RetryPolicy(maximum_attempts=1))
                 stage = "persist"
-                persisted = await workflow.execute_activity(persist_agent_result_activity, args=[run_id, sources, output], start_to_close_timeout=timedelta(minutes=1))
+                persisted = await workflow.execute_activity(persist_agent_result_activity, args=[run_id, output], start_to_close_timeout=timedelta(minutes=1))
                 await workflow.execute_activity(finalize_agent_run_activity, args=[run_id, persisted], start_to_close_timeout=timedelta(minutes=1))
             except asyncio.CancelledError:
                 raise

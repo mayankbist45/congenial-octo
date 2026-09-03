@@ -142,12 +142,16 @@ fi
 AGENT_ENV=/etc/nivelo/agent-worker.env
 if [ ! -f "$AGENT_ENV" ]; then
     DB_URL="$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
+    EODHD="$(grep '^EODHD_API_TOKEN=.' "$ENV_FILE" | cut -d= -f2- || true)"
+    SEC_UA="$(grep '^SEC_USER_AGENT=.' "$ENV_FILE" | cut -d= -f2- || true)"
     cat >"$AGENT_ENV" <<EOF
 DATABASE_URL=${DB_URL/127.0.0.1/host.docker.internal}
 TEMPORAL_ADDRESS=temporal:7233
 TEMPORAL_NAMESPACE=default
 WORKSPACE_AGENT_MODEL=
 OPENAI_API_KEY=
+EODHD_API_TOKEN=${EODHD}
+SEC_USER_AGENT=${SEC_UA}
 EOF
     chown "$APP_USER":"$SHARED_GROUP" "$AGENT_ENV"
     chmod 640 "$AGENT_ENV"

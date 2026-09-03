@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from src.workspace.agent_platform import agent_contract
+from src.workspace.agent_platform import WorkScope
 from src.workspace.agent_sources import AgentSourceCollector
 
 
@@ -33,81 +33,114 @@ class FakeSession:
         return self.responses.pop(0)
 
 
+def _collector(session=None, symbols=(), market=None, exchange=None):
+    return AgentSourceCollector(scope=WorkScope(symbols=list(symbols), market=market, exchange=exchange), session=session)
+
+
 def test_eodhd_is_explicitly_unavailable_without_credentials(monkeypatch):
     monkeypatch.delenv("EODHD_API_TOKEN", raising=False)
-    records = AgentSourceCollector().collect(agent_contract("comparative_screen"), {"symbols": ["NVDA", "AMD"]})
-    assert {record.coverage_status for record in records} == {"unavailable"}
-    assert {record.category for record in records} == {"market_data", "fundamentals"}
+    collector = _collector(symbols=["NVDA", "AMD"])
+    collector.fetch_eodhd_market_data()
+    collector.fetch_eodhd_fundamentals()
+    assert {source.coverage_status for source in collector.sources} == {"unavailable"}
+    assert {source.category for source in collector.sources} == {"market_data", "fundamentals"}
 
 
 def test_eodhd_marks_old_vendor_data_stale(monkeypatch):
     monkeypatch.setenv("EODHD_API_TOKEN", "test-token")
     old = (datetime.now(timezone.utc) - timedelta(days=4)).isoformat()
-    session = FakeSession([FakeResponse({"timestamp": old})])
-    records = AgentSourceCollector(session).collect(agent_contract("company_deep_dive"), {"symbols": ["NVDA"]})
-    eodhd = next(record for record in records if record.label == "EODHD")
-    assert eodhd.coverage_status == "stale"
-    assert "api_token" not in eodhd.source_url
-
-
-def test_multi_symbol_eodhd_coverage_is_partial_until_every_symbol_is_collected(monkeypatch):
-    monkeypatch.setenv("EODHD_API_TOKEN", "test-token")
-    session = FakeSession([FakeResponse({"timestamp": datetime.now(timezone.utc).isoformat()}), FakeResponse({"timestamp": datetime.now(timezone.utc).isoformat()})])
-    records = AgentSourceCollector(session).collect(agent_contract("comparative_screen"), {"symbols": ["NVDA", "AMD"]})
-    assert records[0].coverage_status == "partial"
-    assert records[0].details["reason"] == "Only the first requested symbol was retrieved."
+    collector = _collector(FakeSession([FakeResponse({"timestamp": old})]), symbols=["NVDA"])
+    result = collector.fetch_eodhd_market_data()
+    record = collector.sources[-1]
+    assert record.label == "EODHD"
+    assert record.coverage_status == "stale"
+    assert result["provider"] == "EODHD"
+    assert "api_token" not in record.source_url
 
 
 def test_eodhd_malformed_or_rate_limited_responses_are_unavailable(monkeypatch):
     monkeypatch.setenv("EODHD_API_TOKEN", "test-token")
-    malformed = AgentSourceCollector(FakeSession([FakeResponse(ValueError("bad json"))]))
-    records = malformed.collect(agent_contract("company_deep_dive"), {"symbols": ["NVDA"]})
-    assert next(record for record in records if record.label == "EODHD").coverage_status == "unavailable"
+    malformed = _collector(FakeSession([FakeResponse(ValueError("bad json"))]), symbols=["NVDA"])
+    malformed.fetch_eodhd_market_data()
+    assert malformed.sources[-1].coverage_status == "unavailable"
 
-    limited = AgentSourceCollector(FakeSession([FakeResponse(error=requests.HTTPError("429"))]))
-    records = limited.collect(agent_contract("company_deep_dive"), {"symbols": ["NVDA"]})
-    assert next(record for record in records if record.label == "EODHD").coverage_status == "unavailable"
+    limited = _collector(FakeSession([FakeResponse(error=requests.HTTPError("429"))]), symbols=["NVDA"])
+    limited.fetch_eodhd_market_data()
+    assert limited.sources[-1].coverage_status == "unavailable"
 
 
-def test_sec_and_exchange_disclosures_require_explicit_configuration(monkeypatch):
+def test_sec_filings_require_user_agent_and_normalize_facts(monkeypatch):
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
-    us = AgentSourceCollector().collect(agent_contract("company_deep_dive"), {"symbols": ["NVDA"], "market": "US equities"})
-    assert next(record for record in us if record.category == "filings").coverage_status == "unavailable"
+    unconfigured = _collector(symbols=["NVDA"], market="US equities")
+    result = unconfigured.fetch_primary_filings()
+    assert result["coverage_status"] == "unavailable"
+    assert unconfigured.sources[-1].label == "SEC EDGAR"
 
-    monkeypatch.setenv("WORKSPACE_PRIMARY_DISCLOSURES_ENABLED", "false")
-    india = AgentSourceCollector().collect(agent_contract("company_deep_dive"), {"symbols": ["INFY"], "market": "India equities", "exchange": "NSE"})
-    assert next(record for record in india if record.category == "filings").coverage_status == "unavailable"
-
-
-def test_nse_and_bse_disclosures_normalize_enabled_responses(monkeypatch):
-    monkeypatch.setenv("WORKSPACE_PRIMARY_DISCLOSURES_ENABLED", "true")
-    for exchange in ("NSE", "BSE"):
-        if exchange == "BSE":
-            monkeypatch.setenv("BSE_DISCLOSURES_URL", "https://bse.example.test/disclosures")
-            monkeypatch.setenv("BSE_DATAFEED_API_KEY", "test-key")
-        session = FakeSession([FakeResponse([{"subject": "Quarterly results"}])])
-        records = AgentSourceCollector(session).collect(
-            agent_contract("company_deep_dive"),
-            {"symbols": ["INFY"], "market": "India equities", "exchange": exchange},
-        )
-        filing = next(record for record in records if record.category == "filings")
-        assert filing.coverage_status == "available"
-        assert filing.details["exchange"] == exchange
-        assert session.calls[0][0].startswith("https://")
-
-
-def test_sec_primary_filing_and_case_artifact_sources_are_normalized(monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Nivelo Research research@example.com")
     session = FakeSession([
         FakeResponse({"0": {"ticker": "NVDA", "cik_str": 1045810}}),
-        FakeResponse({"facts": {"us-gaap": {}}}),
+        FakeResponse({"entityName": "NVIDIA CORP", "facts": {"us-gaap": {"Assets": {"units": {"USD": []}}}}}),
     ])
-    collector = AgentSourceCollector(session)
-    record = collector.collect(agent_contract("company_deep_dive"), {"symbols": ["NVDA"], "market": "US equities"})[-1]
+    collector = _collector(session, symbols=["NVDA"], market="US equities")
+    result = collector.fetch_primary_filings()
+    record = collector.sources[-1]
     assert record.label == "SEC EDGAR"
     assert record.coverage_status == "available"
     assert record.details["cik"] == "0001045810"
+    assert result["data"]["entityName"] == "NVIDIA CORP"
 
-    memo = collector.collect(agent_contract("ic_memo"), {}, completed_artifacts=2)
-    assert memo[0].coverage_status == "available"
-    assert memo[0].details == {"artifact_count": 2}
+
+def test_exchange_disclosures_require_explicit_configuration(monkeypatch):
+    monkeypatch.setenv("WORKSPACE_PRIMARY_DISCLOSURES_ENABLED", "false")
+    india = _collector(symbols=["INFY"], market="India equities", exchange="NSE")
+    india.fetch_primary_filings()
+    assert india.sources[-1].coverage_status == "unavailable"
+
+    monkeypatch.setenv("WORKSPACE_PRIMARY_DISCLOSURES_ENABLED", "true")
+    monkeypatch.setenv("BSE_DISCLOSURES_URL", "https://bse.example.test/disclosures")
+    monkeypatch.setenv("BSE_DATAFEED_API_KEY", "test-key")
+    for exchange in ("NSE", "BSE"):
+        session = FakeSession([FakeResponse([{"subject": "Quarterly results"}])])
+        collector = _collector(session, symbols=["INFY"], market="India equities", exchange=exchange)
+        result = collector.fetch_primary_filings()
+        record = collector.sources[-1]
+        assert record.coverage_status == "available"
+        assert record.details["exchange"] == exchange
+        assert result["coverage_status"] == "available"
+
+
+def test_portfolio_snapshot_degrades_gracefully_and_reads_frozen_persona(monkeypatch):
+    import src.workspace.dashboard_snapshot as snap_mod
+    from src.workspace.agent_sources import AgentSourceCollector as Collector
+
+    class FakeSnapshots:
+        def __init__(self, config=None):
+            pass
+
+        def latest(self):
+            return {
+                "as_of": "2026-09-01T00:00:00+00:00",
+                "snapshot_date": "2026-09-01",
+                "personas": [{
+                    "id": "balanced",
+                    "metadata": {"fund_name": "Balanced India Research"},
+                    "overview": {"total_value": 1_000_000, "total_return_pct": 5.0, "position_count": 12, "cash_pct": 8.0},
+                    "risk": {"portfolio_beta": 1.0, "market_regime": "calm", "warnings": []},
+                    "holdings": [{"symbol": "TCS", "company_name": "TCS Ltd", "weight_pct": 8.0, "return_pct": 3.0}],
+                }],
+            }
+
+    monkeypatch.setattr(snap_mod, "DashboardSnapshotService", FakeSnapshots)
+    found = Collector(scope=WorkScope(portfolio_persona_id="balanced"), run={}).read_portfolio_snapshot("balanced")
+    assert found["coverage_status"] == "available"
+    assert found["data"]["fund_name"] == "Balanced India Research"
+
+    missing = Collector(scope=WorkScope(portfolio_persona_id="nope"), run={}).read_portfolio_snapshot("nope")
+    assert missing["coverage_status"] == "unavailable"
+
+
+def test_case_artifacts_require_a_case_and_completed_runs(temp_config):
+    collector = _collector()
+    result = collector.read_case_artifacts()
+    assert result["coverage_status"] == "unavailable"
+    assert collector.sources[-1].label == "Completed case artifacts"

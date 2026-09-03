@@ -158,6 +158,15 @@ def catalog() -> List[Dict[str, Any]]:
     return [contract.model_dump(mode="json") for contract in AGENT_CATALOG.values()]
 
 
+AGENT_GUIDANCE: Dict[AgentType, str] = {
+    "company_deep_dive": "Build a source-backed company view: fetch fundamentals and primary filings, then cover valuation, profitability, growth, balance-sheet strength, key catalysts, and the principal risks.",
+    "event_impact": "Assess how a named event changes the picture for the scope: fetch the relevant news and primary filings, state the expected impact and magnitude, and say what evidence would change the conclusion.",
+    "comparative_screen": "Compare the securities in scope on normalized evidence: fetch market data and fundamentals for EVERY symbol in scope, present an explicit side-by-side comparison, and rank order with the reasons.",
+    "portfolio_risk_review": "Review portfolio context only: read the portfolio snapshot, fetch market data relevant to its holdings or exposures, and assess concentration, factor posture, and risk warnings without recommending any trade.",
+    "ic_memo": "Synthesize ONLY the completed artifacts already in this case into an IC memo: read the case artifacts, cite their run_ids in source_artifact_run_ids, and never introduce outside facts as source evidence.",
+}
+
+
 def agent_contract(agent_type: AgentType) -> AgentContract:
     return AGENT_CATALOG[agent_type]
 
@@ -197,20 +206,33 @@ def validate_evidence(contract: AgentContract, artifact: EvidenceArtifact, sourc
         raise ValueError("Only IC Memo evidence may reference case artifacts.")
 
 
-def build_pydantic_agent(contract: AgentContract, model: Any, output_type: Any = EvidenceArtifact) -> Any:
-    """Build a worker-only PydanticAI agent with exactly the contract's tools."""
+def build_pydantic_agent(contract: AgentContract, model: Any, output_type: Any = EvidenceArtifact, tools: Optional[Dict[str, Any]] = None) -> Any:
+    """Build a worker-only PydanticAI agent restricted to the contract's tools.
+
+    ``tools`` maps each allowed tool name to a callable that fetches the
+    evidence. When omitted, a no-op placeholder is registered so the tool
+    surface (and its contract restriction) is still visible to the model and
+    testable; the runtime supplies real bound collectors.
+    """
     from pydantic_ai import Agent
 
+    guidance = AGENT_GUIDANCE.get(contract.id, "")
     agent = Agent(model, output_type=output_type, instructions=(
-        "You produce research-only, source-backed analysis. Never propose orders, sizing, "
-        "or trade execution. Use only the provided tools and disclose unavailable coverage."
+        "You are a research-only public-markets work agent. You NEVER propose orders, sizing, "
+        "or execution. Gather evidence by calling your tools; never invent facts. "
+        "A tool result with coverage_status \"unavailable\" is NOT usable evidence: if the "
+        "sources you need are unavailable, return coverage_status \"unavailable\", confidence 0, "
+        "assessment \"investigate\", and explain the gap in caveats. In source_labels cite the "
+        "exact provider value returned by each tool result you relied on. "
+        f"{guidance}"
     ))
+    tools = tools or {}
     for tool_name in contract.allowed_tools:
-        def declared_tool(name: str = tool_name) -> str:
+        def noop_boundary() -> str:
             """Return the approved source boundary for this agent."""
-            return f"{name} is an approved source boundary."
-        declared_tool.__name__ = tool_name
-        agent.tool_plain(declared_tool)
+            return f"{tool_name} is an approved source boundary."
+        fn = tools.get(tool_name, noop_boundary)
+        agent.tool_plain(fn, name=tool_name, description=f"Approved evidence source: {tool_name}.")
     return agent
 
 
