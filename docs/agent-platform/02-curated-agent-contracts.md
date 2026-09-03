@@ -16,7 +16,7 @@ Assessments are limited to `strengthen`, `monitor`, `investigate`, `no_action`, 
 
 ## Validation
 
-Company and comparison agents require symbols; comparison requires two symbols; portfolio risk requires a persona; IC Memo requires completed evidence in the case and has only the case-artifact tool. EODHD is the optional multi-market source, SEC EDGAR is the US filing source, NSE disclosures are disabled by default, and BSE disclosures require an approved BSE data-feed URL and key. Use PydanticAI's test model for deterministic contract tests.
+Company and comparison agents require symbols; comparison requires two symbols; portfolio risk requires a persona; IC Memo requires completed evidence in the case and has only the case-artifact tool. Each agent's allowed tools are real, live source fetches bound to that contract (never a shared grab-bag); a contract therefore shapes both the evidence it may see and the scope it needs. EODHD is the optional multi-market source (market data, fundamentals, news), SEC EDGAR is the US filing source and needs only a `SEC_USER_AGENT`, NSE disclosures are disabled by default, and BSE disclosures require an approved BSE data-feed URL and key.
 
 ## Deferred
 
