@@ -11,6 +11,7 @@ from src.config import Config, PROJECT_ROOT, _deep_merge, get_config, get_person
 from src.journal.db import connect
 from src.logging_setup import get_logger
 from src.market.registry import get_market
+from src.workspace.entitlements import EntitlementsService, QuotaExceeded
 
 logger = get_logger(__name__)
 
@@ -271,9 +272,12 @@ class UserBookPersonaProvisioner:
         if invested <= 0:
             raise UserBookPersonaError("Allocate capital to at least one holding before activating.")
 
-        active_count = len(self.repo.list_active_for_user(user_id))
-        if active_count >= PERSONA_LIMIT:
-            raise UserBookPersonaError(f"Maximum of {PERSONA_LIMIT} active personas reached.")
+        try:
+            EntitlementsService(self._config).check_quota(user_id, "active_funds")
+        except QuotaExceeded as exc:
+            raise UserBookPersonaError(
+                f"Maximum of {exc.limit} active personas reached."
+            ) from exc
 
         try:
             get_persona_config(template_persona_id, base=self._config)

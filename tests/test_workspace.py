@@ -124,9 +124,16 @@ def test_expired_members_are_redirected_to_subscription_at_the_api_boundary(temp
     monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "webhook_test")
     repository = WorkspaceRepository(temp_config)
     user = repository.user_for_email("expired@example.com")
+    from src.workspace.entitlements import EntitlementsService
+
+    EntitlementsService(temp_config).ensure_subscription(int(user["id"]), trial_days=1)
     conn = connect(temp_config)
     try:
         conn.execute("UPDATE workspace_users SET created_at = ? WHERE id = ?", ("2025-01-01T00:00:00+00:00", user["id"]))
+        conn.execute(
+            "UPDATE workspace_subscriptions SET trial_ends_at = ? WHERE owner_user_id = ?",
+            ("2025-01-02T00:00:00+00:00", user["id"]),
+        )
         conn.commit()
     finally:
         conn.close()

@@ -386,6 +386,19 @@ def _run_intraday_persona(persona_id: str, args, config) -> int:
         broker.disconnect()
 
 
+def _persona_execution_flags(persona_id: str, pcfg, args) -> tuple[bool, Optional[int]]:
+    force_simulated = bool(args.simulated_broker)
+    max_candidates = args.max_candidates
+    if persona_id.startswith("userbook_"):
+        from src.workspace.entitlements import EntitlementsService
+
+        entitlements = EntitlementsService(pcfg)
+        force_simulated = force_simulated or entitlements.force_simulated_for_persona(persona_id)
+        if max_candidates is None:
+            max_candidates = entitlements.long_cycle_candidates_for_persona(persona_id)
+    return force_simulated, max_candidates
+
+
 def _run_persona(persona_id: str, args, base_config) -> int:
     """Run a single command for one persona. Returns the exit code."""
     try:
@@ -411,7 +424,8 @@ def _run_persona(persona_id: str, args, base_config) -> int:
         _run_learning_for(pcfg, as_of=as_of)
         return 0
 
-    manager = FundManager(config=pcfg, force_simulated=args.simulated_broker)
+    force_simulated, max_candidates = _persona_execution_flags(persona_id, pcfg, args)
+    manager = FundManager(config=pcfg, force_simulated=force_simulated)
 
     try:
         if args.command == "watch":
@@ -423,7 +437,7 @@ def _run_persona(persona_id: str, args, base_config) -> int:
                 as_of=as_of,
                 skip_news=args.skip_news,
                 refresh_fundamentals=args.refresh_fundamentals,
-                max_candidates=args.max_candidates,
+                max_candidates=max_candidates,
             )
             if result.proposal_count and _auto_mode(manager, args):
                 print(
@@ -447,7 +461,7 @@ def _run_persona(persona_id: str, args, base_config) -> int:
             result = manager.weekly_research(
                 as_of=as_of,
                 refresh_fundamentals=args.refresh_fundamentals,
-                max_candidates=args.max_candidates,
+                max_candidates=max_candidates,
                 trigger_source="manual",
             )
             print(
@@ -493,7 +507,7 @@ def _run_persona(persona_id: str, args, base_config) -> int:
                 as_of=as_of,
                 skip_news=args.skip_news,
                 refresh_fundamentals=args.refresh_fundamentals,
-                max_candidates=args.max_candidates,
+                max_candidates=max_candidates,
             )
             print(
                 f"\n[{persona_id}] Scheduled long cycle screened "

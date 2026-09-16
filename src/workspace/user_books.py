@@ -18,6 +18,8 @@ from src.logging_setup import get_logger
 from src.market.registry import get_market
 from src.market_data.prices import PriceService
 from src.universe import Universe, _load_universe_cached, is_investable_equity_symbol
+from src.workspace.entitlements import EntitlementsService, QuotaExceeded
+from src.workspace.tiers import UNPAID_MAX_BOOKS
 
 logger = get_logger(__name__)
 
@@ -416,8 +418,13 @@ class UserBookService:
             raise UserBookError(f"Unsupported market_id: {market_id}")
         if starting_capital <= 0:
             raise UserBookError("starting_capital must be positive.")
-        if self.repo.count_active_books(user_id) >= MAX_BOOKS_PER_USER:
-            raise UserBookError(f"Maximum of {MAX_BOOKS_PER_USER} active watchlists reached.")
+        try:
+            EntitlementsService(self._config).check_quota(user_id, "watchlist_books")
+        except QuotaExceeded as exc:
+            limit_label = exc.limit if exc.limit is not None else UNPAID_MAX_BOOKS
+            raise UserBookError(
+                f"Maximum of {limit_label} active watchlists reached."
+            ) from exc
         if self.repo.name_taken(user_id, name):
             raise UserBookError("A watchlist with this name already exists.")
         market = get_market(market_id)
@@ -542,8 +549,17 @@ class UserBookService:
             raise UserBookError("symbol is required.")
         if target_amount <= 0:
             raise UserBookError("target_amount must be positive.")
-        if self.repo.count_lines(book_id, user_id) >= MAX_LINES_PER_BOOK:
-            raise UserBookError(f"Maximum of {MAX_LINES_PER_BOOK} holdings per watchlist reached.")
+        try:
+            EntitlementsService(self._config).check_quota(
+                user_id, "watchlist_lines", book_id=book_id
+            )
+        except QuotaExceeded as exc:
+            limits = EntitlementsService(self._config).limits(
+                EntitlementsService(self._config).subscription_for_user(user_id)
+            )
+            raise UserBookError(
+                f"Maximum of {limits.max_lines_per_book} holdings per watchlist reached."
+            ) from exc
         universe = watchlist_universe_for_market(book["market_id"])
         if not universe.contains(symbol):
             raise UserBookError(f"{symbol} is not in the {book['market_id']} universe.")
