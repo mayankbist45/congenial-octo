@@ -1374,6 +1374,15 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         from src.workspace.agent_platform import AgentRunInput, AgentWorkRepository
         from src.workspace.agent_runtime import AgentRuntime
         user_id = int(identity["id"])
+        repo = AgentWorkRepository(config)
+        run_key = idempotency_key or str(uuid.uuid4())
+        if idempotency_key:
+            existing = repo.find_run_by_idempotency(case_id, idempotency_key)
+            if existing:
+                return JSONResponse(
+                    {"run": existing, "disclaimer": "Research workspace. Not investment advice. No live order execution."},
+                    status_code=202,
+                )
         try:
             entitlements.check_quota(user_id, "concurrent_agents")
             entitlements.check_quota(user_id, "agent_runs")
@@ -1382,8 +1391,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         except QuotaExceeded as exc:
             raise _quota_http(exc) from exc
         try:
-            repo = AgentWorkRepository(config)
-            run = repo.create_run(case_id, user_id, AgentRunInput.model_validate(payload.model_dump()), idempotency_key or str(uuid.uuid4()))
+            run = repo.create_run(case_id, user_id, AgentRunInput.model_validate(payload.model_dump()), run_key)
             entitlements.consume_quota(user_id, "agent_runs")
             if payload.agent_type == "ic_memo":
                 entitlements.consume_quota(user_id, "agent_ic_memo")

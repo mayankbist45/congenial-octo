@@ -187,7 +187,13 @@ def test_razorpay_subscription_checkout_verifies_the_payment_signature(temp_conf
     assert checkout.json()["subscription_id"] == "sub_test"
     payment_id = "pay_test"
     signature = hmac.new(b"secret_test", b"pay_test|sub_test", hashlib.sha256).hexdigest()
-    assert client.post("/api/v1/workspace/billing/verify-payment", json={"razorpay_payment_id": payment_id, "razorpay_subscription_id": "sub_test", "razorpay_signature": signature}).json() == {"verified": True}
+    verified = client.post(
+        "/api/v1/workspace/billing/verify-payment",
+        json={"razorpay_payment_id": payment_id, "razorpay_subscription_id": "sub_test", "razorpay_signature": signature},
+    ).json()
+    assert verified["verified"] is True
+    assert verified["subscription"]["tier"] == "sandbox"
+    assert verified["entitlement"]["can_access"] is True
     assert client.post("/api/v1/workspace/billing/verify-payment", json={"razorpay_payment_id": payment_id, "razorpay_subscription_id": "sub_test", "razorpay_signature": "wrong"}).status_code == 400
 
 
