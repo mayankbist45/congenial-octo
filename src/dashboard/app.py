@@ -148,6 +148,15 @@ class RazorpaySubscriptionPaymentRequest(BaseModel):
 
 class BillingCheckoutRequest(BaseModel):
     intent: Optional[str] = None
+    tier: Optional[str] = None
+
+
+def _quota_http(exc: Any) -> HTTPException:
+    from src.workspace.entitlements import QuotaExceeded
+
+    if isinstance(exc, QuotaExceeded):
+        return HTTPException(status_code=429, detail=exc.as_dict())
+    raise exc
 
 
 def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = None) -> FastAPI:
@@ -196,7 +205,9 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             bind_port=str(config.get("dashboard.port", 8000)),
         )
 
-    app.add_event_handler("startup", _log_dashboard_start)
+    @app.on_event("startup")
+    def _on_dashboard_startup() -> None:
+        _log_dashboard_start()
 
     @app.get("/healthz")
     def healthz() -> Dict[str, str]:
@@ -1221,7 +1232,15 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         return identity
 
     from src.workspace.billing import WorkspaceBilling
+    from src.workspace.entitlements import EntitlementsService, QuotaExceeded
     billing = WorkspaceBilling(config)
+    entitlements = EntitlementsService(config)
+
+    def _consume_holding_intel(user_id: int) -> None:
+        try:
+            entitlements.consume_quota(user_id, "holding_intel")
+        except QuotaExceeded as exc:
+            raise _quota_http(exc) from exc
 
     def _workspace_identity(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> Dict[str, Any]:
         return billing.require_access(identity)
@@ -1234,6 +1253,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
 
     @app.get("/api/v1/workspace/me")
     def workspace_me(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        account = billing.account_payload(identity)
         return JSONResponse({
             "user": {
                 "id": identity["id"],
@@ -1243,10 +1263,17 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
                 "avatar_url": identity.get("avatar_url"),
                 "created_at": identity.get("created_at"),
                 "last_seen_at": identity.get("last_seen_at"),
-                "entitlement": billing.entitlement(identity),
+                "entitlement": account["entitlement"],
             },
+            "subscription": account["subscription"],
+            "limits": account["limits"],
+            "usage": account["usage"],
             "disclaimer": "Research workspace. Not investment advice. No live order execution.",
         })
+
+    @app.get("/api/v1/workspace/billing/plans")
+    def workspace_billing_plans(identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
+        return JSONResponse(billing.list_plans(identity))
 
     @app.get("/api/v1/workspace/profile")
     def workspace_profile(identity: Dict[str, Any] = Depends(_workspace_identity)) -> JSONResponse:
@@ -1291,7 +1318,9 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         payload: BillingCheckoutRequest = BillingCheckoutRequest(),
         identity: Dict[str, Any] = Depends(workspace_auth.identity),
     ) -> JSONResponse:
-        return JSONResponse(billing.checkout(identity, intent=payload.intent))
+        return JSONResponse(
+            billing.checkout(identity, tier=payload.tier, intent=payload.intent)
+        )
 
     @app.post("/api/v1/workspace/billing/verify-payment")
     def workspace_billing_verify_payment(payload: RazorpaySubscriptionPaymentRequest, identity: Dict[str, Any] = Depends(workspace_auth.identity)) -> JSONResponse:
@@ -1344,9 +1373,28 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
     ) -> JSONResponse:
         from src.workspace.agent_platform import AgentRunInput, AgentWorkRepository
         from src.workspace.agent_runtime import AgentRuntime
+        user_id = int(identity["id"])
+        repo = AgentWorkRepository(config)
+        run_key = idempotency_key or str(uuid.uuid4())
+        if idempotency_key:
+            existing = repo.find_run_by_idempotency(case_id, idempotency_key)
+            if existing:
+                return JSONResponse(
+                    {"run": existing, "disclaimer": "Research workspace. Not investment advice. No live order execution."},
+                    status_code=202,
+                )
         try:
-            repo = AgentWorkRepository(config)
-            run = repo.create_run(case_id, int(identity["id"]), AgentRunInput.model_validate(payload.model_dump()), idempotency_key or str(uuid.uuid4()))
+            entitlements.check_quota(user_id, "concurrent_agents")
+            entitlements.check_quota(user_id, "agent_runs")
+            if payload.agent_type == "ic_memo":
+                entitlements.check_quota(user_id, "agent_ic_memo")
+        except QuotaExceeded as exc:
+            raise _quota_http(exc) from exc
+        try:
+            run = repo.create_run(case_id, user_id, AgentRunInput.model_validate(payload.model_dump()), run_key)
+            entitlements.consume_quota(user_id, "agent_runs")
+            if payload.agent_type == "ic_memo":
+                entitlements.consume_quota(user_id, "agent_ic_memo")
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         background_tasks.add_task(AgentRuntime(config).dispatch, run["id"])
@@ -1497,6 +1545,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             from src.workspace.user_book_personas import UserBookPersonaNotFoundError
 
             try:
+                _consume_holding_intel(user_id)
                 intelligence = HoldingIntelligenceService(config).for_user_persona_holding(
                     persona_id,
                     symbol.upper(),
@@ -1794,6 +1843,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         from src.workspace.user_books import UserBookNotFoundError
 
         try:
+            _consume_holding_intel(int(identity["id"]))
             research = HoldingIntelligenceService(config).for_watchlist_line(
                 int(identity["id"]),
                 book_id,
@@ -1886,6 +1936,7 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
         if not persona_id.startswith("userbook_"):
             raise HTTPException(status_code=404, detail="User persona not found.")
         try:
+            _consume_holding_intel(int(identity["id"]))
             intelligence = HoldingIntelligenceService(config).for_user_persona_holding(
                 persona_id,
                 symbol.upper(),

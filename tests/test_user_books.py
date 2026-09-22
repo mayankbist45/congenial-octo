@@ -270,9 +270,12 @@ def test_activate_user_book_persona_and_config(temp_config, monkeypatch):
 
 
 def test_multiple_personas_from_same_watchlist(temp_config, monkeypatch):
+    from src.workspace.entitlements import EntitlementsService
+
     monkeypatch.setattr("src.workspace.user_books.PriceService", lambda config=None: FakePriceService())
     service = UserBookService(temp_config, prices=FakePriceService())
     WorkspaceRepository(temp_config).user_for_email("member@example.com")
+    EntitlementsService(temp_config).update_tier(1, tier="fund", live_trading_enabled=True)
 
     book_id = service.create_book(1, name="Multi seed", market_id="india_equity", starting_capital=500_000)["book"]["id"]
     service.add_line(1, book_id, symbol="RELIANCE", target_amount=200_000)

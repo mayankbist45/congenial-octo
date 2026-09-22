@@ -388,6 +388,47 @@ CREATE TABLE IF NOT EXISTS workspace_billing_events (
     received_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS workspace_orgs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspace_org_members (
+    org_id TEXT NOT NULL REFERENCES workspace_orgs(id),
+    user_id INTEGER NOT NULL REFERENCES workspace_users(id),
+    role TEXT NOT NULL DEFAULT 'member',
+    joined_at TEXT NOT NULL,
+    PRIMARY KEY (org_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS workspace_subscriptions (
+    id TEXT PRIMARY KEY,
+    owner_user_id INTEGER NOT NULL UNIQUE REFERENCES workspace_users(id),
+    org_id TEXT REFERENCES workspace_orgs(id),
+    tier TEXT NOT NULL DEFAULT 'sandbox',
+    seat_limit INTEGER NOT NULL DEFAULT 1,
+    billing_subscription_id TEXT,
+    billing_subscription_status TEXT,
+    billing_paid_through_at TEXT,
+    trial_ends_at TEXT,
+    live_trading_enabled INTEGER NOT NULL DEFAULT 0,
+    razorpay_plan_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspace_usage_counters (
+    subscription_id TEXT NOT NULL REFERENCES workspace_subscriptions(id),
+    quota_key TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (subscription_id, quota_key, period_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_subscriptions_billing ON workspace_subscriptions(billing_subscription_id);
+
 CREATE TABLE IF NOT EXISTS workspace_profiles (
     user_id INTEGER NOT NULL REFERENCES workspace_users(id),
     payload TEXT NOT NULL,
@@ -663,6 +704,10 @@ TABLES = (
     "workspace_invites",
     "workspace_users",
     "workspace_billing_events",
+    "workspace_orgs",
+    "workspace_org_members",
+    "workspace_subscriptions",
+    "workspace_usage_counters",
     "workspace_profiles",
     "workspace_jobs",
     "workspace_portfolios",
@@ -861,6 +906,8 @@ def _apply_schema(conn: Connection) -> None:
         conn.execute(statement)
     conn.commit()
 
+    _migrate_workspace_subscriptions(conn)
+
 
 def _table_exists(conn: Connection, table: str) -> bool:
     """Check whether *table* exists in the database."""
@@ -1039,6 +1086,40 @@ def _migrate_agent_usage_cost_status(conn: Connection) -> None:
     if _has_column(conn, "agent_runs", "usage_cost_status"):
         return
     conn.execute("ALTER TABLE agent_runs ADD COLUMN usage_cost_status TEXT NOT NULL DEFAULT 'unknown'")
+
+
+def _migrate_workspace_subscriptions(conn: Connection) -> None:
+    """Backfill subscription rows for existing workspace users."""
+    if not _table_exists(conn, "workspace_users"):
+        return
+    if not _table_exists(conn, "workspace_subscriptions"):
+        return
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    trial_ends = (now + timedelta(days=14)).isoformat()
+    rows = conn.execute("SELECT id, created_at FROM workspace_users").fetchall()
+    for row in rows:
+        existing = conn.execute(
+            "SELECT 1 FROM workspace_subscriptions WHERE owner_user_id = ?",
+            (row["id"],),
+        ).fetchone()
+        if existing:
+            continue
+        created = row["created_at"] or now.isoformat()
+        conn.execute(
+            """
+            INSERT INTO workspace_subscriptions (
+                id, owner_user_id, org_id, tier, seat_limit,
+                billing_subscription_id, billing_subscription_status,
+                billing_paid_through_at, trial_ends_at, live_trading_enabled,
+                razorpay_plan_id, created_at, updated_at
+            ) VALUES (?, ?, NULL, 'sandbox', 1, NULL, NULL, NULL, ?, 0, NULL, ?, ?)
+            """,
+            (str(uuid.uuid4()), row["id"], trial_ends, created, now.isoformat()),
+        )
+    conn.commit()
 
 
 def _migrate_user_book_personas(conn: Connection) -> None:

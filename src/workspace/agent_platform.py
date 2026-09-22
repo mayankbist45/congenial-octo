@@ -275,6 +275,16 @@ class AgentWorkRepository:
             ).fetchall()]
         return {**self._case_summary(dict(row)), "runs": runs, "comments": comments}
 
+    def find_run_by_idempotency(self, case_id: str, idempotency_key: str) -> Optional[Dict[str, Any]]:
+        with self._connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM agent_runs WHERE case_id = ? AND idempotency_key = ?",
+                (case_id, idempotency_key),
+            ).fetchone()
+        if not existing:
+            return None
+        return self._run_view(dict(existing))
+
     def create_run(self, case_id: str, user_id: int, payload: AgentRunInput, idempotency_key: str) -> Dict[str, Any]:
         case = self.case(case_id)
         completed_artifacts = sum(len(run["artifacts"]) for run in case["runs"] if run["status"] == "completed")

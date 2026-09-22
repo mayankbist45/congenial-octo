@@ -124,9 +124,16 @@ def test_expired_members_are_redirected_to_subscription_at_the_api_boundary(temp
     monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "webhook_test")
     repository = WorkspaceRepository(temp_config)
     user = repository.user_for_email("expired@example.com")
+    from src.workspace.entitlements import EntitlementsService
+
+    EntitlementsService(temp_config).ensure_subscription(int(user["id"]), trial_days=1)
     conn = connect(temp_config)
     try:
         conn.execute("UPDATE workspace_users SET created_at = ? WHERE id = ?", ("2025-01-01T00:00:00+00:00", user["id"]))
+        conn.execute(
+            "UPDATE workspace_subscriptions SET trial_ends_at = ? WHERE owner_user_id = ?",
+            ("2025-01-02T00:00:00+00:00", user["id"]),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -180,7 +187,13 @@ def test_razorpay_subscription_checkout_verifies_the_payment_signature(temp_conf
     assert checkout.json()["subscription_id"] == "sub_test"
     payment_id = "pay_test"
     signature = hmac.new(b"secret_test", b"pay_test|sub_test", hashlib.sha256).hexdigest()
-    assert client.post("/api/v1/workspace/billing/verify-payment", json={"razorpay_payment_id": payment_id, "razorpay_subscription_id": "sub_test", "razorpay_signature": signature}).json() == {"verified": True}
+    verified = client.post(
+        "/api/v1/workspace/billing/verify-payment",
+        json={"razorpay_payment_id": payment_id, "razorpay_subscription_id": "sub_test", "razorpay_signature": signature},
+    ).json()
+    assert verified["verified"] is True
+    assert verified["subscription"]["tier"] == "sandbox"
+    assert verified["entitlement"]["can_access"] is True
     assert client.post("/api/v1/workspace/billing/verify-payment", json={"razorpay_payment_id": payment_id, "razorpay_subscription_id": "sub_test", "razorpay_signature": "wrong"}).status_code == 400
 
 
