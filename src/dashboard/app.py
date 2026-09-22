@@ -205,7 +205,9 @@ def create_app(config: Optional[Config] = None, workspace_auth: Optional[Any] = 
             bind_port=str(config.get("dashboard.port", 8000)),
         )
 
-    app.add_event_handler("startup", _log_dashboard_start)
+    @app.on_event("startup")
+    def _on_dashboard_startup() -> None:
+        _log_dashboard_start()
 
     @app.get("/healthz")
     def healthz() -> Dict[str, str]:
